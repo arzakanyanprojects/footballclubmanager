@@ -1,0 +1,56 @@
+// Automatic updates from the GitHub Releases of arzakanyanprojects/footballclubmanager
+// (set in package.json → build.publish). A new version is downloaded in the background and
+// installed when the user clicks "Restart and update" (or the next time the app quits).
+const { app } = require('electron');
+
+let autoUpdater = null;
+let status = { state: 'idle', current: null };
+let notify = () => {};
+
+const CHECK_EVERY = 4 * 60 * 60 * 1000; // 4 hours
+
+function set(next) {
+  status = { ...status, ...next, current: app.getVersion() };
+  notify(status);
+}
+
+function setup(onStatus) {
+  notify = onStatus;
+  status.current = app.getVersion();
+  if (!app.isPackaged) {
+    status.state = 'dev';
+    return;
+  }
+  ({ autoUpdater } = require('electron-updater'));
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.logger = null;
+
+  autoUpdater.on('checking-for-update', () => set({ state: 'checking', error: null }));
+  autoUpdater.on('update-not-available', () => set({ state: 'none', checkedAt: new Date().toISOString() }));
+  autoUpdater.on('update-available', (i) => set({ state: 'downloading', version: i.version, percent: 0 }));
+  autoUpdater.on('download-progress', (p) => set({ state: 'downloading', percent: Math.round(p.percent || 0) }));
+  autoUpdater.on('update-downloaded', (i) => set({ state: 'ready', version: i.version }));
+  autoUpdater.on('error', (err) => {
+    const msg = String(err?.message || err);
+    // No release published yet on GitHub: nothing to update to.
+    if (/404|No published versions|Cannot find latest/i.test(msg)) set({ state: 'none', checkedAt: new Date().toISOString() });
+    else set({ state: 'error', error: msg.split('\n')[0].slice(0, 200) });
+  });
+
+  setTimeout(check, 15 * 1000);
+  setInterval(check, CHECK_EVERY);
+}
+
+function check() {
+  if (!autoUpdater) return status;
+  if (['checking', 'downloading', 'ready'].includes(status.state)) return status;
+  autoUpdater.checkForUpdates().catch(() => {}); // reported through the 'error' event
+  return status;
+}
+
+function install() {
+  if (autoUpdater && status.state === 'ready') autoUpdater.quitAndInstall(true, true);
+}
+
+module.exports = { setup, check, install, getStatus: () => status };
