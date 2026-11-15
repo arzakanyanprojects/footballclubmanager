@@ -59,7 +59,8 @@
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
-      "shortcutName": "FC Manager"
+      "shortcutName": "FC Manager",
+      "artifactName": "FC-Manager-Setup-${version}.${ext}"
     },
     "publish": [
       {
