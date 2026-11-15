@@ -27,10 +27,19 @@ export function MethodTag({ method }) {
   );
 }
 
+// excused: not owed because of an absence application («Հարգելի»).
 export const chargeStatus = (c) =>
-  c.status === 'paid' ? 'paid' : c.status === 'waived' ? 'waived' : c.due_date && c.due_date < todayIso() ? 'overdue' : 'unpaid';
+  c.status === 'paid'
+    ? 'paid'
+    : c.status === 'waived'
+      ? c.excused_by
+        ? 'excused'
+        : 'waived'
+      : c.due_date && c.due_date < todayIso()
+        ? 'overdue'
+        : 'unpaid';
 
-const STATUS_TONE = { paid: 'good', unpaid: 'warn', overdue: 'bad', waived: '' };
+const STATUS_TONE = { paid: 'good', unpaid: 'warn', overdue: 'bad', waived: '', excused: 'info' };
 
 export function chargeLabel(t, c) {
   if (c.kind === 'monthly') return `${t('charge.monthly')} · ${monthName(t, c.period)}`;
@@ -653,7 +662,7 @@ function EditChargeModal({ charge, onClose, onPrint }) {
   const stateOf = (p) => {
     const c = otherOf(p);
     if (!c) return 'none';
-    return c.status === 'unpaid' ? chargeStatus(c) : c.status;
+    return chargeStatus(c);
   };
 
   const save = async () => {
@@ -821,9 +830,9 @@ export function MonthlyPaymentModal({ student, charges, onClose }) {
   const stateOf = (p) => {
     const c = byPeriod[p];
     if (!c) return 'none';
-    return c.status === 'unpaid' ? chargeStatus(c) : c.status;
+    return chargeStatus(c);
   };
-  const payable = (p) => !['paid', 'waived'].includes(stateOf(p));
+  const payable = (p) => !['paid', 'waived', 'excused'].includes(stateOf(p));
   // The current month is ticked when it still needs paying.
   const [picked, setPicked] = useState(() => new Set(payable(currentPeriod()) ? [currentPeriod()] : []));
   const [amount, setAmount] = useState(student.monthly_fee || '');

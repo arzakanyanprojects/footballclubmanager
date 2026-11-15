@@ -573,3 +573,17 @@ table.table { width: 100%; border-collapse: collapse; }
 .plain-fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
 .save-bar { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 8px; padding: 10px 14px; margin-bottom: 14px; border-radius: 10px; background: var(--accent-soft); border: 1px solid var(--accent); }
 .steps { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 3px; }
+
+/* groups: compact cards, add button stays visible while scrolling */
+.sticky-head { position: sticky; top: 0; z-index: 6; background: var(--bg); margin: -26px -32px 16px; padding: 26px 32px 12px; }
+.group-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+.group-card .card-head { padding: 12px 14px 2px; }
+.group-card .card-head h3 { font-size: 14.5px; }
+.group-card .card-pad { padding: 4px 14px 12px; }
+.group-card .row.small { font-size: 12.5px; }
+
+/* «Հարգելի» (excused absence): blue */
+.pay-cell.excused { background: var(--info-soft); color: var(--info); }
+.month-btn.excused { background: var(--surface-2); cursor: default; opacity: 0.85; }
+.month-btn.excused .s { color: var(--info); font-weight: 600; }
+.mark.excused { font-weight: 700; }

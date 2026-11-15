@@ -17,7 +17,7 @@ export default function Groups({ nav }) {
 
   return (
     <>
-      <div className="page-head">
+      <div className="page-head sticky-head">
         <div>
           <h1>{t('nav.groups')}</h1>
           <div className="sub">{t('groups.subtitle')}</div>
@@ -42,10 +42,10 @@ export default function Groups({ nav }) {
           />
         </div>
       ) : (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 16 }}>
+        <div className="group-grid">
           {data.map((g) => (
-            <div key={g.id} className="card" style={{ opacity: g.archived ? 0.6 : 1, borderTop: `4px solid ${g.color || 'var(--border-strong)'}` }}>
-              <div className="card-head" style={{ borderBottom: 0, paddingBottom: 4 }}>
+            <div key={g.id} className="card group-card" style={{ opacity: g.archived ? 0.6 : 1, borderTop: `3px solid ${g.color || 'var(--border-strong)'}` }}>
+              <div className="card-head" style={{ borderBottom: 0, paddingBottom: 2 }}>
                 <h3 className="grow">{g.name}</h3>
                 {g.archived ? <Badge>{t('groups.archived')}</Badge> : null}
                 {canEdit && <RowMenu
@@ -62,24 +62,28 @@ export default function Groups({ nav }) {
                   ]}
                 />}
               </div>
-              <div className="card-pad stack" style={{ gap: 8, paddingTop: 6 }}>
+              <div className="card-pad stack" style={{ gap: 6, paddingTop: 4 }}>
                 <div className="row small">
-                  <UserRound size={15} className="muted" />
+                  <UserRound size={14} className="muted" />
                   <span className="grow">
                     {g.coach || <span className="muted">{t('groups.noCoach')}</span>}
-                    <div className="small muted">{t('groups.coach')}</div>
+                    <div className="small muted">
+                      {t('groups.coach')}
+                      {g.coach_phone && <span className="nowrap"> · {g.coach_phone}</span>}
+                    </div>
                   </span>
-                  {g.coach_phone && <span className="small muted nowrap">{g.coach_phone}</span>}
                 </div>
                 <div className="row small">
-                  <UserPlus size={15} className="muted" />
+                  <UserPlus size={14} className="muted" />
                   <span className="grow">
                     {g.assistant || <span className="muted">—</span>}
-                    <div className="small muted">{t('groups.assistant')}</div>
+                    <div className="small muted">
+                      {t('groups.assistant')}
+                      {g.assistant_phone && <span className="nowrap"> · {g.assistant_phone}</span>}
+                    </div>
                   </span>
-                  {g.assistant_phone && <span className="small muted nowrap">{g.assistant_phone}</span>}
                 </div>
-                <div className="row" style={{ marginTop: 6 }}>
+                <div className="row" style={{ marginTop: 2 }}>
                   <Button size="sm" icon={Users} onClick={() => nav('students', { groupId: g.id })}>
                     {t('groups.students', { n: g.student_count })}
                   </Button>

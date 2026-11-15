@@ -111,10 +111,16 @@ function GroupSheet({ groupId, nav }) {
 
   const saved = useMemo(() => {
     const map = {};
-    for (const r of data?.records || []) map[`${r.student_id}|${r.date}`] = PRESENT.includes(r.status) ? 'present' : 'absent';
+    for (const r of data?.records || [])
+      map[`${r.student_id}|${r.date}`] = PRESENT.includes(r.status) ? 'present' : r.status === 'excused' ? 'excused' : 'absent';
     return map;
   }, [data]);
-  const current = (key) => draft[key] || saved[key] || null;
+  // Days inside an excused absence (absence application) count as «Հարգելի» when left blank.
+  const excusedDay = (key) => {
+    const [sid, date] = key.split('|');
+    return (data?.absences || []).some((a) => String(a.student_id) === sid && date >= a.date_from && date <= a.date_to);
+  };
+  const current = (key) => draft[key] || saved[key] || (excusedDay(key) ? 'excused' : null);
   const changes = Object.keys(draft).filter((k) => draft[k] !== saved[k]).length;
 
   const today = todayIso();
@@ -274,7 +280,7 @@ function GroupSheet({ groupId, nav }) {
                             onClick={() => toggle(key)}
                             title={`${fmtDate(d.date)} — ${st ? t(`att.${st}`) : t('sheet.notMarked')}`}
                           >
-                            {st === 'present' ? t('att.P') : st === 'absent' ? t('att.A') : ''}
+                            {st === 'present' ? t('att.P') : st === 'absent' ? t('att.A') : st === 'excused' ? t('att.E') : ''}
                           </button>
                         </td>
                       );

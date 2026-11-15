@@ -282,6 +282,23 @@ const MIGRATIONS = [
   CREATE INDEX idx_outbox_status ON outbox(status);
   CREATE INDEX idx_outbox_student ON outbox(student_id, kind, period);
   `,
+  // v19: excused absences (from absence applications). Training days in the period are «Հարգելի»
+  // and the monthly fee of every month the period touches is cancelled (charges.excused_by).
+  `
+  CREATE TABLE absences (
+    id INTEGER PRIMARY KEY,
+    student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+    date_from TEXT NOT NULL,
+    date_to TEXT NOT NULL,
+    reason TEXT,
+    file_id INTEGER REFERENCES student_files(id) ON DELETE SET NULL,
+    created_charges TEXT,           -- ids of monthly fees this absence created (removed again on undo)
+    created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    created_by TEXT
+  );
+  CREATE INDEX idx_absences_student ON absences(student_id, date_from, date_to);
+  ALTER TABLE charges ADD COLUMN excused_by INTEGER;
+  `,
 ];
 
 function seed(db) {

@@ -100,6 +100,61 @@ function createService(db, { onWrite, getNotify } = {}) {
   // ---------------------------------------------------------------- settings
   const SETTING_KEYS = ['club_name', 'club_address', 'club_phone', 'director_name', 'currency', 'due_day', 'billing_start', 'club_logo'];
 
+  // ---------------------------------------------------------------- excused absences
+  // Training days in the period become «Հարգելի» (unless marked present) and the monthly fee of each
+  // month the period touches is not owed (waived, marked with the absence; paid months stay paid).
+  function excuseAbsence(absenceId) {
+    const a = one('SELECT * FROM absences WHERE id = :id', { id: absenceId });
+    const s = one('SELECT id, group_id, monthly_fee FROM students WHERE id = :id', { id: a.student_id });
+    if (s.group_id) {
+      for (const d of all(
+        `SELECT date FROM training_days WHERE group_id = :g AND date BETWEEN :from AND :to`,
+        { g: s.group_id, from: a.date_from, to: a.date_to }
+      )) {
+        run(
+          `INSERT INTO attendance (student_id, date, status, group_id, marked_by)
+           VALUES (:sid, :date, 'excused', :g, :user)
+           ON CONFLICT(student_id, date) DO UPDATE SET status = 'excused', marked_by = excluded.marked_by
+           WHERE attendance.status NOT IN ('present', 'late')`,
+          { sid: s.id, date: d.date, g: s.group_id, user: a.created_by }
+        );
+      }
+    }
+    const dueDay = pad(int(settings().due_day, 15));
+    const created = [];
+    for (let period = a.date_from.slice(0, 7); period <= a.date_to.slice(0, 7); period = addMonths(period, 1)) {
+      const c = one(`SELECT id, status FROM charges WHERE student_id = :sid AND kind = 'monthly' AND period = :period`, { sid: s.id, period });
+      if (c) {
+        if (c.status === 'unpaid') run(`UPDATE charges SET status = 'waived', excused_by = :aid WHERE id = :id`, { id: c.id, aid: a.id });
+      } else if (s.monthly_fee > 0) {
+        const r = run(
+          `INSERT INTO charges (student_id, kind, period, amount, due_date, status, excused_by, created_by)
+           VALUES (:sid, 'monthly', :period, :fee, :due, 'waived', :aid, :user)`,
+          { sid: s.id, period, fee: s.monthly_fee, due: `${period}-${dueDay}`, aid: a.id, user: a.created_by }
+        );
+        created.push(Number(r.lastInsertRowid));
+      }
+    }
+    run('UPDATE absences SET created_charges = :c WHERE id = :id', { id: a.id, c: JSON.stringify(created) });
+  }
+
+  // Undoes an absence (its application was deleted).
+  function removeAbsence(absenceId) {
+    const a = one('SELECT * FROM absences WHERE id = :id', { id: absenceId });
+    if (!a) return;
+    // Fees this absence created for months still ahead go away; normal monthly billing adds them when their time comes.
+    for (const cid of JSON.parse(a.created_charges || '[]')) {
+      run(`DELETE FROM charges WHERE id = :cid AND excused_by = :id AND status = 'waived' AND period > :now`, { cid, id: a.id, now: currentPeriod() });
+    }
+    run(`UPDATE charges SET status = 'unpaid', excused_by = NULL WHERE excused_by = :id AND status = 'waived'`, { id: a.id });
+    run(
+      `DELETE FROM attendance WHERE student_id = :sid AND status = 'excused' AND date BETWEEN :from AND :to
+         AND NOT EXISTS (SELECT 1 FROM absences b WHERE b.id != :id AND b.student_id = :sid AND attendance.date BETWEEN b.date_from AND b.date_to)`,
+      { sid: a.student_id, from: a.date_from, to: a.date_to, id: a.id }
+    );
+    run('DELETE FROM absences WHERE id = :id', { id: a.id });
+  }
+
   // ---------------------------------------------------------------- email / Telegram messages
   const HY_MONTHS = ['Հունվար', 'Փետրվար', 'Մարտ', 'Ապրիլ', 'Մայիս', 'Հունիս', 'Հուլիս', 'Օգոստոս', 'Սեպտեմբեր', 'Հոկտեմբեր', 'Նոյեմբեր', 'Դեկտեմբեր'];
   const HY_METHODS = { card: 'Անկանխիկ', easypay: 'EasyPay', transfer: 'Փոխանցում' };
@@ -337,9 +392,9 @@ function createService(db, { onWrite, getNotify } = {}) {
                 (SELECT COUNT(*) FROM training_days td WHERE td.group_id = g.id AND substr(td.date, 1, 7) = :period
                    AND EXISTS (SELECT 1 FROM attendance a JOIN students s ON s.id = a.student_id
                                WHERE s.group_id = g.id AND a.date = td.date)) AS days_filled
-         FROM groups g ORDER BY g.archived, g.name COLLATE NOCASE`,
+         FROM groups g`,
         { period: currentPeriod() }
-      ),
+      ).sort((a, b) => a.archived - b.archived || a.name.localeCompare(b.name, 'hy', { numeric: true, sensitivity: 'base' })),
 
     'groups.save': (p, ctx) => {
       if (blank(p.name)) throw new AppError('NAME_REQUIRED');
@@ -390,7 +445,7 @@ function createService(db, { onWrite, getNotify } = {}) {
                         WHERE c.student_id = s.id AND c.status = 'unpaid'), 0) AS unpaid,
                 -- Monthly fee per month in the requested range (the season shown in the students list).
                 (SELECT json_group_array(json_object('id', c.id, 'period', c.period, 'status', c.status,
-                                                     'due_date', c.due_date, 'amount', c.amount))
+                                                     'due_date', c.due_date, 'amount', c.amount, 'excused_by', c.excused_by))
                  FROM charges c WHERE c.student_id = s.id AND c.kind = 'monthly'
                    AND c.period BETWEEN :monthsFrom AND :monthsTo) AS months
          FROM students s LEFT JOIN groups g ON g.id = s.group_id
@@ -614,8 +669,9 @@ function createService(db, { onWrite, getNotify } = {}) {
     },
 
     'files.delete': ({ id }, ctx) => {
-      const f = one('SELECT student_id, file_name FROM student_files WHERE id = :id', { id });
+      const f = one('SELECT student_id, file_name, kind FROM student_files WHERE id = :id', { id });
       if (!f) throw new AppError('NOT_FOUND');
+      if (f.kind === 'absence') for (const a of all('SELECT id FROM absences WHERE file_id = :id', { id })) removeAbsence(a.id);
       run('DELETE FROM student_files WHERE id = :id', { id });
       log(ctx, 'file.deleted', `${studentName(f.student_id)} — ${f.file_name}`);
       return true;
@@ -672,8 +728,17 @@ function createService(db, { onWrite, getNotify } = {}) {
           user: ctx.user || null,
         }
       );
+      const fileId = Number(r.lastInsertRowid);
+      const absenceId = Number(
+        run(
+          `INSERT INTO absences (student_id, date_from, date_to, reason, file_id, created_by)
+           VALUES (:studentId, :from, :to, :reason, :fileId, :user)`,
+          { studentId: p.studentId, from: str(p.from), to: str(p.to), reason: str(p.reason), fileId, user: ctx.user || null }
+        ).lastInsertRowid
+      );
+      excuseAbsence(absenceId);
       log(ctx, 'application.created', `${student.first_name} ${student.last_name} — ${formatDate(str(p.from))}–${formatDate(str(p.to))}`);
-      return { id: Number(r.lastInsertRowid), fileName: name, data: buf.toString('base64') };
+      return { id: fileId, fileName: name, data: buf.toString('base64') };
     },
 
     'students.delete': ({ id }, ctx) => {
@@ -861,7 +926,7 @@ function createService(db, { onWrite, getNotify } = {}) {
     'charges.markUnpaid': ({ id }, ctx) => {
       const c = one('SELECT student_id, amount FROM charges WHERE id = :id', { id });
       if (!c) throw new AppError('NOT_FOUND');
-      run(`UPDATE charges SET status = 'unpaid', paid_at = NULL, method = NULL, paid_by = NULL WHERE id = :id`, { id });
+      run(`UPDATE charges SET status = 'unpaid', paid_at = NULL, method = NULL, paid_by = NULL, excused_by = NULL WHERE id = :id`, { id });
       log(ctx, 'charge.unpaid', `${studentName(c.student_id)} — ${c.amount}`);
       return true;
     },
@@ -994,6 +1059,12 @@ function createService(db, { onWrite, getNotify } = {}) {
            WHERE s.group_id = :groupId AND a.date >= :from AND a.date < :to`,
           range
         ),
+        // Excused absence periods touching this month (blank days in them count as «Հարգելի»).
+        absences: all(
+          `SELECT a.student_id, a.date_from, a.date_to FROM absences a JOIN students s ON s.id = a.student_id
+           WHERE s.group_id = :groupId AND a.date_from < :to AND a.date_to >= :from`,
+          range
+        ),
         submitted: one(
           'SELECT submitted_at, submitted_by FROM training_months WHERE group_id = :groupId AND month = :month',
           { groupId, month }
@@ -1013,7 +1084,7 @@ function createService(db, { onWrite, getNotify } = {}) {
     'training.submit': ({ groupId, month, entries }, ctx) => {
       if (!groupId || !/^\d{4}-\d{2}$/.test(month || '')) throw new AppError('DATE_REQUIRED');
       for (const e of entries || []) {
-        if (e.status === 'present' || e.status === 'absent') {
+        if (e.status === 'present' || e.status === 'absent' || e.status === 'excused') {
           run(
             `INSERT INTO attendance (student_id, date, status, group_id, marked_by)
              VALUES (:studentId, :date, :status, :groupId, :user)

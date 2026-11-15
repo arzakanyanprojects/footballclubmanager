@@ -30,11 +30,12 @@ export const SERVICES = [
   'Ֆուտբոլ անհ.16',
 ];
 
-const MONTH_MARK = { paid: '✓', overdue: '✕', unpaid: '•', waived: '—' };
+const MONTH_MARK = { paid: '✓', overdue: '✕', unpaid: '•', waived: '—', excused: '✓' };
 
 // Status of one monthly fee: paid, overdue, unpaid (not yet due), waived, or none (no fee for that month).
 function monthStatus(m) {
   if (!m) return 'none';
+  if (m.status === 'waived' && m.excused_by) return 'excused';
   if (m.status !== 'unpaid') return m.status;
   return m.due_date && m.due_date < todayIso() ? 'overdue' : 'unpaid';
 }
@@ -283,7 +284,7 @@ export default function Students({ nav, route }) {
         <div className="grow" />
         {canPay && columns.some((c) => c.id === 'months') && (
           <span className="small muted">
-            {['paid', 'overdue', 'unpaid', 'waived'].map((k) => `${MONTH_MARK[k]} ${t(`chargeStatus.${k}`)}`).join(' · ')}
+            {['paid', 'excused', 'overdue', 'unpaid', 'waived'].map((k) => `${MONTH_MARK[k]} ${t(`chargeStatus.${k}`)}`).join(' · ')}
           </span>
         )}
       </div>
@@ -520,7 +521,7 @@ export function StudentForm({ student, onClose, onSaved }) {
                 <option value="">{t('students.noGroup')}</option>
                 {(groups || []).filter((g) => !g.archived || g.id === Number(f.group_id)).map((g) => (
                   <option key={g.id} value={g.id}>
-                    {g.name}
+                    {g.coach ? `${g.name} — ${g.coach}` : g.name}
                   </option>
                 ))}
               </select>
