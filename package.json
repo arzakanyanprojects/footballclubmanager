@@ -1,6 +1,6 @@
 {
   "name": "fcmanager",
-  "version": "1.2.2",
+  "version": "1.2.3",
   "description": "Football club student management: students, payments, attendance and contracts",
   "main": "electron/main.js",
   "scripts": {

@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { X, CheckCircle2, AlertCircle, Search, Inbox, MoreHorizontal, Shield } from 'lucide-react';
 import { avatarColor, money, rpc } from '../lib';
 import { useT } from '../i18n';
@@ -119,9 +120,10 @@ export function Money({ value, currency, className = '' }) {
 export function RowMenu({ items }) {
   const [pos, setPos] = useState(null); // where the open menu is drawn; null when closed
   const ref = useRef(null);
+  const menuRef = useRef(null);
   useEffect(() => {
     if (!pos) return;
-    const close = (e) => !ref.current?.contains(e.target) && setPos(null);
+    const close = (e) => !ref.current?.contains(e.target) && !menuRef.current?.contains(e.target) && setPos(null);
     const hide = () => setPos(null);
     window.addEventListener('mousedown', close);
     window.addEventListener('scroll', hide, true);
@@ -133,7 +135,8 @@ export function RowMenu({ items }) {
   const visible = items.filter(Boolean);
   if (!visible.length) return null;
 
-  // Drawn over the page (fixed) so a table's scroll area never clips it; opens upwards near the bottom.
+  // Drawn on top of the whole window (a portal into <body>), so no table, card or transform can clip
+  // or shift it; opens upwards near the bottom.
   const toggle = (e) => {
     if (pos) return setPos(null);
     const r = e.currentTarget.getBoundingClientRect();
@@ -147,8 +150,9 @@ export function RowMenu({ items }) {
   return (
     <div className="rel" ref={ref} onClick={(e) => e.stopPropagation()}>
       <Button variant="ghost" size="sm" icon={MoreHorizontal} onClick={toggle} />
-      {open && (
-        <div className="menu" style={{ position: 'fixed', left: 'auto', ...pos }}>
+      {open &&
+        createPortal(
+        <div className="menu" ref={menuRef} style={{ position: 'fixed', left: 'auto', ...pos }} onClick={(e) => e.stopPropagation()}>
           {visible.map((it, i) =>
             it === '-' ? (
               <hr key={i} />
@@ -166,7 +170,8 @@ export function RowMenu({ items }) {
               </button>
             )
           )}
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );

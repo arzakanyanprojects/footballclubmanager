@@ -30,6 +30,11 @@ const addMonths = (period, n) => {
   const d = new Date(y, m - 1 + n, 1);
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}`;
 };
+const addDays = (iso, n) => {
+  const d = new Date(`${iso}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+};
 const blank = (v) => v == null || String(v).trim() === '';
 const str = (v) => (blank(v) ? null : String(v).trim());
 const int = (v, def = 0) => {
@@ -739,6 +744,101 @@ function createService(db, { onWrite, getNotify } = {}) {
       excuseAbsence(absenceId);
       log(ctx, 'application.created', `${student.first_name} ${student.last_name} — ${formatDate(str(p.from))}–${formatDate(str(p.to))}`);
       return { id: fileId, fileName: name, data: buf.toString('base64') };
+    },
+
+    // ---------------------------------------------------------------- timetable (Դասացուցակ)
+    // Everything the timetable page needs for the chosen dates.
+    'schedule.get': ({ dates = [] } = {}) => {
+      const list = (dates || []).filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d));
+      const prev = list.map((d) => addDays(d, -7));
+      const inDates = (arr) => (arr.length ? arr.map((d) => `'${d}'`).join(',') : "''");
+      return {
+        groups: all(
+          `SELECT id, name, color, coach, coach_phone, assistant, assistant_phone FROM groups WHERE archived = 0`
+        ).sort((a, b) => a.name.localeCompare(b.name, 'hy', { numeric: true, sensitivity: 'base' })),
+        pitches: all('SELECT name FROM pitches ORDER BY sort, name').map((p) => p.name),
+        base: all('SELECT group_id, weekday, start, end, pitch, note FROM schedule_base'),
+        days: all(`SELECT group_id, date, start, end, pitch, note, cancelled FROM schedule_days WHERE date IN (${inDates(list)})`),
+        // Last week's changes, for «copy from last week».
+        prevDays: all(`SELECT group_id, date FROM schedule_days WHERE date IN (${inDates(prev)})`).length,
+      };
+    },
+
+    // The usual weekly slot of a group. Empty start = no training that weekday.
+    'schedule.saveBase': ({ groupId, weekday, start, end, pitch, note }, ctx) => {
+      if (!groupId || !(weekday >= 0 && weekday <= 6)) throw new AppError('DATE_REQUIRED');
+      if (blank(start)) {
+        run('DELETE FROM schedule_base WHERE group_id = :groupId AND weekday = :weekday', { groupId, weekday });
+      } else {
+        if (blank(end) || str(end) <= str(start)) throw new AppError('TIME_INVALID');
+        run(
+          `INSERT INTO schedule_base (group_id, weekday, start, end, pitch, note) VALUES (:groupId, :weekday, :start, :end, :pitch, :note)
+           ON CONFLICT(group_id, weekday) DO UPDATE SET start = excluded.start, end = excluded.end, pitch = excluded.pitch, note = excluded.note`,
+          { groupId, weekday, start: str(start), end: str(end), pitch: str(pitch), note: str(note) }
+        );
+      }
+      log(ctx, 'schedule.base', `${one('SELECT name FROM groups WHERE id = :groupId', { groupId })?.name || ''} — ${weekday}`);
+      return true;
+    },
+
+    // A change for one date (or cancelling that day's training).
+    'schedule.setDay': ({ groupId, date, start, end, pitch, note, cancelled }, ctx) => {
+      if (!groupId || !/^\d{4}-\d{2}-\d{2}$/.test(date || '')) throw new AppError('DATE_REQUIRED');
+      if (!cancelled && (blank(start) || blank(end) || str(end) <= str(start))) throw new AppError('TIME_INVALID');
+      run(
+        `INSERT INTO schedule_days (group_id, date, start, end, pitch, note, cancelled, updated_by)
+         VALUES (:groupId, :date, :start, :end, :pitch, :note, :cancelled, :user)
+         ON CONFLICT(group_id, date) DO UPDATE SET start = excluded.start, end = excluded.end, pitch = excluded.pitch,
+           note = excluded.note, cancelled = excluded.cancelled, updated_by = excluded.updated_by`,
+        { groupId, date, start: str(start), end: str(end), pitch: str(pitch), note: str(note), cancelled: cancelled ? 1 : 0, user: ctx.user || null }
+      );
+      return true;
+    },
+
+    // Back to the usual schedule for that date.
+    'schedule.resetDay': ({ groupId, date }) => {
+      run('DELETE FROM schedule_days WHERE group_id = :groupId AND date = :date', { groupId, date });
+      return true;
+    },
+
+    // Copies last week's changes (same weekday, 7 days earlier) onto the chosen dates.
+    'schedule.copyWeek': ({ dates = [] }, ctx) => {
+      let n = 0;
+      for (const date of dates) {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
+        const from = addDays(date, -7);
+        run('DELETE FROM schedule_days WHERE date = :date', { date });
+        for (const d of all('SELECT * FROM schedule_days WHERE date = :from', { from })) {
+          run(
+            `INSERT INTO schedule_days (group_id, date, start, end, pitch, note, cancelled, updated_by)
+             VALUES (:group_id, :date, :start, :end, :pitch, :note, :cancelled, :user)`,
+            { ...d, date, user: ctx.user || null }
+          );
+          n++;
+        }
+      }
+      log(ctx, 'schedule.copied', `${dates.join(', ')} — ${n}`);
+      return { copied: n };
+    },
+
+    'schedule.savePitches': ({ names = [] }) => {
+      const clean = [...new Set(names.map((x) => String(x || '').trim()).filter(Boolean))];
+      run('DELETE FROM pitches');
+      clean.forEach((name, i) => run('INSERT INTO pitches (name, sort) VALUES (:name, :sort)', { name, sort: i + 1 }));
+      return true;
+    },
+
+    // Adds the timetable's trainings on these dates to the attendance sheets (Հաճախումներ).
+    'schedule.toAttendance': ({ sessions = [] }, ctx) => {
+      let added = 0;
+      for (const s of sessions) {
+        if (!s.groupId || !/^\d{4}-\d{2}-\d{2}$/.test(s.date || '')) continue;
+        // The month counts as set up, so the 10 default days are not added on top.
+        run('INSERT OR IGNORE INTO training_months (group_id, month) VALUES (:g, :m)', { g: s.groupId, m: s.date.slice(0, 7) });
+        added += Number(run('INSERT OR IGNORE INTO training_days (group_id, date) VALUES (:g, :d)', { g: s.groupId, d: s.date }).changes) || 0;
+      }
+      log(ctx, 'schedule.toAttendance', String(added));
+      return { added };
     },
 
     'students.delete': ({ id }, ctx) => {

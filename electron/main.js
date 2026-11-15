@@ -6,7 +6,7 @@ const { openDatabase } = require('./db');
 const { createService, DEFAULT_TEMPLATES } = require('./service');
 const notify = require('./notify');
 const network = require('./network');
-const { buildReport, buildForm } = require('./xlsx');
+const { buildReport, buildForm, buildSchedule } = require('./xlsx');
 const hdm = require('./hdm');
 const updater = require('./updater');
 const importer = require('./importer');
@@ -582,7 +582,8 @@ function registerIpc() {
       : await dialog.showSaveDialog(win, { defaultPath: report.defaultName, filters: [{ name: 'Excel', extensions: ['xlsx'] }] });
     if (r.canceled || !r.filePath) return { ok: false, error: 'CANCELLED' };
     try {
-      fs.writeFileSync(r.filePath, Buffer.from(await (report.kind === 'form' ? buildForm : buildReport)(report)));
+      const build = report.kind === 'form' ? buildForm : report.kind === 'schedule' ? buildSchedule : buildReport;
+      fs.writeFileSync(r.filePath, Buffer.from(await build(report)));
     } catch (err) {
       // Most often the file is open in Excel and locked.
       return { ok: false, error: 'FILE_LOCKED', detail: err.message };
@@ -607,6 +608,13 @@ function registerIpc() {
 
   ipcMain.handle('print', async (_e, { html }) => {
     const w = await renderHtmlWindow(html);
+    // Testing (FC_EXPORT_DIR): save what would be printed as a PDF instead of opening the print dialog.
+    if (process.env.FC_EXPORT_DIR) {
+      const pdf = await w.webContents.printToPDF({ printBackground: true, preferCSSPageSize: true });
+      fs.writeFileSync(path.join(process.env.FC_EXPORT_DIR, `print-${Date.now()}.pdf`), pdf);
+      w.destroy();
+      return { ok: true };
+    }
     return new Promise((resolve) => {
       w.webContents.print({ printBackground: true }, (success, reason) => {
         w.destroy();

@@ -5,7 +5,7 @@ import { rpc, fmtDateTime } from '../lib';
 import { Badge, BrandLogo, Button, Field, Loading, Modal, Segmented, useAction, useClub, useConfirm, useToast } from './ui';
 
 // Menus a right can be given for (same list as electron/auth.js).
-export const SECTIONS = ['students', 'payments', 'attendance', 'groups', 'contracts', 'reports', 'settings'];
+export const SECTIONS = ['students', 'payments', 'attendance', 'schedule', 'groups', 'contracts', 'reports', 'settings'];
 const LEVEL = { none: 0, view: 1, edit: 2 };
 
 const AuthCtx = createContext({ required: false, user: null, can: () => true });

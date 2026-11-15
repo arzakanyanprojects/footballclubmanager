@@ -5,6 +5,7 @@ import {
   Shapes,
   Wallet,
   CalendarCheck,
+  CalendarClock,
   FileSignature,
   Settings as SettingsIcon,
   Shield,
@@ -24,6 +25,7 @@ import Payments from './pages/Payments';
 import Attendance from './pages/Attendance';
 import Contracts from './pages/Contracts';
 import Settings from './pages/Settings';
+import Schedule from './pages/Schedule';
 import { HdmProvider } from './components/Hdm';
 import { UpdateNotice } from './components/Updates';
 import { AuthGate, useAuth } from './components/Auth';
@@ -35,6 +37,7 @@ const NAV = [
   { id: 'groups', icon: Shapes, section: 'groups' },
   { id: 'payments', icon: Wallet, section: 'payments' },
   { id: 'attendance', icon: CalendarCheck, section: 'attendance' },
+  { id: 'schedule', icon: CalendarClock, section: 'schedule' },
   { id: 'contracts', icon: FileSignature, section: 'contracts' },
   { id: 'settings', icon: SettingsIcon },
 ];
@@ -156,6 +159,8 @@ function Page({ route, nav, appState, setAppState }) {
       return <Payments {...props} />;
     case 'attendance':
       return <Attendance {...props} />;
+    case 'schedule':
+      return <Schedule {...props} />;
     case 'contracts':
       return <Contracts {...props} />;
     case 'settings':

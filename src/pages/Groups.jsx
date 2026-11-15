@@ -169,7 +169,16 @@ export default function Groups({ nav }) {
             const { age, year } = splitName(g.name);
             const color = g.color || '#8a929b';
             return (
-              <div key={g.id} className={`card group-card ${g.archived ? 'archived' : ''}`} style={{ '--g': color }}>
+              <div
+                key={g.id}
+                className={`card group-card ${g.archived ? 'archived' : ''}`}
+                style={{ '--g': color }}
+                role="button"
+                tabIndex={0}
+                title={t('groups.openStudents')}
+                onClick={() => open.students(g)}
+                onKeyDown={(e) => e.key === 'Enter' && e.target === e.currentTarget && open.students(g)}
+              >
                 <div className="group-card-top">
                   <div className="group-title">
                     <span className="group-age">{age}</span>
@@ -183,14 +192,26 @@ export default function Groups({ nav }) {
                   <PersonLine role={t('groups.assistant')} name={g.assistant} phone={g.assistant_phone} empty="—" onCopy={copyPhone} />
                 </div>
                 <div className="group-stats">
-                  <button className="group-stat" onClick={() => open.students(g)}>
+                  <button
+                    className="group-stat"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      open.students(g);
+                    }}
+                  >
                     <Users size={16} />
                     <span className="sv">
                       <span className="v">{g.student_count}</span>
                       <span className="l">{t('groups.studentsCol')}</span>
                     </span>
                   </button>
-                  <button className="group-stat" onClick={() => open.attendance(g)}>
+                  <button
+                    className="group-stat"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      open.attendance(g);
+                    }}
+                  >
                     <CalendarCheck size={16} />
                     <span className="sv">
                       <span className="v">

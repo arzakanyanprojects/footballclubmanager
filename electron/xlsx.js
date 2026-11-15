@@ -230,4 +230,77 @@ async function buildForm({ sheetName, title, lines = [], columns, rows, currency
   return wb.xlsx.writeBuffer();
 }
 
-module.exports = { buildReport, buildForm };
+/**
+ * The training timetable in the club's layout: birth-year blocks, each with its own fill and a
+ * header row (coach | group | dates); two rows per group (coach / assistant, time / pitch).
+ * blocks: [{ label, fill: '#rrggbb', groups: [{ coach, assistant, name, cells: [{ time, place }] }] }]
+ */
+async function buildSchedule({ title, dates, blocks, headers }) {
+  const wb = new ExcelJS.Workbook();
+  wb.creator = 'FC Manager';
+  wb.created = new Date();
+  const ws = wb.addWorksheet('Դասացուցակ', {
+    views: [{ showGridLines: false }],
+    pageSetup: {
+      paperSize: 9,
+      orientation: dates.length > 3 ? 'landscape' : 'portrait',
+      fitToPage: true,
+      fitToWidth: 1,
+      fitToHeight: 0,
+      margins: { left: 0.3, right: 0.3, top: 0.4, bottom: 0.4, header: 0.2, footer: 0.2 },
+    },
+  });
+  ws.columns = [{ width: 27 }, { width: 12 }, ...dates.map(() => ({ width: 22 }))];
+  const last = 2 + dates.length;
+  const line = { style: 'thin', color: { argb: 'FF555555' } };
+  const box = { top: line, left: line, bottom: line, right: line };
+  const argb = (hex) => `FF${String(hex || '#ffffff').replace('#', '').toUpperCase()}`;
+  const style = (cell, fill, opts = {}) => {
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: argb(fill) } };
+    cell.border = box;
+    cell.font = { name: FONT, size: 10, bold: !!opts.bold, color: { argb: INK } };
+    cell.alignment = { vertical: 'middle', horizontal: opts.left ? 'left' : 'center', wrapText: true };
+  };
+
+  ws.mergeCells(1, 1, 1, last);
+  Object.assign(ws.getCell(1, 1), { value: title, font: { name: FONT, size: 14, bold: true, color: { argb: INK } } });
+  ws.getRow(1).height = 24;
+  let r = 3;
+  for (const b of blocks) {
+    // Header of the block (two rows, merged), like the original file.
+    const labels = [headers.coach, headers.group, ...dates];
+    labels.forEach((v, i) => {
+      ws.mergeCells(r, i + 1, r + 1, i + 1);
+      const cell = ws.getCell(r, i + 1);
+      cell.value = v;
+      style(cell, b.fill, { bold: true });
+    });
+    r += 2;
+    for (const g of b.groups) {
+      const a = ws.getCell(r, 1);
+      a.value = g.coach;
+      style(a, b.fill, { left: true });
+      const a2 = ws.getCell(r + 1, 1);
+      a2.value = g.assistant;
+      style(a2, b.fill, { left: true });
+      ws.mergeCells(r, 2, r + 1, 2);
+      const gc = ws.getCell(r, 2);
+      gc.value = g.name;
+      style(gc, b.fill, { bold: true });
+      g.cells.forEach((c, i) => {
+        const tc = ws.getCell(r, 3 + i);
+        tc.value = c.time;
+        style(tc, b.fill, { bold: true });
+        const pc = ws.getCell(r + 1, 3 + i);
+        pc.value = c.place;
+        style(pc, b.fill);
+      });
+      ws.getRow(r).height = 17;
+      ws.getRow(r + 1).height = 17;
+      r += 2;
+    }
+  }
+  return wb.xlsx.writeBuffer();
+}
+
+module.exports = { buildReport, buildForm, buildSchedule };

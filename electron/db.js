@@ -299,6 +299,39 @@ const MIGRATIONS = [
   CREATE INDEX idx_absences_student ON absences(student_id, date_from, date_to);
   ALTER TABLE charges ADD COLUMN excused_by INTEGER;
   `,
+  // v20: the training timetable (Դասացուցակ). schedule_base is each group's usual week
+  // (weekday 0 = Sunday … 6 = Saturday); schedule_days changes one date only (or cancels it).
+  `
+  CREATE TABLE pitches (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    sort INTEGER NOT NULL DEFAULT 0
+  );
+  INSERT INTO pitches (name, sort) VALUES ('№ 2', 1), ('№ 3', 2), ('№ 3/1', 3), ('№ 4', 4), ('№ 4/1', 5), ('№ 5', 6), ('№ 5/1', 7);
+  CREATE TABLE schedule_base (
+    id INTEGER PRIMARY KEY,
+    group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+    weekday INTEGER NOT NULL,
+    start TEXT NOT NULL,
+    end TEXT NOT NULL,
+    pitch TEXT,
+    note TEXT,
+    UNIQUE (group_id, weekday)
+  );
+  CREATE TABLE schedule_days (
+    id INTEGER PRIMARY KEY,
+    group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+    date TEXT NOT NULL,
+    start TEXT,
+    end TEXT,
+    pitch TEXT,
+    note TEXT,
+    cancelled INTEGER NOT NULL DEFAULT 0,
+    updated_by TEXT,
+    UNIQUE (group_id, date)
+  );
+  CREATE INDEX idx_schedule_days_date ON schedule_days(date);
+  `,
 ];
 
 function seed(db) {

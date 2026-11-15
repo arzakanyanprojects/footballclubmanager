@@ -6,7 +6,7 @@
 const crypto = require('crypto');
 
 // Menus a right can be given for, in the order the settings screen shows them.
-const SECTIONS = ['students', 'payments', 'attendance', 'groups', 'contracts', 'reports', 'settings'];
+const SECTIONS = ['students', 'payments', 'attendance', 'schedule', 'groups', 'contracts', 'reports', 'settings'];
 const LEVEL = { none: 0, view: 1, edit: 2 };
 
 // Which section a method belongs to. Reads need 'view', writes need 'edit'.
@@ -26,6 +26,8 @@ function sectionOf(method) {
       return 'attendance';
     case 'groups':
       return 'groups';
+    case 'schedule':
+      return 'schedule';
     case 'contracts':
     case 'docTemplates':
       return 'contracts';
