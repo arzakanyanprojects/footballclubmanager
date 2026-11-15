@@ -6,6 +6,16 @@ const { createAuth } = require('./auth');
 
 class AppError extends Error {}
 
+// Email texts parents get (editable in Settings → Notifications). {placeholders} are filled in.
+const DEFAULT_TEMPLATES = {
+  reminderSubject: 'Վճարման հիշեցում — {student}',
+  reminderBody:
+    'Հարգելի {parent},\n\nՀիշեցնում ենք, որ հետևյալ վճարումը դեռ կատարված չէ․\n\nՍան՝ {student}\nՎճարում՝ {months}\nԳումար՝ {amount}\n\nԽնդրում ենք կատարել վճարումը։ Հարցերի դեպքում զանգահարեք {clubPhone}։\n\nՀարգանքով՝\n{club}',
+  receiptSubject: 'Վճարումն ընդունված է — {student}',
+  receiptBody:
+    'Հարգելի {parent},\n\nՇնորհակալություն, վճարումն ընդունված է։\n\nՍան՝ {student}\n{items}\nԸնդամենը՝ {total} ({method})\nԱմսաթիվ՝ {date}\n\nՀարգանքով՝\n{club}',
+};
+
 // Used when a payment is recorded without a method (the UI always sends one).
 const DEFAULT_METHOD = 'easypay';
 
@@ -28,7 +38,7 @@ const int = (v, def = 0) => {
 };
 const formatDate = (iso) => (iso ? iso.split('-').reverse().join('.') : '');
 
-function createService(db, { onWrite } = {}) {
+function createService(db, { onWrite, getNotify } = {}) {
   const cache = new Map();
   const stmt = (sql) => {
     let s = cache.get(sql);
@@ -89,6 +99,154 @@ function createService(db, { onWrite } = {}) {
 
   // ---------------------------------------------------------------- settings
   const SETTING_KEYS = ['club_name', 'club_address', 'club_phone', 'director_name', 'currency', 'due_day', 'billing_start', 'club_logo'];
+
+  // ---------------------------------------------------------------- email / Telegram messages
+  const HY_MONTHS = ['Հունվար', 'Փետրվար', 'Մարտ', 'Ապրիլ', 'Մայիս', 'Հունիս', 'Հուլիս', 'Օգոստոս', 'Սեպտեմբեր', 'Հոկտեմբեր', 'Նոյեմբեր', 'Դեկտեմբեր'];
+  const HY_METHODS = { card: 'Անկանխիկ', easypay: 'EasyPay', transfer: 'Փոխանցում' };
+  const monthHy = (period) => `${HY_MONTHS[Number(period.slice(5, 7)) - 1]} ${period.slice(0, 4)}`;
+  const amd = (n) => {
+    const cur = settings().currency || 'AMD';
+    return `${Math.round(n || 0).toLocaleString('en-US')} ${cur === 'AMD' ? '֏' : cur}`;
+  };
+  const chargeText = (c) =>
+    c.kind === 'monthly' ? `Ամսավճար · ${monthHy(c.period)}` : c.description || (c.kind === 'product' ? 'Ապրանք' : 'Այլ վճար');
+  const fill = (tpl, vars) => String(tpl || '').replace(/\{(\w+)\}/g, (m, k) => (vars[k] != null ? String(vars[k]) : m));
+  const notifyCfg = () => (getNotify ? getNotify() : null) || {};
+  const emailOn = () => !!notifyCfg().email?.enabled;
+  const telegramChats = () => {
+    const tg = notifyCfg().telegram || {};
+    return tg.enabled && tg.token ? (tg.chats || []).filter((c) => c.on !== false).map((c) => String(c.id)) : [];
+  };
+  const enqueue = (m, ctx = {}) =>
+    run(
+      `INSERT INTO outbox (channel, recipient, subject, body, kind, student_id, period, created_by)
+       VALUES (:channel, :recipient, :subject, :body, :kind, :studentId, :period, :user)`,
+      { studentId: null, period: null, subject: null, ...m, user: ctx.user || null }
+    );
+  const studentVars = (sid) => {
+    const s = one('SELECT * FROM students WHERE id = :id', { id: sid });
+    const st = settings();
+    return {
+      s,
+      vars: {
+        student: s ? `${s.first_name} ${s.last_name}` : '',
+        parent: s ? [s.parent_first_name, s.parent_last_name].filter(Boolean).join(' ') || s.parent_name || 'ծնող' : '',
+        club: st.club_name || 'FC Manager',
+        clubPhone: st.club_phone || '',
+        date: formatDate(today()),
+      },
+    };
+  };
+
+  // After a payment: receipt email to the parent, alert to the staff's Telegram chats.
+  function notifyPaid(studentId, charges, method, ctx) {
+    const cfg = notifyCfg();
+    if (!charges.length) return;
+    const { s, vars } = studentVars(studentId);
+    const total = charges.reduce((sum, c) => sum + c.amount, 0);
+    const items = charges.map((c) => `• ${chargeText(c)} — ${amd(c.amount)}`).join('\n');
+    const all = { ...vars, items, total: amd(total), method: HY_METHODS[method] || method };
+    if (cfg.receipts && emailOn() && s?.parent_email) {
+      const tpl = { ...DEFAULT_TEMPLATES, ...(cfg.templates || {}) };
+      enqueue({ channel: 'email', recipient: s.parent_email, subject: fill(tpl.receiptSubject, all), body: fill(tpl.receiptBody, all), kind: 'receipt', studentId }, ctx);
+    }
+    if (cfg.paymentAlerts) {
+      const text = `💳 Վճարում — ${vars.student}\n${items}\nԸնդամենը՝ ${amd(total)} (${all.method})${ctx.user ? `\nԳրանցող՝ ${ctx.user}` : ''}`;
+      for (const chat of telegramChats()) enqueue({ channel: 'telegram', recipient: chat, body: text, kind: 'payment', studentId }, ctx);
+    }
+  }
+
+  // Overdue reminder emails. studentIds: null = everyone with an overdue fee.
+  // skipReminded: leave out students already reminded this month (automatic reminders).
+  function remindOverdue(studentIds, ctx, { skipReminded = false } = {}) {
+    const period = currentPeriod();
+    const tpl = { ...DEFAULT_TEMPLATES, ...(notifyCfg().templates || {}) };
+    const rows = all(
+      `SELECT c.student_id, c.kind, c.period, c.description, c.amount FROM charges c JOIN students s ON s.id = c.student_id
+       WHERE c.status = 'unpaid' AND c.due_date < :t AND s.status = 'active' ORDER BY c.due_date`,
+      { t: today() }
+    ).filter((r) => !studentIds || studentIds.includes(r.student_id));
+    const bySt = new Map();
+    for (const r of rows) {
+      if (!bySt.has(r.student_id)) bySt.set(r.student_id, []);
+      bySt.get(r.student_id).push(r);
+    }
+    const result = { queued: 0, noEmail: [], already: 0 };
+    for (const [sid, list] of bySt) {
+      const { s, vars } = studentVars(sid);
+      if (!s.parent_email) {
+        result.noEmail.push(vars.student);
+        continue;
+      }
+      if (skipReminded && one(`SELECT id FROM outbox WHERE student_id = :sid AND kind = 'reminder' AND period = :period`, { sid, period })) {
+        result.already++;
+        continue;
+      }
+      const all = {
+        ...vars,
+        months: list.map((c) => (c.kind === 'monthly' ? monthHy(c.period) : chargeText(c))).join(', '),
+        amount: amd(list.reduce((sum, c) => sum + c.amount, 0)),
+      };
+      enqueue({ channel: 'email', recipient: s.parent_email, subject: fill(tpl.reminderSubject, all), body: fill(tpl.reminderBody, all), kind: 'reminder', studentId: sid, period }, ctx);
+      result.queued++;
+    }
+    if (result.queued) log(ctx, 'notify.reminders', String(result.queued));
+    return result;
+  }
+
+  // Summary text for the staff: a day ('2026-11-15') or a month ('2026-10').
+  function summaryText(kind, when) {
+    const st = settings();
+    const like = kind === 'daily' ? when : `${when}-%`;
+    const paid = all(
+      `SELECT IFNULL(method, 'easypay') AS method, COUNT(*) AS n, SUM(amount) AS total FROM charges
+       WHERE status = 'paid' AND paid_at LIKE :like GROUP BY 1`,
+      { like }
+    );
+    const n = paid.reduce((s, r) => s + r.n, 0);
+    const total = paid.reduce((s, r) => s + r.total, 0);
+    const overdue = one(
+      `SELECT IFNULL(SUM(amount), 0) AS total, COUNT(DISTINCT student_id) AS students FROM charges WHERE status = 'unpaid' AND due_date < :t`,
+      { t: today() }
+    );
+    const joined = one(`SELECT COUNT(*) AS n FROM students WHERE join_date LIKE :like`, { like }).n;
+    const active = one(`SELECT COUNT(*) AS n FROM students WHERE status = 'active'`).n;
+    const title = kind === 'daily' ? `📊 ${st.club_name || 'FC Manager'} — ${formatDate(when)}` : `📅 ${st.club_name || 'FC Manager'} — ${monthHy(when)}`;
+    const lines = [title, '', `Ստացված վճարումներ՝ ${n}, ընդամենը ${amd(total)}`];
+    for (const m of ['card', 'easypay', 'transfer']) {
+      const r = paid.find((x) => x.method === m);
+      if (r) lines.push(`  • ${HY_METHODS[m]}՝ ${amd(r.total)} (${r.n})`);
+    }
+    if (kind === 'monthly') {
+      const fees = one(
+        `SELECT IFNULL(SUM(amount), 0) AS expected, IFNULL(SUM(CASE WHEN status = 'paid' THEN amount END), 0) AS paid
+         FROM charges WHERE kind = 'monthly' AND period = :p AND status != 'waived'`,
+        { p: when }
+      );
+      lines.push(`Ամսավճարներ՝ ${amd(fees.paid)} / ${amd(fees.expected)}`);
+      lines.push(`Ակտիվ սաներ՝ ${active}`);
+    }
+    lines.push(`Նոր սաներ՝ ${joined}`);
+    lines.push(`Ժամկետանց պարտք՝ ${amd(overdue.total)} (${overdue.students} սան)`);
+    return { subject: title.replace(/^\S+\s/, ''), body: lines.join('\n') };
+  }
+
+  // Sends a summary to the staff: Telegram chats + summary email addresses.
+  function queueSummary(kind, when, ctx = {}) {
+    const { subject, body } = summaryText(kind, when);
+    let n = 0;
+    for (const chat of telegramChats()) {
+      enqueue({ channel: 'telegram', recipient: chat, body, kind }, ctx);
+      n++;
+    }
+    if (emailOn()) {
+      for (const to of String(notifyCfg().summaryEmails || '').split(/[,;\s]+/).filter((x) => x.includes('@'))) {
+        enqueue({ channel: 'email', recipient: to, subject, body, kind }, ctx);
+        n++;
+      }
+    }
+    return n;
+  }
 
   const methods = {
     'settings.get': () => settings(),
@@ -463,6 +621,61 @@ function createService(db, { onWrite } = {}) {
       return true;
     },
 
+    // ---------------------------------------------------------------- email / Telegram
+    // Reminder emails to parents of students with overdue fees (all, or the given students).
+    'notify.remind': ({ studentIds } = {}, ctx) => {
+      if (!emailOn()) throw new AppError('EMAIL_NOT_SET');
+      return remindOverdue(studentIds && studentIds.length ? studentIds : null, ctx);
+    },
+
+    // Recent messages and their status.
+    'notify.outbox': ({ limit = 50 } = {}) =>
+      all(
+        `SELECT o.id, o.channel, o.recipient, o.subject, o.kind, o.status, o.error, o.created_at, o.sent_at,
+                s.first_name, s.last_name
+         FROM outbox o LEFT JOIN students s ON s.id = o.student_id ORDER BY o.id DESC LIMIT :limit`,
+        { limit: Math.min(int(limit, 50), 500) }
+      ),
+
+    'notify.retry': ({ id }) => {
+      run(`UPDATE outbox SET status = 'pending', attempts = 0, error = NULL WHERE id = :id AND status = 'failed'`, { id });
+      return true;
+    },
+
+    // Absence application (Բացակայության դիմում): fills the club's form and keeps it under the student's documents.
+    'applications.create': (p, ctx) => {
+      const student = one(
+        `SELECT s.*, g.name AS group_name FROM students s LEFT JOIN groups g ON g.id = s.group_id WHERE s.id = :id`,
+        { id: p.studentId }
+      );
+      if (!student) throw new AppError('NOT_FOUND');
+      if (blank(p.from) || blank(p.to)) throw new AppError('PERIOD_REQUIRED');
+      if (String(p.to) < String(p.from)) throw new AppError('PERIOD_INVALID');
+      const contract = one(
+        `SELECT number, contract_date FROM contracts WHERE student_id = :id
+         ORDER BY IFNULL(contract_date, created_at) DESC, id DESC LIMIT 1`,
+        { id: p.studentId }
+      );
+      const date = str(p.date) || today();
+      const template = require('fs').readFileSync(require('path').join(__dirname, 'templates', 'absence-application.docx'));
+      const buf = word.fillTemplate(template, word.absenceValues(student, contract, { ...p, date }));
+      const name = `Բացակայության դիմում — ${student.first_name} ${student.last_name} — ${formatDate(str(p.from))}–${formatDate(str(p.to))}.docx`;
+      const r = run(
+        `INSERT INTO student_files (student_id, kind, file_name, mime, size, data, created_by)
+         VALUES (:studentId, 'absence', :name, :type, :size, :data, :user)`,
+        {
+          studentId: p.studentId,
+          name,
+          type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          size: buf.length,
+          data: buf,
+          user: ctx.user || null,
+        }
+      );
+      log(ctx, 'application.created', `${student.first_name} ${student.last_name} — ${formatDate(str(p.from))}–${formatDate(str(p.to))}`);
+      return { id: Number(r.lastInsertRowid), fileName: name, data: buf.toString('base64') };
+    },
+
     'students.delete': ({ id }, ctx) => {
       const name = studentName(id);
       run('DELETE FROM students WHERE id = :id', { id });
@@ -573,7 +786,9 @@ function createService(db, { onWrite } = {}) {
         }
       );
       log(ctx, paid ? 'charge.created_paid' : 'charge.created', `${studentName(p.studentId)} — ${description || kind} — ${amount}`);
-      return { id: Number(r.lastInsertRowid) };
+      const newId = Number(r.lastInsertRowid);
+      if (paid) notifyPaid(p.studentId, [one('SELECT * FROM charges WHERE id = :id', { id: newId })], str(p.method) || DEFAULT_METHOD, ctx);
+      return { id: newId };
     },
 
     'charges.update': (p, ctx) => {
@@ -632,6 +847,14 @@ function createService(db, { onWrite } = {}) {
         done.push(id);
         log(ctx, 'charge.paid', `${studentName(c.student_id)} — ${amount}`);
       }
+      // One receipt / alert per student.
+      const byStudent = new Map();
+      for (const id of done) {
+        const c = one('SELECT * FROM charges WHERE id = :id', { id });
+        if (!byStudent.has(c.student_id)) byStudent.set(c.student_id, []);
+        byStudent.get(c.student_id).push(c);
+      }
+      for (const [sid, list] of byStudent) notifyPaid(sid, list, str(method) || DEFAULT_METHOD, ctx);
       return { total, ids: done };
     },
 
@@ -700,6 +923,7 @@ function createService(db, { onWrite } = {}) {
         donePeriods.push(period);
       }
       log(ctx, 'charge.paid', `${studentName(studentId)} — ${(periods || []).join(', ')} — ${total}`);
+      if (done.length) notifyPaid(studentId, done.map((id) => one('SELECT * FROM charges WHERE id = :id', { id })), paid.method, ctx);
       return { total, ids: done, periods: donePeriods };
     },
 
@@ -710,43 +934,6 @@ function createService(db, { onWrite } = {}) {
       }
       log(ctx, 'charge.receipt', `${receipt} — ${(ids || []).length}`);
       return true;
-    },
-
-    // Pay several months ahead: creates (or settles) monthly charges for the given months.
-    'charges.payAhead': ({ studentId, fromPeriod, months, method, paidAt }, ctx) => {
-      const st = one('SELECT monthly_fee FROM students WHERE id = :id', { id: studentId });
-      if (!st) throw new AppError('NOT_FOUND');
-      if (st.monthly_fee <= 0) throw new AppError('AMOUNT_REQUIRED');
-      const dueDay = pad(int(settings().due_day, 15));
-      let total = 0;
-      const items = [];
-      for (let i = 0; i < Math.max(int(months, 1), 1); i++) {
-        const period = addMonths(fromPeriod || currentPeriod(), i);
-        const existing = one(
-          `SELECT id, status, amount FROM charges WHERE student_id = :studentId AND kind = 'monthly' AND period = :period`,
-          { studentId, period }
-        );
-        const paid = { paidAt: str(paidAt) || today(), method: str(method) || DEFAULT_METHOD, user: ctx.user || null };
-        if (existing) {
-          if (existing.status === 'paid') continue;
-          run(
-            `UPDATE charges SET status = 'paid', paid_at = :paidAt, method = :method, paid_by = :user WHERE id = :id`,
-            { id: existing.id, ...paid }
-          );
-          total += existing.amount;
-          items.push({ id: existing.id, period, amount: existing.amount });
-        } else {
-          const r = run(
-            `INSERT INTO charges (student_id, kind, period, amount, due_date, status, paid_at, method, created_by, paid_by)
-             VALUES (:studentId, 'monthly', :period, :amount, :dueDate, 'paid', :paidAt, :method, :user, :user)`,
-            { studentId, period, amount: st.monthly_fee, dueDate: `${period}-${dueDay}`, ...paid }
-          );
-          total += st.monthly_fee;
-          items.push({ id: Number(r.lastInsertRowid), period, amount: st.monthly_fee });
-        }
-      }
-      log(ctx, 'charge.paid_ahead', `${studentName(studentId)} — ${months} — ${total}`);
-      return { total, items };
     },
 
     // ---------------------------------------------------------------- attendance
@@ -1152,7 +1339,23 @@ function createService(db, { onWrite } = {}) {
     }
   }
 
-  return { call, ensureMonthlyCharges, settings };
+  // Used by notify.js on the host PC (not reachable over the LAN).
+  const outbox = {
+    pending: () => all(`SELECT * FROM outbox WHERE status = 'pending' ORDER BY id LIMIT 20`),
+    sent: (id) => run(`UPDATE outbox SET status = 'sent', sent_at = datetime('now', 'localtime'), error = NULL WHERE id = :id`, { id }),
+    failed: (id, error, final) =>
+      run(`UPDATE outbox SET attempts = attempts + 1, error = :error, status = CASE WHEN :final = 1 THEN 'failed' ELSE status END WHERE id = :id`, {
+        id,
+        error: String(error || '').slice(0, 300),
+        final: final ? 1 : 0,
+      }),
+    add: (m) => enqueue(m, { user: 'FC Manager' }),
+    summary: (kind, when) => queueSummary(kind, when, { user: 'FC Manager' }),
+    autoReminders: () => (emailOn() ? remindOverdue(null, { user: 'FC Manager' }, { skipReminded: true }) : null),
+    preview: (kind, when) => summaryText(kind, when),
+  };
+
+  return { call, ensureMonthlyCharges, settings, outbox };
 }
 
-module.exports = { createService };
+module.exports = { createService, DEFAULT_TEMPLATES };

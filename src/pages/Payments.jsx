@@ -3,6 +3,7 @@ import { Plus, Download, Wallet, CheckCircle2, Pencil, Ban, RotateCcw, Trash2, P
 import { useT, monthName } from '../i18n';
 import { useCan } from '../components/Auth';
 import { useColumns } from '../components/Columns';
+import { SendRemindersButton } from '../components/Notify';
 import { useHdm } from '../components/Hdm';
 import { useRpc, rpc, fmtDate, todayIso, currentPeriod, addMonths, saveCsv, money } from '../lib';
 import {
@@ -11,7 +12,20 @@ import {
 } from '../components/ui';
 
 // Payment methods the club accepts, in the order shown; the first is the default.
-export const PAYMENT_METHODS = ['easypay', 'card', 'transfer'];
+export const PAYMENT_METHODS = ['card', 'easypay', 'transfer'];
+// Each payment method has its own colour (picker buttons, tables, reports).
+export const METHOD_COLORS = { card: '#2f6fdb', easypay: '#e07b00', transfer: '#8a4fd8' };
+
+// The payment method as a small coloured label.
+export function MethodTag({ method }) {
+  const t = useT();
+  const m = method || PAYMENT_METHODS[0];
+  return (
+    <span className="method-tag" style={{ '--m': METHOD_COLORS[m] || 'var(--text-3)' }}>
+      {t(`method.${m}`)}
+    </span>
+  );
+}
 
 export const chargeStatus = (c) =>
   c.status === 'paid' ? 'paid' : c.status === 'waived' ? 'waived' : c.due_date && c.due_date < todayIso() ? 'overdue' : 'unpaid';
@@ -77,6 +91,7 @@ function ChargesView({ preset, nav }) {
           options={['all', 'unpaid', 'overdue', 'paid', 'waived'].map((v) => ({ value: v, label: t(`chargeStatus.${v}`) }))}
         />
         <div className="grow" />
+        {canEdit && status === 'overdue' && rows.length > 0 && <SendRemindersButton />}
         <Button icon={Download} onClick={exportCsv} disabled={!rows.length}>
           {t('common.exportCsv')}
         </Button>
@@ -242,7 +257,7 @@ export function ChargesTable({ rows, showStudent, selectable, onOpenStudent, stu
             <>
               {fmtDate(c.paid_at)}
               <div className="muted">
-                {t(`method.${c.method || PAYMENT_METHODS[0]}`)}
+                <MethodTag method={c.method} />
                 {c.paid_by && c.paid_by !== 'system' ? ` · ${c.paid_by}` : ''}
               </div>
               {c.hdm_receipt && <div className="hdm-no">{t('hdm.short')} № {c.hdm_receipt}</div>}
@@ -258,7 +273,7 @@ export function ChargesTable({ rows, showStudent, selectable, onOpenStudent, stu
       label: t('payments.method'),
       defaultHidden: true,
       head: () => <th>{t('payments.method')}</th>,
-      cell: (c) => <td>{c.status === 'paid' ? t(`method.${c.method || PAYMENT_METHODS[0]}`) : dash}</td>,
+      cell: (c) => <td>{c.status === 'paid' ? <MethodTag method={c.method} /> : dash}</td>,
     },
     {
       id: 'paidBy',
@@ -364,11 +379,14 @@ export function ChargesTable({ rows, showStudent, selectable, onOpenStudent, stu
 function MethodPicker({ value, onChange }) {
   const t = useT();
   return (
-    <Segmented
-      value={value}
-      onChange={onChange}
-      options={PAYMENT_METHODS.map((m) => ({ value: m, label: t(`method.${m}`) }))}
-    />
+    <div className="seg method-seg">
+      {PAYMENT_METHODS.map((m) => (
+        <button key={m} type="button" className={value === m ? 'on' : ''} style={{ '--m': METHOD_COLORS[m] }} onClick={() => onChange(m)}>
+          <span className="method-dot" />
+          {t(`method.${m}`)}
+        </button>
+      ))}
+    </div>
   );
 }
 
@@ -761,67 +779,6 @@ function EditChargeModal({ charge, onClose, onPrint }) {
           <Field label={t('payments.note')} className="span-2">
             <input className="input" value={f.note} onChange={set('note')} />
           </Field>
-        </div>
-      </div>
-    </Modal>
-  );
-}
-
-export function PayAheadModal({ student, onClose }) {
-  const t = useT();
-  const act = useAction();
-  const hdm = useHdm();
-  const [fromPeriod, setFrom] = useState(currentPeriod());
-  const [months, setMonths] = useState(3);
-  const [method, setMethod] = useState(PAYMENT_METHODS[0]);
-  const [paidAt, setPaidAt] = useState(todayIso());
-  const save = async () => {
-    const r = await act(() => rpc('charges.payAhead', { studentId: student.id, fromPeriod, months, method, paidAt }));
-    if (!r) return;
-    onClose(r.total);
-    if (r.items?.length) {
-      await hdm.afterPayment({
-        method,
-        student: `${student.first_name} ${student.last_name}`,
-        items: r.items.map((c) => ({ id: c.id, label: chargeLabel(t, { kind: 'monthly', period: c.period }), amount: c.amount })),
-      });
-    }
-  };
-  return (
-    <Modal
-      title={t('payments.payAhead')}
-      onClose={() => onClose()}
-      width={480}
-      footer={
-        <>
-          <Button onClick={() => onClose()}>{t('common.cancel')}</Button>
-          <Button variant="primary" icon={CheckCircle2} onClick={save} disabled={!(months > 0)}>
-            {t('payments.markPaid')}
-          </Button>
-        </>
-      }
-    >
-      <div className="stack">
-        <div className="muted small">{t('payments.payAheadText', { fee: money(student.monthly_fee) })}</div>
-        <div className="grid-2">
-          <Field label={t('payments.fromMonth')}>
-            <input className="input" type="month" value={fromPeriod} onChange={(e) => setFrom(e.target.value)} />
-          </Field>
-          <Field label={t('payments.months')}>
-            <input className="input" type="number" min="1" max="24" value={months} onChange={(e) => setMonths(Number(e.target.value))} />
-          </Field>
-          <Field label={t('payments.method')} className="span-2">
-            <MethodPicker value={method} onChange={setMethod} />
-          </Field>
-          <Field label={t('payments.paidAt')}>
-            <input className="input" type="date" value={paidAt} onChange={(e) => setPaidAt(e.target.value)} />
-          </Field>
-        </div>
-        <div className="row">
-          <span className="muted">{t('payments.upTo')}</span>
-          <span className="strong">
-            <Money value={student.monthly_fee * (months || 0)} />
-          </span>
         </div>
       </div>
     </Modal>

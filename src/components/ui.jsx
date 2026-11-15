@@ -338,7 +338,7 @@ export function useAction() {
         if (err?.code === 'CANCELLED') return false;
         const key = `error.${err?.code || 'INTERNAL'}`;
         const msg = t(key);
-        toast.error(msg === key ? err?.detail || err?.message || t('error.INTERNAL') : msg);
+        toast.error(msg === key ? err?.detail || err?.message || t('error.INTERNAL') : err?.showDetail && err?.detail ? `${msg} ${err.detail}` : msg);
         return false;
       }
     },

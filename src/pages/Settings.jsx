@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import { FlaskConical, Trash2, Building2, Monitor, Network, History, Save, RefreshCw, FolderOpen, DatabaseBackup, Upload, Copy, LogOut, Server, Receipt, UserCog, ImagePlus, Cloud, CheckCircle2, AlertTriangle } from 'lucide-react';
+import { FlaskConical, Trash2, Building2, Monitor, Network, History, Save, RefreshCw, FolderOpen, DatabaseBackup, Upload, Copy, LogOut, Server, Receipt, UserCog, ImagePlus, BellRing, Cloud, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { useT } from '../i18n';
 import { useRpc, rpc, fmtDateTime, currentPeriod, fitImage } from '../lib';
 import { HdmSettings } from '../components/Hdm';
 import { UpdateSettings } from '../components/Updates';
+import { NotifySettings } from '../components/Notify';
 import { MyAccount, UsersSettings, useAuth } from '../components/Auth';
 import { Badge, BrandLogo, Button, Field, Loading, Segmented, Tabs, useAction, useConfirm, useToast } from '../components/ui';
 
@@ -15,6 +16,7 @@ export default function Settings({ route, appState, setAppState }) {
     auth.can('settings', 'view') && { id: 'club', label: t('settings.club'), icon: Building2 },
     { id: 'pc', label: t('settings.thisPc'), icon: Monitor },
     auth.can('settings', 'view') && { id: 'network', label: t('settings.network'), icon: Network },
+    auth.can('settings', 'view') && { id: 'notify', label: t('notify.tab'), icon: BellRing },
     (!auth.required || auth.user?.is_admin) && { id: 'users', label: t('users.tab'), icon: UserCog },
     auth.can('settings', 'view') && { id: 'activity', label: t('settings.activity'), icon: History },
   ].filter(Boolean);
@@ -35,6 +37,7 @@ export default function Settings({ route, appState, setAppState }) {
         {tab === 'pc' && <PcSettings appState={appState} setAppState={setAppState} />}
         {tab === 'network' && <NetworkSettings appState={appState} setAppState={setAppState} />}
         {tab === 'users' && <UsersSettings />}
+        {tab === 'notify' && <NotifySettings />}
         {tab === 'activity' && <ActivityLog />}
       </div>
     </>

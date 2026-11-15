@@ -1,13 +1,14 @@
 import { useMemo, useRef, useState } from 'react';
 import {
-  ArrowLeft, Pencil, Plus, CalendarRange, FileSignature, Trash2, Phone, Cake, Shapes, CalendarPlus, Wallet, CalendarCheck, IdCard, UserRound, FileText, Users, StickyNote, FolderOpen, Upload, ExternalLink, Download, Stethoscope,
+  ArrowLeft, Pencil, Plus, FileSignature, Trash2, Phone, Cake, Shapes, CalendarPlus, Wallet, CalendarCheck, IdCard, UserRound, FileText, Users, StickyNote, FolderOpen, Upload, ExternalLink, Download, Stethoscope, FilePlus2, Printer,
 } from 'lucide-react';
 import { useT } from '../i18n';
 import { useCan } from '../components/Auth';
 import { useRpc, rpc, age, fmtDate, fmtDateTime, money, readFileBase64, fileSize } from '../lib';
 import { Avatar, Badge, Button, Empty, Loading, Money, Tabs, useAction, useClub, useConfirm } from '../components/ui';
 import { StudentForm, FormSection } from './Students';
-import { ChargesTable, MonthlyPaymentModal, PayAheadModal, chargeStatus } from './Payments';
+import { AbsenceModal, printStoredFile, openStoredFile } from '../components/Absence';
+import { ChargesTable, MonthlyPaymentModal, chargeStatus } from './Payments';
 import { NewContractModal, ContractModal, CONTRACT_TONE } from './Contracts';
 
 export default function StudentProfile({ id, nav }) {
@@ -100,14 +101,20 @@ export default function StudentProfile({ id, nav }) {
               </span>
             </div>
           </div>
-          {canPay && <div className="stack" style={{ gap: 8 }}>
-            <Button variant="primary" icon={Plus} onClick={() => setModal('charge')}>
-              {t('payments.newCharge')}
-            </Button>
-            <Button icon={CalendarRange} onClick={() => setModal('ahead')} disabled={!s.monthly_fee}>
-              {t('payments.payAhead')}
-            </Button>
-          </div>}
+          {(canPay || canEdit) && (
+            <div className="stack" style={{ gap: 8 }}>
+              {canPay && (
+                <Button variant="primary" icon={Plus} onClick={() => setModal('charge')}>
+                  {t('payments.newCharge')}
+                </Button>
+              )}
+              {canEdit && (
+                <Button icon={FilePlus2} onClick={() => setModal('absence')}>
+                  {t('absence.button')}
+                </Button>
+              )}
+            </div>
+          )}
         </div>
         <div className="balance-strip">
           <div>
@@ -295,7 +302,7 @@ export default function StudentProfile({ id, nav }) {
 
       {modal === 'edit' && <StudentForm student={s} onClose={() => setModal(null)} onSaved={() => setModal(null)} />}
       {modal === 'charge' && <MonthlyPaymentModal student={s} charges={data.charges} onClose={() => setModal(null)} />}
-      {modal === 'ahead' && <PayAheadModal student={s} onClose={() => setModal(null)} />}
+      {modal === 'absence' && <AbsenceModal student={s} onClose={() => setModal(null)} />}
       {modal === 'contract' && (
         <NewContractModal studentId={s.id} onClose={() => setModal(null)} onCreated={(cid) => setModal({ contract: cid })} />
       )}
@@ -327,12 +334,8 @@ function StudentFiles({ student, files, canEdit }) {
     setKind(k);
     pickRef.current.click();
   };
-  const open = (f) =>
-    act(async () => {
-      const r = await rpc('files.get', { id: f.id });
-      const res = await window.fc.openTemp({ name: r.fileName, data: r.data });
-      if (!res.ok) throw Object.assign(new Error(res.error), { code: res.error, detail: res.detail });
-    });
+  const open = (f) => act(() => openStoredFile(f.id));
+  const print = (f) => act(() => printStoredFile(f.id), t('absence.printing'));
   const download = (f) =>
     act(async () => {
       const r = await rpc('files.get', { id: f.id });
@@ -398,6 +401,7 @@ function StudentFiles({ student, files, canEdit }) {
                     <Button size="sm" icon={ExternalLink} onClick={() => open(f)}>
                       {t('files.open')}
                     </Button>
+                    <Button size="sm" icon={Printer} onClick={() => print(f)} title={t('absence.print')} />
                     <Button size="sm" icon={Download} onClick={() => download(f)} title={t('files.save')} />
                     {canEdit && <Button size="sm" variant="ghost" icon={Trash2} onClick={() => remove(f)} title={t('common.delete')} />}
                   </div>

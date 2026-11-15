@@ -261,6 +261,27 @@ const MIGRATIONS = [
   );
   CREATE INDEX idx_student_files_student ON student_files(student_id);
   `,
+  // v18: messages waiting to be sent by email / Telegram (sent by the host PC, see notify.js).
+  `
+  CREATE TABLE outbox (
+    id INTEGER PRIMARY KEY,
+    channel TEXT NOT NULL,          -- 'email' | 'telegram'
+    recipient TEXT NOT NULL,        -- email address or Telegram chat id
+    subject TEXT,
+    body TEXT NOT NULL,
+    kind TEXT NOT NULL,             -- 'receipt' | 'reminder' | 'payment' | 'daily' | 'monthly' | 'test'
+    student_id INTEGER REFERENCES students(id) ON DELETE SET NULL,
+    period TEXT,                    -- month a reminder was sent for
+    status TEXT NOT NULL DEFAULT 'pending',   -- 'pending' | 'sent' | 'failed'
+    attempts INTEGER NOT NULL DEFAULT 0,
+    error TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    sent_at TEXT,
+    created_by TEXT
+  );
+  CREATE INDEX idx_outbox_status ON outbox(status);
+  CREATE INDEX idx_outbox_student ON outbox(student_id, kind, period);
+  `,
 ];
 
 function seed(db) {

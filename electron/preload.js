@@ -35,7 +35,16 @@ contextBridge.exposeInMainWorld('fc', {
   onCloseRequested: on('close-requested'),
   confirmClose: () => ipcRenderer.invoke('app:confirmClose'),
   importRead: () => ipcRenderer.invoke('import:read'),
+  notify: {
+    get: () => ipcRenderer.invoke('notify:get'),
+    set: (patch) => ipcRenderer.invoke('notify:set', patch),
+    testEmail: (to) => ipcRenderer.invoke('notify:testEmail', to),
+    testTelegram: () => ipcRenderer.invoke('notify:testTelegram'),
+    findChats: () => ipcRenderer.invoke('notify:findChats'),
+    run: (kind) => ipcRenderer.invoke('notify:run', kind),
+  },
   openTemp: (file) => ipcRenderer.invoke('file:openTemp', file),
+  printFile: (file) => ipcRenderer.invoke('file:print', file),
   setAuthToken: (token, remember) => ipcRenderer.invoke('auth:setToken', token, remember),
   hdmPrint: (receipt) => ipcRenderer.invoke('hdm:print', receipt),
   update: {

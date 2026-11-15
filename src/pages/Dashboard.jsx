@@ -4,7 +4,7 @@ import { useT, monthName } from '../i18n';
 import { useCan } from '../components/Auth';
 import { useRpc, compactMoney, fmtDate, fmtDateTime, money, todayIso } from '../lib';
 import { Avatar, Button, Empty, Loading, Money, useClub } from '../components/ui';
-import { chargeLabel, PAYMENT_METHODS } from './Payments';
+import { chargeLabel, MethodTag } from './Payments';
 import ReportExport from '../components/ReportExport';
 
 export default function Dashboard({ nav }) {
@@ -140,7 +140,7 @@ export default function Dashboard({ nav }) {
                         {p.first_name} {p.last_name}
                       </div>
                       <div className="small muted">
-                        {chargeLabel(t, p)} · {fmtDate(p.paid_at)} · {t(`method.${p.method || PAYMENT_METHODS[0]}`)}
+                        {chargeLabel(t, p)} · {fmtDate(p.paid_at)} · <MethodTag method={p.method} />
                       </div>
                     </div>
                     <Money value={p.amount} className="strong" />

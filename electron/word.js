@@ -77,4 +77,39 @@ function inspectTemplate(templateBuffer) {
   new Docxtemplater(new PizZip(templateBuffer), options);
 }
 
-module.exports = { contractValues, fillTemplate, inspectTemplate, PLACEHOLDERS };
+// Values for the absence application (templates/absence-application.docx).
+// a: { from, to, date, reason: 'agreed' | 'illness' | 'other', reasonOther, attachMedical, attachOther, attachOtherText }
+function absenceValues(student, contract, a) {
+  const signed = dateParts(contract?.contract_date);
+  const from = dateParts(a.from);
+  const to = dateParts(a.to);
+  const day = dateParts(a.date);
+  const number = val(contract?.number) || val(student.contract_no);
+  const box = (on) => (on ? CHECKED : UNCHECKED);
+  return {
+    contract_date_text: signed.year ? `${signed.year} թվականի ${signed.monthGen} ${Number(signed.day)}-ին` : '______ թվականի __________ ….-ին',
+    contract_no_head: number || '….',
+    contract_no: number,
+    parent_name: val([student.parent_first_name, student.parent_last_name].filter(Boolean).join(' ')) || val(student.parent_name),
+    student_name: val([student.first_name, student.last_name, student.patronymic].filter(Boolean).join(' ')),
+    group: val(student.group_name),
+    from_day: from.day || '___',
+    from_month: from.monthGen || '__________',
+    from_year: from.year || '20___',
+    to_day: to.day || '___',
+    to_month: to.monthGen || '__________',
+    to_year: to.year || '20___',
+    r_agreed: box(a.reason === 'agreed'),
+    r_illness: box(a.reason === 'illness'),
+    r_other: box(a.reason === 'other'),
+    reason_other: a.reason === 'other' ? val(a.reasonOther) : undefined,
+    a_medical: box(a.attachMedical),
+    a_other: box(a.attachOther),
+    attach_other: a.attachOther ? val(a.attachOtherText) : undefined,
+    day: day.day || '___',
+    month: day.monthGen || '____________',
+    year: day.year || '20___',
+  };
+}
+
+module.exports = { contractValues, absenceValues, fillTemplate, inspectTemplate, PLACEHOLDERS };

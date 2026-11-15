@@ -3,7 +3,8 @@ const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 const { openDatabase } = require('./db');
-const { createService } = require('./service');
+const { createService, DEFAULT_TEMPLATES } = require('./service');
+const notify = require('./notify');
 const network = require('./network');
 const { buildReport, buildForm } = require('./xlsx');
 const hdm = require('./hdm');
@@ -27,6 +28,8 @@ let host = null;
 let remote = null;
 let dataVersion = 0;
 let backupTimer = null;
+let notifier = null;
+const notifyCfg = () => notify.merge(notify.DEFAULTS, config.notify);
 
 // ------------------------------------------------------------------ per-PC config
 const userDir = () => app.getPath('userData');
@@ -80,6 +83,8 @@ function sendStatus() {
 
 function stopBackend() {
   clearInterval(backupTimer);
+  notifier?.stop();
+  notifier = null;
   host?.close();
   host = null;
   remote?.stop();
@@ -100,6 +105,16 @@ async function startBackend() {
       onWrite: () => {
         dataVersion++;
         notifyChanged();
+        notifier?.sendNow(); // receipts / alerts go out right away
+      },
+      getNotify: notifyCfg,
+    });
+    notifier = notify.startWorker({
+      getConfig: notifyCfg,
+      getService: () => service,
+      saveState: (patch) => {
+        config.notify = notify.merge(notifyCfg(), { state: patch });
+        saveConfig();
       },
     });
     service.ensureMonthlyCharges();
@@ -291,6 +306,66 @@ function registerIpc() {
     return true;
   });
 
+  // ---------------------------------------------------------------- email / Telegram (host PC)
+  const notifyState = () => ({ isHost: config.mode === 'host', config: notifyCfg(), defaults: DEFAULT_TEMPLATES });
+  ipcMain.handle('notify:get', () => notifyState());
+  ipcMain.handle('notify:set', (_e, patch) => {
+    if (config.mode !== 'host') return notifyState();
+    const before = notifyCfg();
+    const next = notify.merge(before, patch);
+    // Switching on monthly summaries / automatic reminders starts with next month, not right away.
+    const month = new Date().toISOString().slice(0, 7);
+    if (next.monthly.enabled && !before.monthly.enabled) next.state = { ...next.state, monthly: month };
+    if (next.reminders.auto && !before.reminders.auto) next.state = { ...next.state, reminders: month };
+    if (patch?.telegram?.chats) next.telegram.chats = patch.telegram.chats; // lists are replaced, not merged
+    config.notify = next;
+    saveConfig();
+    return notifyState();
+  });
+  const attempt = async (fn) => {
+    try {
+      return { ok: true, result: await fn() };
+    } catch (err) {
+      return { ok: false, error: 'SEND_FAILED', detail: err.message };
+    }
+  };
+  ipcMain.handle('notify:testEmail', (_e, to) =>
+    attempt(() =>
+      notify.sendEmail(notifyCfg(), {
+        to,
+        subject: 'FC Manager — test',
+        text: 'This is a test message from FC Manager. Email sending works.\n\nՍա FC Manager-ի փորձնական նամակն է։ Էլ. փոստով ուղարկումն աշխատում է։',
+      })
+    )
+  );
+  ipcMain.handle('notify:testTelegram', () =>
+    attempt(async () => {
+      const cfg = notifyCfg();
+      const chats = (cfg.telegram.chats || []).filter((c) => c.on !== false);
+      if (!chats.length) throw new Error('No chats selected');
+      for (const c of chats) await notify.sendTelegram(cfg, { chatId: c.id, text: '✅ FC Manager: Telegram ծանուցումներն աշխատում են։' });
+      return chats.length;
+    })
+  );
+  ipcMain.handle('notify:findChats', () => attempt(() => notify.findChats(notifyCfg())));
+  ipcMain.handle('notify:run', (_e, kind) =>
+    attempt(() => {
+      if (!service) throw new Error('Only on the main computer');
+      const now = new Date();
+      const pad = (n) => String(n).padStart(2, '0');
+      const today = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+      const prev = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      const n =
+        kind === 'monthly'
+          ? service.outbox.summary('monthly', `${prev.getFullYear()}-${pad(prev.getMonth() + 1)}`)
+          : service.outbox.summary('daily', today);
+      notifier?.sendNow();
+      dataVersion++;
+      notifyChanged();
+      return n;
+    })
+  );
+
   ipcMain.handle('update:status', () => updater.getStatus());
   ipcMain.handle('update:check', () => updater.check());
   ipcMain.handle('update:install', () => {
@@ -457,6 +532,28 @@ function registerIpc() {
       return err ? { ok: false, error: 'OPEN_FAILED', detail: err } : { ok: true };
     } catch (err) {
       return { ok: false, error: 'OPEN_FAILED', detail: err.message };
+    }
+  });
+
+  // Prints a stored document (e.g. an absence application) on the default printer with its usual program.
+  ipcMain.handle('file:print', async (_e, { name, data }) => {
+    try {
+      const dir = path.join(app.getPath('temp'), 'FC Manager');
+      fs.mkdirSync(dir, { recursive: true });
+      const safe = String(name || 'document').replace(/[\\/:*?"<>|]+/g, '_').slice(-120);
+      const file = path.join(dir, `${Date.now()}-${safe}`);
+      fs.writeFileSync(file, Buffer.from(data, 'base64'));
+      await new Promise((resolve, reject) =>
+        require('child_process').execFile(
+          'powershell.exe',
+          ['-NoProfile', '-NonInteractive', '-Command', `Start-Process -FilePath '${file.replace(/'/g, "''")}' -Verb Print`],
+          { windowsHide: true, timeout: 30000 },
+          (err) => (err ? reject(err) : resolve())
+        )
+      );
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: 'PRINT_FAILED', detail: err.message };
     }
   });
 

@@ -15,9 +15,11 @@ function sectionOf(method) {
   switch (ns) {
     case 'students':
     case 'files':
+    case 'applications':
       return 'students';
     case 'charges':
     case 'products':
+    case 'notify':
       return 'payments';
     case 'attendance':
     case 'training':
