@@ -91,8 +91,23 @@ function toDate(v) {
     const d = new Date(Date.UTC(1899, 11, 30) + Math.floor(Number(s)) * 86400000);
     return d.toISOString().slice(0, 10);
   }
+  // A month written in words: «5 авг 26», «5 авг. 2026», «14 Oct 2026», «3 նոյ 26»
+  m = s.toLowerCase().match(/^(\d{1,2})[\s.\-]*([a-zа-яёա-և]{3,})\.?[\s.\-,]*(\d{2}|\d{4})\s*(թ\.?|г\.?)?$/u);
+  if (m) {
+    const month = MONTH_WORDS.findIndex((words) => words.some((w) => m[2].startsWith(w))) + 1;
+    if (month) {
+      const y = m[3].length === 2 ? `20${m[3]}` : m[3];
+      return `${y}-${String(month).padStart(2, '0')}-${m[1].padStart(2, '0')}`;
+    }
+  }
   return null; // not a date we understand
 }
+// Month name beginnings: English, Russian, Armenian.
+const MONTH_WORDS = [
+  ['jan', 'янв', 'հնվ', 'հունվ'], ['feb', 'фев', 'փետ'], ['mar', 'мар', 'մար'], ['apr', 'апр', 'ապր'],
+  ['may', 'май', 'мая', 'մայ'], ['jun', 'июн', 'հուն'], ['jul', 'июл', 'հուլ'], ['aug', 'авг', 'օգս'],
+  ['sep', 'сен', 'սեպ'], ['oct', 'окт', 'հոկ'], ['nov', 'ноя', 'նոյ'], ['dec', 'дек', 'դեկ'],
+];
 
 // Armenian phone numbers in one format: 77167635 / 077167635 / +374 77 16 76 35 → +37477167635
 export function formatPhone(v) {
