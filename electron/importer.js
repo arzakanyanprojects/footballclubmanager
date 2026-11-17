@@ -13,25 +13,69 @@ function cellText(v) {
   if (v instanceof Date) return isoDate(v);
   if (typeof v === 'object') {
     if (v.richText) return v.richText.map((r) => r.text).join('');
-    if (v.text != null) return String(v.text); // hyperlink
+    if (v.text != null) return typeof v.text === 'object' ? cellText(v.text) : String(v.text); // hyperlink (its text may be formatted)
     if (v.result !== undefined) return cellText(v.result); // formula
     if (v.error) return '';
   }
-  return String(v).trim();
+  return String(v).replace(/\s+/g, ' ').trim();
+}
+
+// The workbook's theme colours, in the order cells refer to them (0 = background/white, 1 = text/black, …).
+function themeColours(wb) {
+  const xml = Object.values(wb._themes || {})[0] || '';
+  const scheme = (xml.match(/<a:clrScheme[\s\S]*?<\/a:clrScheme>/) || [''])[0];
+  const get = (name) => {
+    const m = scheme.match(new RegExp(`<a:${name}>[^]*?(?:lastClr|val)="([0-9A-Fa-f]{6})"`));
+    return m ? m[1].toUpperCase() : null;
+  };
+  const c = ['lt1', 'dk1', 'lt2', 'dk2', 'accent1', 'accent2', 'accent3', 'accent4', 'accent5', 'accent6', 'hlink', 'folHlink'].map(get);
+  const office = ['FFFFFF', '000000', 'E7E6E6', '44546A', '4472C4', 'ED7D31', 'A5A5A5', 'FFC000', '5B9BD5', '70AD47', '0563C1', '954F72'];
+  return c.map((v, i) => v || office[i]);
+}
+
+// A theme colour lightened (tint > 0) or darkened (tint < 0), as Excel shows it.
+function tinted(hex, tint) {
+  if (!tint) return hex;
+  return [0, 2, 4]
+    .map((i) => {
+      const v = parseInt(hex.slice(i, i + 2), 16);
+      const out = tint < 0 ? v * (1 + tint) : v + (255 - v) * tint;
+      return Math.round(Math.min(255, Math.max(0, out))).toString(16).padStart(2, '0');
+    })
+    .join('')
+    .toUpperCase();
+}
+
+// A cell's fill colour as "RRGGBB" — plain colours and theme colours (e.g. «black, lighter 50%» = grey); no fill gives "".
+function fillOf(cell, theme) {
+  const f = cell.fill;
+  if (!f || f.type !== 'pattern' || f.pattern === 'none' || !f.fgColor) return '';
+  if (f.fgColor.argb) return f.fgColor.argb.slice(-6).toUpperCase();
+  if (f.fgColor.theme != null && theme[f.fgColor.theme]) return tinted(theme[f.fgColor.theme], f.fgColor.tint || 0);
+  return '';
 }
 
 async function readXlsx(file) {
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.readFile(file);
+  const theme = themeColours(wb);
   return wb.worksheets.map((ws) => {
     const rows = [];
+    const fills = [];
     ws.eachRow({ includeEmpty: false }, (row) => {
       if (rows.length >= MAX_ROWS) return;
       const vals = [];
-      for (let c = 1; c <= ws.columnCount; c++) vals.push(cellText(row.getCell(c).value));
+      const cols = [];
+      for (let c = 1; c <= ws.columnCount; c++) {
+        const cell = row.getCell(c);
+        vals.push(cellText(cell.value));
+        cols.push(fillOf(cell, theme));
+      }
       rows.push(vals);
+      fills.push(cols);
     });
-    return { name: ws.name, rows: trim(rows) };
+    const t = trim(rows, fills);
+    return { name: ws.name, hidden: ws.state !== 'visible', rows: t.rows, fills: t.fills };
   });
 }
 
@@ -69,14 +113,16 @@ function readCsv(file) {
     row.push(cell.trim());
     rows.push(row);
   }
-  return [{ name: path.basename(file), rows: trim(rows) }];
+  return [{ name: path.basename(file), rows: trim(rows).rows, fills: null }];
 }
 
-// Drops empty rows and trailing empty columns.
-function trim(rows) {
-  const kept = rows.filter((r) => r.some((v) => v !== ''));
+// Drops empty rows and trailing empty columns (colours stay aligned with their cells).
+function trim(rows, fills) {
+  const keep = rows.map((r) => r.some((v) => v !== ''));
+  const kept = rows.filter((_, i) => keep[i]);
   const width = kept.reduce((w, r) => Math.max(w, r.reduce((last, v, i) => (v !== '' ? i + 1 : last), 0)), 0);
-  return kept.map((r) => Array.from({ length: width }, (_, i) => r[i] ?? ''));
+  const cut = (r) => Array.from({ length: width }, (_, i) => r[i] ?? '');
+  return { rows: kept.map(cut), fills: fills ? fills.filter((_, i) => keep[i]).map(cut) : null };
 }
 
 async function readTable(file) {

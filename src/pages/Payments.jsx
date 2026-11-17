@@ -223,6 +223,7 @@ export function ChargesTable({ rows, showStudent, selectable, onOpenStudent, stu
       cell: (c) => (
         <td>
           <div>{chargeLabel(t, c)}</div>
+          {c.absence_from && <div className="small app-link">{applicationLabel(t, c.absence_from, c.absence_to)}</div>}
           {c.note && <div className="small muted">{c.note}</div>}
         </td>
       ),
@@ -322,11 +323,17 @@ export function ChargesTable({ rows, showStudent, selectable, onOpenStudent, stu
             <Button size="sm" icon={Pencil} onClick={() => setEditing(c)}>
               {t('common.edit')}
             </Button>
+            <Button size="sm" variant="ghost" icon={Trash2} title={t('common.delete')} onClick={() => removeCharge(c)} />
           </div>
         </td>
       ),
     },
   ]);
+
+  const removeCharge = async (c) => {
+    if (await confirm({ title: t('payments.deleteTitle'), text: t(c.kind === 'monthly' ? 'payments.deleteMonthlyConfirm' : 'payments.deleteConfirm', { what: chargeLabel(t, c) }), confirmLabel: t('common.delete') }))
+      act(() => rpc('charges.delete', { id: c.id }), t('common.deleted'));
+  };
 
   const printReceipt = (c) => {
     const name = student ? `${student.first_name} ${student.last_name}` : `${c.first_name} ${c.last_name}`;
@@ -384,6 +391,41 @@ export function ChargesTable({ rows, showStudent, selectable, onOpenStudent, stu
     </>
   );
 }
+
+// «Դիմում՝ 01.10–05.10.2026» — the absence period a payment refers to.
+export const applicationLabel = (t, from, to) => t('payments.applicationShort', { from: fmtDate(from).slice(0, 5), to: fmtDate(to) });
+
+// «Դիմում» checkbox; when ticked, the absence period's first and last day.
+// value: { from, to } or null; month ("YYYY-MM") gives the starting dates.
+function AbsencePicker({ value, onChange, month }) {
+  const t = useT();
+  const start = () => {
+    const m = month || todayIso().slice(0, 7);
+    const [y, mo] = m.split('-').map(Number);
+    return { from: `${m}-01`, to: `${m}-${String(new Date(y, mo, 0).getDate()).padStart(2, '0')}` };
+  };
+  const bad = value && value.from && value.to && value.to < value.from;
+  return (
+    <div className="span-full stack" style={{ gap: 8 }}>
+      <label className="check">
+        <input type="checkbox" checked={!!value} onChange={(e) => onChange(e.target.checked ? start() : null)} />
+        <span className="strong">{t('payments.application')}</span>
+      </label>
+      {value && (
+        <div className="grid-2">
+          <Field label={t('absence.from')}>
+            <input className="input" type="date" value={value.from || ''} onChange={(e) => onChange({ ...value, from: e.target.value })} />
+          </Field>
+          <Field label={t('absence.to')}>
+            <input className="input" type="date" value={value.to || ''} min={value.from || undefined} onChange={(e) => onChange({ ...value, to: e.target.value })} />
+          </Field>
+          {bad && <div className="small span-2" style={{ color: 'var(--bad)' }}>{t('error.PERIOD_INVALID')}</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+const absenceOk = (v) => !v || (v.from && v.to && v.to >= v.from);
 
 function MethodPicker({ value, onChange }) {
   const t = useT();
@@ -651,6 +693,7 @@ function EditChargeModal({ charge, onClose, onPrint }) {
     paidAt: charge.paid_at || '',
     method: charge.method || PAYMENT_METHODS[0],
     period: charge.period || '',
+    absence: charge.absence_from ? { from: charge.absence_from, to: charge.absence_to } : null,
   });
   const set = (k) => (e) => setF({ ...f, [k]: e?.target ? e.target.value : e });
 
@@ -666,7 +709,8 @@ function EditChargeModal({ charge, onClose, onPrint }) {
   };
 
   const save = async () => {
-    if (await act(() => rpc('charges.update', { id: charge.id, ...f }), t('common.saved'))) onClose();
+    const { absence, ...rest } = f;
+    if (await act(() => rpc('charges.update', { id: charge.id, ...rest, absenceFrom: absence?.from ?? null, absenceTo: absence?.to ?? null }), t('common.saved'))) onClose();
   };
   const run = async (fn, text) => {
     if (await act(fn, text)) onClose();
@@ -721,23 +765,26 @@ function EditChargeModal({ charge, onClose, onPrint }) {
                 {t('payments.restore')}
               </Button>
             )}
-            {!monthly && (
-              <Button
-                variant="danger"
-                icon={Trash2}
-                onClick={async () =>
-                  (await confirm({ text: t('payments.deleteConfirm'), confirmLabel: t('common.delete') })) &&
-                  run(() => rpc('charges.delete', { id: charge.id }), t('common.deleted'))
-                }
-              >
-                {t('common.delete')}
-              </Button>
-            )}
+            <Button
+              variant="danger"
+              icon={Trash2}
+              onClick={async () =>
+                (await confirm({
+                  title: t('payments.deleteTitle'),
+                  text: t(monthly ? 'payments.deleteMonthlyConfirm' : 'payments.deleteConfirm', { what: chargeLabel(t, charge) }),
+                  confirmLabel: t('common.delete'),
+                })) && run(() => rpc('charges.delete', { id: charge.id }), t('common.deleted'))
+              }
+            >
+              {t('common.delete')}
+            </Button>
           </div>
-          <Button onClick={onClose}>{t('common.cancel')}</Button>
-          <Button variant="primary" onClick={save} disabled={!(Number(f.amount) > 0)}>
-            {t('common.save')}
-          </Button>
+          <div className="row nowrap" style={{ gap: 10, marginLeft: 'auto' }}>
+            <Button onClick={onClose}>{t('common.cancel')}</Button>
+            <Button variant="primary" onClick={save} disabled={!(Number(f.amount) > 0) || !absenceOk(f.absence)}>
+              {t('common.save')}
+            </Button>
+          </div>
         </>
       }
     >
@@ -751,6 +798,7 @@ function EditChargeModal({ charge, onClose, onPrint }) {
               <input className="input" type="date" value={f.paidAt} onChange={set('paidAt')} />
             </Field>
           )}
+          <AbsencePicker value={f.absence} month={f.period || (charge.due_date || '').slice(0, 7)} onChange={(v) => setF({ ...f, absence: v })} />
           {!monthly && (
             <Field label={t('payments.description')} className="span-2">
               <input className="input" value={f.description} onChange={set('description')} />
@@ -839,6 +887,7 @@ export function MonthlyPaymentModal({ student, charges, onClose }) {
   const [method, setMethod] = useState(PAYMENT_METHODS[0]);
   const [paidAt, setPaidAt] = useState(todayIso());
   const [note, setNote] = useState('');
+  const [absence, setAbsence] = useState(null);
   const selected = periods.filter((p) => picked.has(p));
   const total = selected.length * (Number(amount) || 0);
 
@@ -851,7 +900,7 @@ export function MonthlyPaymentModal({ student, charges, onClose }) {
 
   const save = async () => {
     const ok = await act(
-      () => rpc('charges.payMonths', { studentId: student.id, periods: selected, amount, method, paidAt, note }),
+      () => rpc('charges.payMonths', { studentId: student.id, periods: selected, amount, method, paidAt, note, absenceFrom: absence?.from, absenceTo: absence?.to }),
       t('payments.paidToast')
     );
     if (!ok) return;
@@ -873,7 +922,7 @@ export function MonthlyPaymentModal({ student, charges, onClose }) {
       footer={
         <>
           <Button onClick={onClose}>{t('common.cancel')}</Button>
-          <Button variant="primary" icon={CheckCircle2} onClick={save} disabled={!selected.length || !(Number(amount) > 0)}>
+          <Button variant="primary" icon={CheckCircle2} onClick={save} disabled={!selected.length || !(Number(amount) > 0) || !absenceOk(absence)}>
             {t('payments.confirmPaid')} <Money value={total} />
           </Button>
         </>
@@ -907,10 +956,11 @@ export function MonthlyPaymentModal({ student, charges, onClose }) {
           <Field label={t('payments.paidAt')}>
             <input className="input" type="date" value={paidAt} onChange={(e) => setPaidAt(e.target.value)} />
           </Field>
+          <AbsencePicker value={absence} month={selected[0]} onChange={setAbsence} />
           <Field label={t('payments.method')} className="span-2">
             <MethodPicker value={method} onChange={setMethod} />
           </Field>
-          <Field label={t('payments.note')} className="span-2">
+          <Field label={t('payments.note')} className="span-3">
             <input className="input" value={note} onChange={(e) => setNote(e.target.value)} />
           </Field>
         </div>

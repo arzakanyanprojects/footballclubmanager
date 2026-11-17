@@ -277,6 +277,7 @@ export default function StudentProfile({ id, nav }) {
               <Ro label={t('parent.docIssuer')} value={s.parent_doc_issuer} />
               <Ro label={t('parent.docDate')} value={fmtDate(s.parent_doc_date)} />
               <Ro label={t('parent.phone')} value={s.parent_phone} />
+              <Ro label={t('parent.messenger')} value={s.parent_messenger} />
               <Ro label={t('parent.email')} value={s.parent_email} />
               <Ro label={t('parent.address')} value={s.parent_address} className="span-3" />
             </div>

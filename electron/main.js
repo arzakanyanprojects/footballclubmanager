@@ -6,7 +6,7 @@ const { openDatabase } = require('./db');
 const { createService, DEFAULT_TEMPLATES } = require('./service');
 const notify = require('./notify');
 const network = require('./network');
-const { buildReport, buildForm, buildSchedule } = require('./xlsx');
+const { buildReport, buildForm, buildSchedule, buildStudentsTransfer } = require('./xlsx');
 const hdm = require('./hdm');
 const updater = require('./updater');
 const importer = require('./importer');
@@ -557,19 +557,24 @@ function registerIpc() {
     }
   });
 
-  // Import from another program: pick an Excel/CSV file and read it as rows of text.
+  // Import from another program: pick one or more Excel/CSV files (e.g. one per team) and read them as rows of text.
   ipcMain.handle('import:read', async () => {
-    let file = process.env.FC_IMPORT_FILE || null; // FC_IMPORT_FILE: testing without the file dialog
-    if (!file) {
+    // FC_IMPORT_FILE (testing, several separated by "|"): read without the file dialog.
+    let paths = process.env.FC_IMPORT_FILE ? process.env.FC_IMPORT_FILE.split('|') : null;
+    if (!paths) {
       const r = await dialog.showOpenDialog(win, {
         filters: [{ name: 'Excel / CSV', extensions: ['xlsx', 'csv', 'txt'] }],
-        properties: ['openFile'],
+        properties: ['openFile', 'multiSelections'],
       });
-      if (r.canceled || !r.filePaths[0]) return { ok: false, error: 'CANCELLED' };
-      file = r.filePaths[0];
+      if (r.canceled || !r.filePaths.length) return { ok: false, error: 'CANCELLED' };
+      paths = r.filePaths;
     }
+    // Excel's lock files ("~$2012-1.xlsx") are skipped.
+    paths = paths.filter((p) => !path.basename(p).startsWith('~$'));
     try {
-      return { ok: true, result: await importer.readTable(file) };
+      const files = [];
+      for (const p of paths) files.push(await importer.readTable(p));
+      return { ok: true, result: { files } };
     } catch (err) {
       return { ok: false, error: 'IMPORT_READ_FAILED', detail: err.message };
     }
@@ -582,7 +587,7 @@ function registerIpc() {
       : await dialog.showSaveDialog(win, { defaultPath: report.defaultName, filters: [{ name: 'Excel', extensions: ['xlsx'] }] });
     if (r.canceled || !r.filePath) return { ok: false, error: 'CANCELLED' };
     try {
-      const build = report.kind === 'form' ? buildForm : report.kind === 'schedule' ? buildSchedule : buildReport;
+      const build = { form: buildForm, schedule: buildSchedule, students: buildStudentsTransfer }[report.kind] || buildReport;
       fs.writeFileSync(r.filePath, Buffer.from(await build(report)));
     } catch (err) {
       // Most often the file is open in Excel and locked.

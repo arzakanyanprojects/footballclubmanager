@@ -1,6 +1,6 @@
 import { Fragment, useMemo, useState } from 'react';
 import {
-  ChevronLeft, ChevronRight, Copy, Printer, FileSpreadsheet, CalendarPlus, MapPin, AlertTriangle, RotateCcw, Trash2, CalendarRange, Users,
+  ChevronLeft, ChevronRight, Copy, Printer, FileSpreadsheet, CalendarPlus, MapPin, AlertTriangle, RotateCcw, Trash2, CalendarRange, Users, Pencil,
 } from 'lucide-react';
 import { useT } from '../i18n';
 import { useCan } from '../components/Auth';
@@ -48,6 +48,8 @@ function blocksOf(groups) {
 }
 
 const overlap = (a, b) => a.start < b.end && b.start < a.end;
+// Who coaches a session: a stand-in set for that date, otherwise the group's own coach / assistant.
+const coachesOf = (g, s) => ({ coach: s?.coach || g.coach || '', assistant: s?.assistant || g.assistant || '' });
 const norm = (s) => String(s || '').trim().toUpperCase().replace(/\s+/g, ' ');
 // The same person written as «ՍԵՐԳԵՅ ՄԿՐՏՉՅԱՆ» or «ՄԿՐՏՉՅԱՆ ՍԵՐԳԵՅ».
 const personKey = (s) => norm(s).replace(/[.․]/g, '').split(' ').filter(Boolean).sort().join(' ');
@@ -63,6 +65,7 @@ export default function Schedule() {
   const [monday, setMonday] = useState(() => mondayOf(todayIso()));
   const [days, setDays] = useState(() => loadPref('fc.schedule.days', [6, 0]));
   const [editing, setEditing] = useState(null);
+  const [coachesFor, setCoachesFor] = useState(null);
   const [pitchesOpen, setPitchesOpen] = useState(false);
   const [printOpen, setPrintOpen] = useState(false);
 
@@ -100,9 +103,10 @@ export default function Schedule() {
           const b = list[j];
           if (!overlap(a.s, b.s)) continue;
           const reasons = [];
-          const coachesA = [a.g.coach, a.g.assistant].filter(Boolean);
-          const keysA = coachesA.map(personKey);
-          for (const c of [b.g.coach, b.g.assistant].filter(Boolean)) {
+          const ca = coachesOf(a.g, a.s);
+          const cb = coachesOf(b.g, b.s);
+          const keysA = [ca.coach, ca.assistant].filter(Boolean).map(personKey);
+          for (const c of [cb.coach, cb.assistant].filter(Boolean)) {
             if (keysA.includes(personKey(c))) reasons.push(t('schedule.clashCoach', { coach: c }));
           }
           for (const r of reasons) {
@@ -239,8 +243,11 @@ export default function Schedule() {
                   {b.groups.map((g) => (
                     <tr key={g.id} style={{ '--b': b.fill }}>
                       <td className="sched-coach">
-                        <div className="strong">{g.coach || <span className="muted">{t('groups.noCoach')}</span>}</div>
-                        <div className="small muted">{g.assistant || '—'}</div>
+                        <button className="sched-coach-btn" disabled={!canEdit} title={canEdit ? t('schedule.editCoaches') : ''} onClick={() => setCoachesFor(g)}>
+                          <span className="strong">{g.coach || <span className="muted">{t('groups.noCoach')}</span>}</span>
+                          <span className="small muted">{g.assistant || '—'}</span>
+                          {canEdit && <Pencil size={13} className="sched-coach-edit" />}
+                        </button>
                       </td>
                       <td className="sched-group">
                         <span className="row nowrap" style={{ gap: 7 }}>
@@ -271,6 +278,11 @@ export default function Schedule() {
                                     {s.pitch || ''}
                                     {s.note ? <em> · {s.note}</em> : ''}
                                   </span>
+                                  {(s.coach || s.assistant) && (
+                                    <span className="sched-standin">
+                                      {t('schedule.standInShort')}: {[s.coach, s.assistant].filter(Boolean).join(', ')}
+                                    </span>
+                                  )}
                                 </>
                               ) : (
                                 <span className="sched-add">+</span>
@@ -292,14 +304,19 @@ export default function Schedule() {
         {t(mode === 'base' ? 'schedule.baseHint' : 'schedule.weekHint')}
       </div>
 
-      {editing && <CellModal edit={editing} mode={mode} pitches={data.pitches} onClose={() => setEditing(null)} />}
+      {editing && <CellModal edit={editing} mode={mode} pitches={data.pitches} people={peopleOf(data.groups)} onClose={() => setEditing(null)} />}
+      {coachesFor && <CoachesModal group={coachesFor} people={peopleOf(data.groups)} onClose={() => setCoachesFor(null)} />}
       {pitchesOpen && <PitchesModal pitches={data?.pitches || []} onClose={() => setPitchesOpen(false)} />}
       {printOpen && <PrintModal view={view} onClose={() => setPrintOpen(false)} />}
     </>
   );
 }
 
-function CellModal({ edit, mode, pitches, onClose }) {
+// Every coach / assistant name in use, for suggestions.
+const peopleOf = (groups) =>
+  [...new Set(groups.flatMap((g) => [g.coach, g.assistant]).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'hy'));
+
+function CellModal({ edit, mode, pitches, people, onClose }) {
   const t = useT();
   const act = useAction();
   const { group, date, weekday: wd, session, base } = edit;
@@ -311,6 +328,8 @@ function CellModal({ edit, mode, pitches, onClose }) {
     note: src.note || '',
     cancelled: !!session?.cancelled,
     permanent: false,
+    coach: (!session?.cancelled && session?.coach) || '',
+    assistant: (!session?.cancelled && session?.assistant) || '',
   });
   const set = (k) => (e) => setF({ ...f, [k]: e.target.type === 'checkbox' ? e.target.checked : e.target.value });
   const isBase = mode === 'base';
@@ -320,7 +339,11 @@ function CellModal({ edit, mode, pitches, onClose }) {
     const ok = await act(async () => {
       if (isBase || f.permanent) {
         await rpc('schedule.saveBase', { groupId: group.id, weekday: wd, start: f.start, end: f.end, pitch: f.pitch, note: f.note });
-        if (!isBase) await rpc('schedule.resetDay', { groupId: group.id, date });
+        if (!isBase) {
+          // A stand-in stays a change for this date only.
+          if (f.coach.trim() || f.assistant.trim()) await rpc('schedule.setDay', { groupId: group.id, date, ...f, cancelled: false });
+          else await rpc('schedule.resetDay', { groupId: group.id, date });
+        }
       } else {
         await rpc('schedule.setDay', { groupId: group.id, date, ...f });
       }
@@ -387,6 +410,25 @@ function CellModal({ edit, mode, pitches, onClose }) {
             </div>
             {f.start && f.end && f.end <= f.start && <div className="small" style={{ color: 'var(--bad)' }}>{t('error.TIME_INVALID')}</div>}
             {!isBase && (
+              <div className="standin-box">
+                <div className="small strong">{t('schedule.standIn')}</div>
+                <div className="small muted">{t('schedule.standInHint')}</div>
+                <div className="grid-2">
+                  <Field label={t('groups.coach')}>
+                    <input className="input" list="fc-people" value={f.coach} onChange={set('coach')} placeholder={group.coach || ''} />
+                  </Field>
+                  <Field label={t('groups.assistant')}>
+                    <input className="input" list="fc-people" value={f.assistant} onChange={set('assistant')} placeholder={group.assistant || ''} />
+                  </Field>
+                </div>
+                <datalist id="fc-people">
+                  {people.map((p) => (
+                    <option key={p} value={p} />
+                  ))}
+                </datalist>
+              </div>
+            )}
+            {!isBase && (
               <label className="check small">
                 <input type="checkbox" checked={f.permanent} onChange={set('permanent')} />
                 {t('schedule.permanent', { day: t(`weekday.${wd}`) })}
@@ -394,6 +436,60 @@ function CellModal({ edit, mode, pitches, onClose }) {
             )}
           </>
         )}
+      </div>
+    </Modal>
+  );
+}
+
+// The group's own coach and assistant, edited from the timetable (same as in Groups).
+function CoachesModal({ group, people, onClose }) {
+  const t = useT();
+  const act = useAction();
+  const [f, setF] = useState({
+    coach: group.coach || '',
+    coach_phone: group.coach_phone || '',
+    assistant: group.assistant || '',
+    assistant_phone: group.assistant_phone || '',
+  });
+  const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+  const save = async () => {
+    if (await act(() => rpc('schedule.setCoaches', { groupId: group.id, ...f }), t('common.saved'))) onClose();
+  };
+  return (
+    <Modal
+      title={`${t('schedule.editCoaches')} — ${group.name}`}
+      onClose={onClose}
+      width={560}
+      footer={
+        <>
+          <Button onClick={onClose}>{t('common.cancel')}</Button>
+          <Button variant="primary" onClick={save}>
+            {t('common.save')}
+          </Button>
+        </>
+      }
+    >
+      <div className="stack">
+        <div className="small muted">{t('schedule.editCoachesHint')}</div>
+        <div className="grid-2">
+          <Field label={t('groups.coach')}>
+            <input className="input" list="fc-people-g" value={f.coach} onChange={set('coach')} autoFocus />
+          </Field>
+          <Field label={t('groups.coachPhone')}>
+            <input className="input" value={f.coach_phone} onChange={set('coach_phone')} />
+          </Field>
+          <Field label={t('groups.assistant')}>
+            <input className="input" list="fc-people-g" value={f.assistant} onChange={set('assistant')} />
+          </Field>
+          <Field label={t('groups.assistantPhone')}>
+            <input className="input" value={f.assistant_phone} onChange={set('assistant_phone')} />
+          </Field>
+        </div>
+        <datalist id="fc-people-g">
+          {people.map((p) => (
+            <option key={p} value={p} />
+          ))}
+        </datalist>
       </div>
     </Modal>
   );
@@ -447,7 +543,8 @@ function PrintModal({ view, onClose }) {
         const s = sessionOf(g.id, d);
         if (!s) return { time: '', place: '' };
         if (s.cancelled) return { time: t('schedule.noTraining'), place: '' };
-        return { time: `${s.start}-${s.end}`, place: [s.pitch, s.note].filter(Boolean).join(' ') };
+        const standIn = [s.coach, s.assistant].filter(Boolean).join(', ');
+        return { time: `${s.start}-${s.end}`, place: [s.pitch, s.note, standIn && `(${t('schedule.standInShort')}: ${standIn})`].filter(Boolean).join(' ') };
       }),
     })),
   }));
@@ -460,9 +557,10 @@ function PrintModal({ view, onClose }) {
         for (const d of dates) {
           const s = sessionOf(g.id, d);
           if (!s || s.cancelled || !s.start) continue;
+          const who = coachesOf(g, s);
           for (const [name, role] of [
-            [g.coach, t('groups.coach')],
-            [g.assistant, t('groups.assistant')],
+            [who.coach, t('groups.coach')],
+            [who.assistant, t('groups.assistant')],
           ]) {
             if (!name) continue;
             const k = personKey(name);

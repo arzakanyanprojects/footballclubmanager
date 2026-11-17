@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
-import { Plus, Download, Users, FileUp, Paperclip, Camera, Trash2, UserRound, FileText, Wallet, StickyNote } from 'lucide-react';
+import { Plus, Download, Users, FileUp, Paperclip, ArrowRightLeft, Camera, Trash2, UserRound, FileText, Wallet, StickyNote } from 'lucide-react';
 import { useT, monthName } from '../i18n';
 import { useCan } from '../components/Auth';
 import { useColumns } from '../components/Columns';
@@ -8,7 +8,7 @@ import { useRpc, rpc, fmtDate, saveCsv, todayIso, resizeImage, seasonMonths, mon
 import { Avatar, Badge, Button, Empty, Field, Loading, Modal, Money, SearchBox, Segmented, useAction, useClub } from '../components/ui';
 import { PayModal } from './Payments';
 
-export const CATEGORIES = ['siblings', 'half', 'war', 'staff'];
+export const CATEGORIES = ['siblings', 'half', 'war', 'staff', 'orphan'];
 
 // The club's services, as listed in its records (Armenian only).
 export const SERVICES = [
@@ -30,17 +30,19 @@ export const SERVICES = [
   'Ֆուտբոլ անհ.16',
 ];
 
-const MONTH_MARK = { paid: '✓', overdue: '✕', unpaid: '•', waived: '—', excused: '✓' };
+const MONTH_MARK = { paid: '✓', overdue: '✕', unpaid: '•', waived: '—', excused: '✓', notyet: '' };
 
-// Status of one monthly fee: paid, overdue, unpaid (not yet due), waived, or none (no fee for that month).
-function monthStatus(m) {
-  if (!m) return 'none';
+// Status of one monthly fee: paid, overdue, unpaid (not yet due), waived, notyet (before the student's
+// join month: not contracted yet — a grey square), or none (no fee for that month).
+function monthStatus(m, period, joinDate) {
+  if (!m) return period && joinDate && period < joinDate.slice(0, 7) ? 'notyet' : 'none';
   if (m.status === 'waived' && m.excused_by) return 'excused';
   if (m.status !== 'unpaid') return m.status;
   return m.due_date && m.due_date < todayIso() ? 'overdue' : 'unpaid';
 }
 
 export default function Students({ nav, route }) {
+  const act = useAction();
   const canEdit = useCan('students');
   const canPay = useCan('payments');
   const t = useT();
@@ -163,7 +165,7 @@ export default function Students({ nav, route }) {
       cell: (s) =>
         months.map((p) => {
           const m = s.byMonth[p];
-          const st = monthStatus(m);
+          const st = monthStatus(m, p, s.join_date);
           const tip = m ? `${monthName(t, p)} · ${money(m.amount, currency)} · ${t(`chargeStatus.${st}`)}` : monthName(t, p);
           const payable = canPay && (st === 'overdue' || st === 'unpaid');
           return (
@@ -177,7 +179,7 @@ export default function Students({ nav, route }) {
                   setPaying([{ ...m, kind: 'monthly', first_name: s.first_name, last_name: s.last_name }]);
                 }}
               >
-                {MONTH_MARK[st] || '·'}
+                {MONTH_MARK[st] ?? '·'}
               </span>
             </td>
           );
@@ -209,6 +211,7 @@ export default function Students({ nav, route }) {
     plain('service', t('students.service'), (s) => s.service, { defaultHidden: true }),
     plain('contractNo', t('students.contractNo'), (s) => s.contract_no, { defaultHidden: true, nowrap: true }),
     plain('parentPhone', `${t('students.parent')} · ${t('parent.phone')}`, (s) => s.parent_phone, { defaultHidden: true, nowrap: true }),
+    plain('parentMessenger', `${t('students.parent')} · ${t('parent.messenger')}`, (s) => s.parent_messenger, { defaultHidden: true, nowrap: true }),
     plain('parentEmail', `${t('students.parent')} · ${t('parent.email')}`, (s) => s.parent_email, { defaultHidden: true }),
     plain('parentSsn', `${t('students.parent')} · ${t('parent.ssn')}`, (s) => s.parent_ssn, { defaultHidden: true, nowrap: true }),
     plain('parentDoc', `${t('students.parent')} · ${t('parent.docNo')}`, (s) => s.parent_doc_no, { defaultHidden: true, nowrap: true }),
@@ -216,18 +219,59 @@ export default function Students({ nav, route }) {
     plain('inactiveReason', t('students.inactiveReason'), (s) => s.inactive_reason, { defaultHidden: true }),
   ]);
 
+  // Students only, for importing into another FC Manager (see Import: the hidden "_fcmanager" sheet).
+  const exportTransfer = () => {
+    const cols = [
+      ['first_name', 'students.firstName'], ['last_name', 'students.lastName'], ['patronymic', 'students.patronymic'],
+      ['birth_date', 'students.birthDate'], ['document_no', 'students.documentNo'], ['group_name', 'students.group'],
+      ['contract_no', 'students.contractNo'], ['medical_doc', 'students.medicalDoc'], ['category', 'students.category'],
+      ['service', 'students.service'], ['monthly_fee', 'students.monthlyFee'], ['join_date', 'students.joinDate'],
+      ['status', 'students.status'], ['inactive_reason', 'students.inactiveReason'], ['notes', 'students.notes'],
+      ['parent_first_name', 'import.parentFirst'], ['parent_last_name', 'import.parentLast'], ['parent_phone', 'import.parentPhone'],
+      ['parent_messenger', 'import.parentMessenger'], ['parent_email', 'import.parentEmail'], ['parent_doc_no', 'import.parentDocNo'],
+      ['parent_doc_date', 'import.parentDocDate'], ['parent_doc_issuer', 'import.parentDocIssuer'], ['parent_ssn', 'import.parentSsn'],
+      ['parent_address', 'import.parentAddress'],
+    ].map(([key, label]) => ({ key, header: t(label), width: ['parent_address', 'notes'].includes(key) ? 34 : 16 }));
+    const value = (s, k) => {
+      if (k === 'medical_doc') return s.medical_doc ? t('common.yes') : t('common.no');
+      if (k === 'category') return s.category ? t(`category.${s.category}`) : '';
+      if (k === 'status') return t(`status.${s.status}`);
+      return s[k] ?? '';
+    };
+    const group = groupId ? (groups || []).find((g) => String(g.id) === String(groupId))?.name : null;
+    // Their payments go along in a second sheet, linked by contract № (or name + birth date).
+    const keyOf = (s) => s.contract_no || `${s.first_name}|${s.last_name}|${s.birth_date || ''}`;
+    const chargeCols = ['student_key', 'kind', 'period', 'description', 'amount', 'due_date', 'status', 'paid_at', 'method', 'note'];
+    act(async () => {
+      const ids = new Map(rows.map((s) => [s.id, keyOf(s)]));
+      const all = await rpc('charges.list', {});
+      const charges = all.filter((c) => ids.has(c.student_id) && !c.excused_by);
+      await window.fc.saveXlsx({
+        kind: 'students',
+        defaultName: `students-${group || 'all'}-${todayIso()}.xlsx`,
+        columns: cols,
+        rows: rows.map((s) => Object.fromEntries(cols.map((c) => [c.key, value(s, c.key)]))),
+        charges: {
+          columns: chargeCols,
+          headers: [t('import.studentKey'), t('payments.type'), t('payments.month'), t('payments.description'), t('payments.amount'), t('payments.dueDate'), t('payments.status'), t('payments.paidAt'), t('payments.method'), t('payments.note')],
+          rows: charges.map((c) => chargeCols.map((k) => (k === 'student_key' ? ids.get(c.student_id) : c[k] ?? ''))),
+        },
+      });
+    }, t('transfer.saved', { n: rows.length }));
+  };
+
   const exportCsv = () =>
     saveCsv(`students-${todayIso()}.csv`, [
       [t('students.firstName'), t('students.lastName'), t('students.patronymic'), t('students.birthDate'), t('students.group'), t('students.coach'),
         t('parent.firstName'), t('parent.lastName'), t('parent.ssn'), t('parent.docNo'), t('parent.docIssuer'), t('parent.docDate'),
-        t('parent.phone'), t('parent.email'), t('parent.address'), t('students.medicalDoc'), t('students.category'), t('students.service'), t('students.contractNo'), t('students.monthlyFee'), t('students.joinDate'), t('students.status'), t('students.inactiveReason'),
+        t('parent.phone'), t('parent.messenger'), t('parent.email'), t('parent.address'), t('students.medicalDoc'), t('students.category'), t('students.service'), t('students.contractNo'), t('students.monthlyFee'), t('students.joinDate'), t('students.status'), t('students.inactiveReason'),
         ...months.map((p) => monthName(t, p))],
       ...rows.map((s) => [s.first_name, s.last_name, s.patronymic, fmtDate(s.birth_date), s.group_name, s.group_coach,
         s.parent_first_name, s.parent_last_name, s.parent_ssn, s.parent_doc_no, s.parent_doc_issuer, fmtDate(s.parent_doc_date),
-        s.parent_phone, s.parent_email, s.parent_address,
+        s.parent_phone, s.parent_messenger, s.parent_email, s.parent_address,
         t(s.medical_doc ? 'medicalDoc.provided' : 'medicalDoc.missing'), s.category ? t(`category.${s.category}`) : '', s.service, s.contract_no, s.monthly_fee, fmtDate(s.join_date), t(`status.${s.status}`), s.inactive_reason,
         ...months.map((p) => {
-          const st = monthStatus(s.byMonth[p]);
+          const st = monthStatus(s.byMonth[p], p, s.join_date);
           return st === 'none' ? '' : t(`chargeStatus.${st}`);
         })]),
     ]);
@@ -243,6 +287,9 @@ export default function Students({ nav, route }) {
         {columnsButton}
         <Button icon={Download} onClick={exportCsv} disabled={!rows.length}>
           {t('common.exportCsv')}
+        </Button>
+        <Button icon={ArrowRightLeft} onClick={exportTransfer} disabled={!rows.length} title={t('transfer.hint')}>
+          {t('transfer.button')}
         </Button>
         {canEdit && (
           <Button icon={FileUp} onClick={() => setImporting(true)}>
@@ -283,8 +330,9 @@ export default function Students({ nav, route }) {
         )}
         <div className="grow" />
         {canPay && columns.some((c) => c.id === 'months') && (
-          <span className="small muted">
-            {['paid', 'excused', 'overdue', 'unpaid', 'waived'].map((k) => `${MONTH_MARK[k]} ${t(`chargeStatus.${k}`)}`).join(' · ')}
+          <span className="small muted row" style={{ gap: 6 }}>
+            {['paid', 'excused', 'overdue', 'unpaid', 'waived'].map((k) => `${MONTH_MARK[k]} ${t(`chargeStatus.${k}`)}`).join(' · ')} ·
+            <span className="pay-cell notyet legend" /> {t('chargeStatus.notyet')}
           </span>
         )}
       </div>
@@ -364,6 +412,7 @@ export function StudentForm({ student, onClose, onSaved }) {
     parent_address: '',
     parent_email: '',
     parent_phone: '',
+    parent_messenger: '',
     medical_doc: 0,
     group_id: '',
     monthly_fee: '',
@@ -504,6 +553,9 @@ export function StudentForm({ student, onClose, onSaved }) {
             </Field>
             <Field label={t('parent.phone')}>
               <input className="input" value={f.parent_phone} onChange={set('parent_phone')} />
+            </Field>
+            <Field label={t('parent.messenger')}>
+              <input className="input" value={f.parent_messenger} onChange={set('parent_messenger')} />
             </Field>
             <Field label={t('parent.email')}>
               <input className="input" value={f.parent_email} onChange={set('parent_email')} />

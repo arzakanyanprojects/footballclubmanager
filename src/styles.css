@@ -309,8 +309,9 @@ table.table { width: 100%; border-collapse: collapse; }
 .modal-head { display: flex; align-items: center; gap: 10px; padding: 16px 20px; border-bottom: 1px solid var(--border); }
 .modal-head h3 { font-size: 16px; flex: 1; }
 .modal-body { padding: 20px; overflow: auto; }
-.modal-foot { display: flex; justify-content: flex-end; gap: 10px; padding: 14px 20px; border-top: 1px solid var(--border); background: var(--surface-2); border-radius: 0 0 14px 14px; }
-.modal-foot .left { margin-right: auto; }
+.modal-foot { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 10px; padding: 14px 20px; border-top: 1px solid var(--border); background: var(--surface-2); border-radius: 0 0 14px 14px; }
+/* Buttons that don't fit go to a second row instead of spilling out of the window. */
+.modal-foot .left { margin-right: auto; flex-wrap: wrap; min-width: 0; }
 @keyframes fade { from { opacity: 0; } }
 @keyframes pop { from { opacity: 0; transform: translateY(8px) scale(0.99); } }
 
@@ -667,3 +668,23 @@ table.table { width: 100%; border-collapse: collapse; }
 .sched-add { color: var(--text-3); font-size: 16px; }
 .sched-clash-icon { position: absolute; top: 4px; right: 4px; color: var(--bad); }
 .report-card.on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+
+.sched-coach-btn { position: relative; display: flex; flex-direction: column; align-items: flex-start; gap: 1px; width: 100%; background: none; border: 0;
+  border-radius: 7px; padding: 4px 22px 4px 6px; margin: -4px -6px; font: inherit; color: inherit; text-align: left; cursor: pointer; }
+.sched-coach-btn:hover:not(:disabled) { background: var(--neutral-soft); }
+.sched-coach-btn:disabled { cursor: default; }
+.sched-coach-edit { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); color: var(--text-3); opacity: 0; transition: opacity .15s; }
+.sched-coach-btn:hover .sched-coach-edit { opacity: 1; }
+.sched-standin { font-size: 11px; color: var(--info); font-weight: 600; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.standin-box { border: 1px dashed var(--border-strong); border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+
+.import-review td, .import-review th { padding: 5px 9px; font-size: 12.5px; }
+.import-review tr.warn td { background: color-mix(in srgb, var(--warn-soft) 70%, transparent); }
+
+.app-link { color: var(--info); font-weight: 600; }
+
+.span-full { grid-column: 1 / -1; }
+
+/* Months before the student joined (not contracted yet), like the grey cells in the club's sheets. */
+.pay-cell.notyet { background: color-mix(in srgb, var(--text-3) 55%, transparent); vertical-align: middle; }
+.pay-cell.legend { width: 12px; height: 12px; border-radius: 3px; vertical-align: -1px; }

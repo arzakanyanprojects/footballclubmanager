@@ -303,4 +303,40 @@ async function buildSchedule({ title, dates, blocks, headers }) {
   return wb.xlsx.writeBuffer();
 }
 
-module.exports = { buildReport, buildForm, buildSchedule };
+/**
+ * Students for moving to another FC Manager (students only). A hidden sheet "_fcmanager" lists the
+ * field of every column, so the other computer's import matches them exactly, in any language.
+ * columns: [{ key, header, width }], rows: [{ [key]: value }]
+ */
+async function buildStudentsTransfer({ columns, rows, charges }) {
+  const wb = new ExcelJS.Workbook();
+  wb.creator = 'FC Manager';
+  wb.created = new Date();
+  const ws = wb.addWorksheet('Սաներ', { views: [{ state: 'frozen', ySplit: 1 }] });
+  ws.columns = columns.map((c) => ({ key: c.key, width: c.width || 16 }));
+  const header = ws.getRow(1);
+  columns.forEach((c, i) => {
+    Object.assign(header.getCell(i + 1), {
+      value: c.header,
+      font: { name: FONT, size: 10, bold: true, color: { argb: 'FFFFFFFF' } },
+      fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: GREEN } },
+      alignment: { vertical: 'middle', wrapText: true },
+    });
+  });
+  header.height = 30;
+  rows.forEach((r) => ws.addRow(columns.map((c) => r[c.key] ?? '')));
+  const marker = wb.addWorksheet('_fcmanager', { state: 'hidden' });
+  marker.addRow(columns.map((c) => c.key));
+  // The students' payments, read back by the import of the other computer.
+  if (charges?.rows?.length) {
+    const ps = wb.addWorksheet('Վճարումներ', { views: [{ state: 'frozen', ySplit: 1 }] });
+    ps.columns = charges.columns.map((k) => ({ width: ['student_key', 'description', 'note'].includes(k) ? 24 : 13 }));
+    const h = ps.addRow(charges.headers);
+    h.eachCell((c) => Object.assign(c, { font: { name: FONT, size: 10, bold: true, color: { argb: 'FFFFFFFF' } }, fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: GREEN } } }));
+    charges.rows.forEach((r) => ps.addRow(r));
+    wb.addWorksheet('_fcmanager_charges', { state: 'hidden' }).addRow(charges.columns);
+  }
+  return wb.xlsx.writeBuffer();
+}
+
+module.exports = { buildReport, buildForm, buildSchedule, buildStudentsTransfer };

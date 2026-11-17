@@ -105,6 +105,78 @@ function createService(db, { onWrite, getNotify } = {}) {
   // ---------------------------------------------------------------- settings
   const SETTING_KEYS = ['club_name', 'club_address', 'club_phone', 'director_name', 'currency', 'due_day', 'billing_start', 'club_logo'];
 
+  // A «Դիմում» period on a payment: both dates, the end not before the start; otherwise none.
+  function absenceRange(from, to) {
+    const f = str(from);
+    const t = str(to);
+    if (!f || !t) return { from: null, to: null };
+    if (t < f) throw new AppError('PERIOD_INVALID');
+    return { from: f, to: t };
+  }
+
+  // ---------------------------------------------------------------- imported payments
+  // payments: paid months read from a team file (amount 0 — typed in later).
+  // carried: a moving file's charges, copied as they are.
+  // A month already paid (or waived) is never overwritten; an unpaid one becomes paid.
+  function addImportedPayments(studentId, payments, carried, ctx) {
+    const dueDay = pad(int(settings().due_day, 15));
+    const methodOk = (m) => (['card', 'easypay', 'transfer'].includes(m) ? m : DEFAULT_METHOD);
+    let n = 0;
+    const monthly = (c) => {
+      const ex = one(`SELECT id, status FROM charges WHERE student_id = :sid AND kind = 'monthly' AND period = :period`, { sid: studentId, period: c.period });
+      if (ex && ex.status !== 'unpaid') return;
+      if (ex && c.status !== 'paid') return;
+      if (ex) {
+        run(
+          `UPDATE charges SET status = 'paid', amount = CASE WHEN :amount > 0 THEN :amount ELSE amount END, paid_at = :paidAt, method = :method,
+             paid_by = :user, note = IFNULL(:note, note) WHERE id = :id`,
+          { id: ex.id, amount: int(c.amount), paidAt: c.paid_at, method: methodOk(c.method), user: ctx.user || null, note: str(c.note) }
+        );
+      } else {
+        run(
+          `INSERT INTO charges (student_id, kind, period, amount, due_date, status, paid_at, method, note, created_by, paid_by)
+           VALUES (:sid, 'monthly', :period, :amount, :due, :status, :paidAt, :method, :note, :user, :paidBy)`,
+          {
+            sid: studentId, period: c.period, amount: int(c.amount), due: c.due_date || `${c.period}-${dueDay}`,
+            status: ['paid', 'unpaid', 'waived'].includes(c.status) ? c.status : 'paid',
+            paidAt: c.status === 'unpaid' ? null : c.paid_at, method: c.status === 'paid' ? methodOk(c.method) : null,
+            note: str(c.note), user: ctx.user || null, paidBy: c.status === 'paid' ? ctx.user || null : null,
+          }
+        );
+      }
+      n++;
+    };
+    for (const p of payments) {
+      if (!/^\d{4}-\d{2}$/.test(p.period || '') || !p.paid_at) continue;
+      monthly({ ...p, status: 'paid', amount: Math.max(int(p.amount) || 0, 0) });
+    }
+    for (const c of carried) {
+      if (c.kind === 'monthly') {
+        if (/^\d{4}-\d{2}$/.test(c.period || '')) monthly(c);
+        continue;
+      }
+      // Other payments: added once (same description, amount and date are not added again).
+      const dup = one(
+        `SELECT id FROM charges WHERE student_id = :sid AND kind = :kind AND IFNULL(description, '') = IFNULL(:d, '')
+           AND amount = :amount AND IFNULL(due_date, '') = IFNULL(:due, '')`,
+        { sid: studentId, kind: c.kind || 'other', d: str(c.description), amount: int(c.amount), due: str(c.due_date) }
+      );
+      if (dup) continue;
+      run(
+        `INSERT INTO charges (student_id, kind, description, amount, due_date, status, paid_at, method, note, created_by, paid_by)
+         VALUES (:sid, :kind, :d, :amount, :due, :status, :paidAt, :method, :note, :user, :paidBy)`,
+        {
+          sid: studentId, kind: ['product', 'other'].includes(c.kind) ? c.kind : 'other', d: str(c.description), amount: int(c.amount),
+          due: str(c.due_date) || today(), status: ['paid', 'unpaid', 'waived'].includes(c.status) ? c.status : 'unpaid',
+          paidAt: c.status === 'paid' ? c.paid_at : null, method: c.status === 'paid' ? methodOk(c.method) : null,
+          note: str(c.note), user: ctx.user || null, paidBy: c.status === 'paid' ? ctx.user || null : null,
+        }
+      );
+      n++;
+    }
+    return n;
+  }
+
   // ---------------------------------------------------------------- excused absences
   // Training days in the period become «Հարգելի» (unless marked present) and the monthly fee of each
   // month the period touches is not owed (waived, marked with the absence; paid months stay paid).
@@ -443,7 +515,8 @@ function createService(db, { onWrite, getNotify } = {}) {
       all(
         `SELECT s.id, s.first_name, s.last_name, s.birth_date, s.phone, s.parent_name, s.parent_phone,
                 s.group_id, g.name AS group_name, g.color AS group_color, g.coach AS group_coach, s.monthly_fee, s.join_date, s.status, s.inactive_reason, s.medical_doc, s.patronymic, s.category, s.contract_no, s.service,
-                s.parent_first_name, s.parent_last_name, s.parent_doc_no, s.parent_doc_issuer, s.parent_doc_date, s.parent_ssn, s.parent_address, s.parent_email,
+                s.parent_first_name, s.parent_last_name, s.parent_doc_no, s.parent_doc_issuer, s.parent_doc_date, s.parent_ssn, s.parent_address, s.parent_email, s.parent_messenger,
+                s.document_no, s.notes,
                 IFNULL((SELECT SUM(amount) FROM charges c
                         WHERE c.student_id = s.id AND c.status = 'unpaid' AND c.due_date < :t), 0) AS overdue,
                 IFNULL((SELECT SUM(amount) FROM charges c
@@ -501,8 +574,9 @@ function createService(db, { onWrite, getNotify } = {}) {
           { id }
         ),
         files: all(
-          `SELECT id, kind, file_name, mime, size, created_at, created_by FROM student_files
-           WHERE student_id = :id ORDER BY id DESC`,
+          `SELECT f.id, f.kind, f.file_name, f.mime, f.size, f.created_at, f.created_by, ap.date_from, ap.date_to
+           FROM student_files f LEFT JOIN absences ap ON ap.file_id = f.id
+           WHERE f.student_id = :id ORDER BY f.id DESC`,
           { id }
         ),
       };
@@ -517,7 +591,7 @@ function createService(db, { onWrite, getNotify } = {}) {
         patronymic: str(p.patronymic),
         contract_no: str(p.contract_no),
         service: str(p.service),
-        category: ['siblings', 'half', 'war', 'staff'].includes(p.category) ? p.category : null,
+        category: ['siblings', 'half', 'war', 'staff', 'orphan'].includes(p.category) ? p.category : null,
         last_name: str(p.last_name),
         birth_date: str(p.birth_date),
         gender: str(p.gender),
@@ -534,6 +608,7 @@ function createService(db, { onWrite, getNotify } = {}) {
         parent_ssn: str(p.parent_ssn),
         parent_address: str(p.parent_address),
         parent_email: str(p.parent_email),
+        parent_messenger: str(p.parent_messenger),
         parent_phone: str(p.parent_phone),
         group_id: p.group_id ? int(p.group_id) : null,
         monthly_fee: int(p.monthly_fee),
@@ -562,6 +637,7 @@ function createService(db, { onWrite, getNotify } = {}) {
              parent_name = :parent_name, parent_phone = :parent_phone, group_id = :group_id,
              parent_first_name = :parent_first_name, parent_last_name = :parent_last_name, parent_doc_no = :parent_doc_no, parent_doc_issuer = :parent_doc_issuer,
              parent_doc_date = :parent_doc_date, parent_ssn = :parent_ssn, parent_address = :parent_address, parent_email = :parent_email,
+             parent_messenger = :parent_messenger,
              monthly_fee = :monthly_fee, join_date = :join_date, status = :status, inactive_reason = :inactive_reason, leave_date = :leave_date,
              billing_from = :billing_from, notes = :notes, photo = :photo, medical_doc = :medical_doc,
              updated_at = datetime('now', 'localtime')
@@ -584,10 +660,10 @@ function createService(db, { onWrite, getNotify } = {}) {
       const r = run(
         `INSERT INTO students (first_name, last_name, patronymic, category, contract_no, service, birth_date, gender, phone, email, address, document_no,
            parent_name, parent_phone, group_id, monthly_fee, join_date, status, inactive_reason, notes, photo, medical_doc,
-           parent_first_name, parent_last_name, parent_doc_no, parent_doc_issuer, parent_doc_date, parent_ssn, parent_address, parent_email)
+           parent_first_name, parent_last_name, parent_doc_no, parent_doc_issuer, parent_doc_date, parent_ssn, parent_address, parent_email, parent_messenger)
          VALUES (:first_name, :last_name, :patronymic, :category, :contract_no, :service, :birth_date, :gender, :phone, :email, :address, :document_no,
            :parent_name, :parent_phone, :group_id, :monthly_fee, :join_date, :status, :inactive_reason, :notes, :photo, :medical_doc,
-           :parent_first_name, :parent_last_name, :parent_doc_no, :parent_doc_issuer, :parent_doc_date, :parent_ssn, :parent_address, :parent_email)`,
+           :parent_first_name, :parent_last_name, :parent_doc_no, :parent_doc_issuer, :parent_doc_date, :parent_ssn, :parent_address, :parent_email, :parent_messenger)`,
         row
       );
       log(ctx, 'student.created', `${row.first_name} ${row.last_name}`);
@@ -599,7 +675,7 @@ function createService(db, { onWrite, getNotify } = {}) {
     // A row matches an existing student by contract number, else by name + birth date.
     // mode 'skip' leaves existing students as they are; 'update' fills in the imported fields.
     'students.import': ({ rows, mode = 'skip', createGroups = true }, ctx) => {
-      const result = { created: 0, updated: 0, skipped: 0, groupsCreated: 0, errors: [] };
+      const result = { created: 0, updated: 0, skipped: 0, groupsCreated: 0, payments: 0, errors: [] };
       const groupIds = new Map(all('SELECT id, name FROM groups').map((g) => [g.name.trim().toLowerCase(), g.id]));
       const save = methods['students.save'];
       (rows || []).forEach((raw, i) => {
@@ -615,6 +691,10 @@ function createService(db, { onWrite, getNotify } = {}) {
             if (groupIds.has(key)) p.group_id = groupIds.get(key);
           }
           delete p.group_name;
+          const payments = Array.isArray(p.payments) ? p.payments : [];
+          const carried = Array.isArray(p.charges) ? p.charges : [];
+          delete p.payments;
+          delete p.charges;
           const existing =
             (p.contract_no && one('SELECT * FROM students WHERE contract_no = :c', { c: str(p.contract_no) })) ||
             one(
@@ -629,10 +709,12 @@ function createService(db, { onWrite, getNotify } = {}) {
             }
             save({ ...existing, ...p, id: existing.id }, ctx);
             result.updated++;
+            result.payments += addImportedPayments(existing.id, payments, carried, ctx);
             return;
           }
-          save({ join_date: today(), status: 'active', ...p }, ctx);
+          const created = save({ join_date: today(), status: 'active', ...p }, ctx);
           result.created++;
+          result.payments += addImportedPayments(created.id, payments, carried, ctx);
         } catch (err) {
           if (!(err instanceof AppError)) throw err;
           result.errors.push({ row: i + 1, error: err.message });
@@ -645,8 +727,9 @@ function createService(db, { onWrite, getNotify } = {}) {
     // ---------------------------------------------------------------- student documents
     'files.list': ({ studentId }) =>
       all(
-        `SELECT id, kind, file_name, mime, size, created_at, created_by FROM student_files
-         WHERE student_id = :studentId ORDER BY id DESC`,
+        `SELECT f.id, f.kind, f.file_name, f.mime, f.size, f.created_at, f.created_by, ap.date_from, ap.date_to
+         FROM student_files f LEFT JOIN absences ap ON ap.file_id = f.id
+         WHERE f.student_id = :studentId ORDER BY f.id DESC`,
         { studentId }
       ),
 
@@ -758,7 +841,7 @@ function createService(db, { onWrite, getNotify } = {}) {
         ).sort((a, b) => a.name.localeCompare(b.name, 'hy', { numeric: true, sensitivity: 'base' })),
         pitches: all('SELECT name FROM pitches ORDER BY sort, name').map((p) => p.name),
         base: all('SELECT group_id, weekday, start, end, pitch, note FROM schedule_base'),
-        days: all(`SELECT group_id, date, start, end, pitch, note, cancelled FROM schedule_days WHERE date IN (${inDates(list)})`),
+        days: all(`SELECT group_id, date, start, end, pitch, note, cancelled, coach, assistant FROM schedule_days WHERE date IN (${inDates(list)})`),
         // Last week's changes, for «copy from last week».
         prevDays: all(`SELECT group_id, date FROM schedule_days WHERE date IN (${inDates(prev)})`).length,
       };
@@ -782,15 +865,19 @@ function createService(db, { onWrite, getNotify } = {}) {
     },
 
     // A change for one date (or cancelling that day's training).
-    'schedule.setDay': ({ groupId, date, start, end, pitch, note, cancelled }, ctx) => {
+    'schedule.setDay': ({ groupId, date, start, end, pitch, note, cancelled, coach, assistant }, ctx) => {
       if (!groupId || !/^\d{4}-\d{2}-\d{2}$/.test(date || '')) throw new AppError('DATE_REQUIRED');
       if (!cancelled && (blank(start) || blank(end) || str(end) <= str(start))) throw new AppError('TIME_INVALID');
       run(
-        `INSERT INTO schedule_days (group_id, date, start, end, pitch, note, cancelled, updated_by)
-         VALUES (:groupId, :date, :start, :end, :pitch, :note, :cancelled, :user)
+        `INSERT INTO schedule_days (group_id, date, start, end, pitch, note, cancelled, coach, assistant, updated_by)
+         VALUES (:groupId, :date, :start, :end, :pitch, :note, :cancelled, :coach, :assistant, :user)
          ON CONFLICT(group_id, date) DO UPDATE SET start = excluded.start, end = excluded.end, pitch = excluded.pitch,
-           note = excluded.note, cancelled = excluded.cancelled, updated_by = excluded.updated_by`,
-        { groupId, date, start: str(start), end: str(end), pitch: str(pitch), note: str(note), cancelled: cancelled ? 1 : 0, user: ctx.user || null }
+           note = excluded.note, cancelled = excluded.cancelled, coach = excluded.coach, assistant = excluded.assistant,
+           updated_by = excluded.updated_by`,
+        {
+          groupId, date, start: str(start), end: str(end), pitch: str(pitch), note: str(note), cancelled: cancelled ? 1 : 0,
+          coach: cancelled ? null : str(coach), assistant: cancelled ? null : str(assistant), user: ctx.user || null,
+        }
       );
       return true;
     },
@@ -810,8 +897,8 @@ function createService(db, { onWrite, getNotify } = {}) {
         run('DELETE FROM schedule_days WHERE date = :date', { date });
         for (const d of all('SELECT * FROM schedule_days WHERE date = :from', { from })) {
           run(
-            `INSERT INTO schedule_days (group_id, date, start, end, pitch, note, cancelled, updated_by)
-             VALUES (:group_id, :date, :start, :end, :pitch, :note, :cancelled, :user)`,
+            `INSERT INTO schedule_days (group_id, date, start, end, pitch, note, cancelled, coach, assistant, updated_by)
+             VALUES (:group_id, :date, :start, :end, :pitch, :note, :cancelled, :coach, :assistant, :user)`,
             { ...d, date, user: ctx.user || null }
           );
           n++;
@@ -819,6 +906,18 @@ function createService(db, { onWrite, getNotify } = {}) {
       }
       log(ctx, 'schedule.copied', `${dates.join(', ')} — ${n}`);
       return { copied: n };
+    },
+
+    // The group's own coach and assistant (and phones), changed from the timetable.
+    'schedule.setCoaches': ({ groupId, coach, coach_phone, assistant, assistant_phone }, ctx) => {
+      const g = one('SELECT name FROM groups WHERE id = :groupId', { groupId });
+      if (!g) throw new AppError('NOT_FOUND');
+      run(
+        `UPDATE groups SET coach = :coach, coach_phone = :coachPhone, assistant = :assistant, assistant_phone = :assistantPhone WHERE id = :groupId`,
+        { groupId, coach: str(coach), coachPhone: str(coach_phone), assistant: str(assistant), assistantPhone: str(assistant_phone) }
+      );
+      log(ctx, 'group.coaches', g.name);
+      return true;
     },
 
     'schedule.savePitches': ({ names = [] }) => {
@@ -990,6 +1089,10 @@ function createService(db, { onWrite, getNotify } = {}) {
           method: str(p.method),
         }
       );
+      if (p.absenceFrom !== undefined) {
+        const absence = absenceRange(p.absenceFrom, p.absenceTo);
+        run('UPDATE charges SET absence_from = :from, absence_to = :to WHERE id = :id', { id: p.id, ...absence });
+      }
       log(ctx, 'charge.updated', `${studentName(c.student_id)} — ${amount}`);
       return true;
     },
@@ -1039,11 +1142,11 @@ function createService(db, { onWrite, getNotify } = {}) {
       return true;
     },
 
+    // Deletes a payment / charge. A deleted monthly fee comes back as unpaid on its own if the student
+    // has a monthly fee and the month is within their billing (the month is still owed).
     'charges.delete': ({ id }, ctx) => {
       const c = one('SELECT student_id, kind, amount FROM charges WHERE id = :id', { id });
       if (!c) throw new AppError('NOT_FOUND');
-      // Monthly charges would be re-created automatically; they are waived instead.
-      if (c.kind === 'monthly') throw new AppError('MONTHLY_CANNOT_DELETE');
       run('DELETE FROM charges WHERE id = :id', { id });
       log(ctx, 'charge.deleted', `${studentName(c.student_id)} — ${c.amount}`);
       return true;
@@ -1051,13 +1154,17 @@ function createService(db, { onWrite, getNotify } = {}) {
 
     // Records the monthly fee as paid for the chosen months (YYYY-MM): settles the month's charge if it
     // exists (with the amount received), or creates it already paid. Months already paid are skipped.
-    'charges.payMonths': ({ studentId, periods, amount, method, paidAt, note }, ctx) => {
+    'charges.payMonths': ({ studentId, periods, amount, method, paidAt, note, absenceFrom, absenceTo }, ctx) => {
       const st = one('SELECT monthly_fee FROM students WHERE id = :id', { id: studentId });
       if (!st) throw new AppError('NOT_FOUND');
       const fee = blank(amount) ? st.monthly_fee : int(amount);
       if (!(fee > 0)) throw new AppError('AMOUNT_REQUIRED');
       const dueDay = pad(int(settings().due_day, 15));
-      const paid = { paidAt: str(paidAt) || today(), method: str(method) || DEFAULT_METHOD, user: ctx.user || null, note: str(note), amount: fee };
+      const absence = absenceRange(absenceFrom, absenceTo);
+      const paid = {
+        paidAt: str(paidAt) || today(), method: str(method) || DEFAULT_METHOD, user: ctx.user || null, note: str(note), amount: fee,
+        absFrom: absence.from, absTo: absence.to,
+      };
       let total = 0;
       const done = [];
       const donePeriods = [];
@@ -1071,15 +1178,15 @@ function createService(db, { onWrite, getNotify } = {}) {
         if (existing) {
           run(
             `UPDATE charges SET status = 'paid', amount = :amount, paid_at = :paidAt, method = :method, paid_by = :user,
-                    note = IFNULL(:note, note)
+                    note = IFNULL(:note, note), absence_from = IFNULL(:absFrom, absence_from), absence_to = IFNULL(:absTo, absence_to)
              WHERE id = :id`,
             { id: existing.id, ...paid }
           );
           done.push(existing.id);
         } else {
           const r = run(
-            `INSERT INTO charges (student_id, kind, period, amount, due_date, status, paid_at, method, note, created_by, paid_by)
-             VALUES (:studentId, 'monthly', :period, :amount, :dueDate, 'paid', :paidAt, :method, :note, :user, :user)`,
+            `INSERT INTO charges (student_id, kind, period, amount, due_date, status, paid_at, method, note, absence_from, absence_to, created_by, paid_by)
+             VALUES (:studentId, 'monthly', :period, :amount, :dueDate, 'paid', :paidAt, :method, :note, :absFrom, :absTo, :user, :user)`,
             { studentId, period, dueDate: `${period}-${dueDay}`, ...paid }
           );
           done.push(Number(r.lastInsertRowid));

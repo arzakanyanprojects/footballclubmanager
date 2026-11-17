@@ -332,6 +332,20 @@ const MIGRATIONS = [
   );
   CREATE INDEX idx_schedule_days_date ON schedule_days(date);
   `,
+  // v21: a stand-in coach / assistant for one date of the timetable.
+  `
+  ALTER TABLE schedule_days ADD COLUMN coach TEXT;
+  ALTER TABLE schedule_days ADD COLUMN assistant TEXT;
+  `,
+  // v22: the parent's Viber / WhatsApp number (when it differs from the phone, or kept alongside).
+  `
+  ALTER TABLE students ADD COLUMN parent_messenger TEXT;
+  `,
+  // v23: the absence period («Դիմում») a payment refers to, e.g. 01.10–05.10.
+  `
+  ALTER TABLE charges ADD COLUMN absence_from TEXT;
+  ALTER TABLE charges ADD COLUMN absence_to TEXT;
+  `,
 ];
 
 function seed(db) {
