@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
-import { FlaskConical, Trash2, Building2, Monitor, Network, History, Save, RefreshCw, FolderOpen, DatabaseBackup, Upload, Copy, LogOut, Server, Receipt, UserCog, ImagePlus, BellRing, Cloud, CheckCircle2, AlertTriangle } from 'lucide-react';
+import { FlaskConical, Trash2, Building2, Monitor, Network, History, Save, RefreshCw, Copy, LogOut, Server, Receipt, UserCog, ImagePlus, BellRing, Database } from 'lucide-react';
 import { useT } from '../i18n';
 import { useRpc, rpc, fmtDateTime, currentPeriod, fitImage } from '../lib';
 import { HdmSettings } from '../components/Hdm';
 import { UpdateSettings } from '../components/Updates';
 import { NotifySettings } from '../components/Notify';
 import { MyAccount, UsersSettings, useAuth } from '../components/Auth';
+import DataManagement from '../components/DataManagement';
 import { Badge, BrandLogo, Button, Field, Loading, Segmented, Tabs, useAction, useConfirm, useToast } from '../components/ui';
 
 export default function Settings({ route, appState, setAppState }) {
@@ -16,6 +17,7 @@ export default function Settings({ route, appState, setAppState }) {
     auth.can('settings', 'view') && { id: 'club', label: t('settings.club'), icon: Building2 },
     { id: 'pc', label: t('settings.thisPc'), icon: Monitor },
     auth.can('settings', 'view') && { id: 'network', label: t('settings.network'), icon: Network },
+    (auth.can('settings', 'view') || auth.can('students', 'view')) && { id: 'data', label: t('data.tab'), icon: Database },
     auth.can('settings', 'view') && { id: 'notify', label: t('notify.tab'), icon: BellRing },
     (!auth.required || auth.user?.is_admin) && { id: 'users', label: t('users.tab'), icon: UserCog },
     auth.can('settings', 'view') && { id: 'activity', label: t('settings.activity'), icon: History },
@@ -36,6 +38,7 @@ export default function Settings({ route, appState, setAppState }) {
         {tab === 'club' && <ClubSettings />}
         {tab === 'pc' && <PcSettings appState={appState} setAppState={setAppState} />}
         {tab === 'network' && <NetworkSettings appState={appState} setAppState={setAppState} />}
+        {tab === 'data' && <DataManagement appState={appState} setAppState={setAppState} />}
         {tab === 'users' && <UsersSettings />}
         {tab === 'notify' && <NotifySettings />}
         {tab === 'activity' && <ActivityLog />}
@@ -234,14 +237,8 @@ function NetworkSettings({ appState, setAppState }) {
   const act = useAction();
   const confirm = useConfirm();
   const toast = useToast();
-  const [backups, setBackups] = useState(null);
   const host = appState.host;
   const isHost = appState.config.mode === 'host';
-
-  const loadBackups = () => window.fc.backup.list().then(setBackups);
-  useEffect(() => {
-    if (isHost) loadBackups();
-  }, [isHost]);
 
   const switchMode = async () => {
     if (!(await confirm({ title: t('settings.changeMode'), text: t('settings.changeModeConfirm'), confirmLabel: t('settings.changeMode') }))) return;
@@ -321,121 +318,7 @@ function NetworkSettings({ appState, setAppState }) {
         </div>
       </div>
 
-      {isHost && (
-        <div className="card settings-section">
-          <div className="card-head">
-            <DatabaseBackup size={17} />
-            <h3>{t('settings.backups')}</h3>
-          </div>
-          <div className="card-pad">
-            <div className="muted small">{t('settings.backupHelp')}</div>
-            <div className="small">
-              {t('settings.dbLocation')}: <span className="num">{host.dbPath}</span>
-            </div>
-            <div className="row wrap">
-              <Button
-                variant="primary"
-                icon={DatabaseBackup}
-                onClick={async () => {
-                  const r = await window.fc.backup.create();
-                  r.ok ? toast.success(t('settings.backupDone')) : toast.error(r.error);
-                  loadBackups();
-                  setAppState(await window.fc.state());
-                }}
-              >
-                {t('settings.backupNow')}
-              </Button>
-              <Button icon={FolderOpen} onClick={() => window.fc.backup.openFolder()}>
-                {t('settings.openBackups')}
-              </Button>
-              <Button
-                icon={Upload}
-                variant="danger"
-                onClick={async () => {
-                  if (!(await confirm({ title: t('settings.restore'), text: t('settings.restoreConfirm'), confirmLabel: t('settings.restore') }))) return;
-                  const r = await window.fc.backup.restore();
-                  if (r.ok) {
-                    toast.success(t('settings.restored'));
-                    loadBackups();
-                  } else if (r.error !== 'CANCELLED') toast.error(r.error);
-                }}
-              >
-                {t('settings.restore')}
-              </Button>
-            </div>
-            {backups?.length > 0 && (
-              <div className="table-wrap" style={{ maxHeight: 260 }}>
-                <table className="table">
-                  <tbody>
-                    {backups.slice(0, 15).map((b) => (
-                      <tr key={b.name}>
-                        <td className="small">{b.name}</td>
-                        <td className="small muted nowrap">{new Date(b.at).toLocaleString('en-GB')}</td>
-                        <td className="small muted num">{(b.size / 1024).toFixed(0)} KB</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-            <OneDriveBackups cloud={host.cloud} setAppState={setAppState} />
-          </div>
-        </div>
-      )}
     </>
-  );
-}
-
-// Copies every backup into the OneDrive folder on the host PC; the OneDrive app uploads it to the cloud.
-function OneDriveBackups({ cloud = {}, setAppState }) {
-  const t = useT();
-  const set = async (patch) => setAppState(await window.fc.backup.cloudSet(patch));
-  return (
-    <div className="cloud-box">
-      <div className="row">
-        <Cloud size={18} />
-        <span className="strong">OneDrive</span>
-      </div>
-      <label className="check">
-        <input type="checkbox" checked={!!cloud.enabled} onChange={(e) => set({ enabled: e.target.checked })} />
-        {t('cloud.enable')}
-      </label>
-      <div className="small muted">{t('cloud.help')}</div>
-      {!cloud.oneDrive && !cloud.folder && <div className="small" style={{ color: 'var(--warn)' }}>{t('cloud.notFound')}</div>}
-      <div className="row wrap small">
-        <span className="muted">{t('cloud.folder')}:</span>
-        <span className="num">{cloud.folder || '—'}</span>
-      </div>
-      <div className="row wrap">
-        <Button
-          size="sm"
-          icon={FolderOpen}
-          onClick={async () => {
-            const folder = await window.fc.backup.cloudPick();
-            if (folder) set({ folder });
-          }}
-        >
-          {t('cloud.change')}
-        </Button>
-        {cloud.folder && (
-          <Button size="sm" onClick={() => window.fc.backup.cloudOpen()}>
-            {t('cloud.open')}
-          </Button>
-        )}
-      </div>
-      {cloud.enabled &&
-        (cloud.lastError ? (
-          <div className="row small" style={{ color: 'var(--bad)' }}>
-            <AlertTriangle size={15} />
-            {cloud.lastError === 'NO_ONEDRIVE' ? t('cloud.notFound') : t('cloud.failed', { error: cloud.lastError })}
-          </div>
-        ) : cloud.lastAt ? (
-          <div className="row small" style={{ color: 'var(--good)' }}>
-            <CheckCircle2 size={15} />
-            {t('cloud.last', { at: new Date(cloud.lastAt).toLocaleString('en-GB'), file: cloud.lastFile })}
-          </div>
-        ) : null)}
-    </div>
   );
 }
 

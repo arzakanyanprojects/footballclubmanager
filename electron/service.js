@@ -671,6 +671,27 @@ function createService(db, { onWrite, getNotify } = {}) {
       return { id: Number(r.lastInsertRowid) };
     },
 
+    // «Դադարեցում»: the student stops on `date` — becomes inactive with that leave date. Monthly fees
+    // for the months after it that are still unpaid are removed (they are no longer owed); the month
+    // they stop in stays as it is.
+    'students.terminate': ({ id, date, reason }, ctx) => {
+      const s = one('SELECT id, status FROM students WHERE id = :id', { id });
+      if (!s) throw new AppError('NOT_FOUND');
+      const d = str(date);
+      if (!d || !/^\d{4}-\d{2}-\d{2}$/.test(d)) throw new AppError('DATE_REQUIRED');
+      run(
+        `UPDATE students SET status = 'inactive', leave_date = :d, inactive_reason = IFNULL(:reason, inactive_reason),
+           updated_at = datetime('now', 'localtime') WHERE id = :id`,
+        { id, d, reason: str(reason) }
+      );
+      const removed = run(
+        `DELETE FROM charges WHERE student_id = :id AND kind = 'monthly' AND status = 'unpaid' AND period > :month`,
+        { id, month: d.slice(0, 7) }
+      ).changes;
+      log(ctx, 'student.terminated', `${studentName(id)} — ${d.split('-').reverse().join('.')}`);
+      return { removed };
+    },
+
     // Import from another program. rows: [{ ...student fields, group_name }] (already matched to fields).
     // A row matches an existing student by contract number, else by name + birth date.
     // mode 'skip' leaves existing students as they are; 'update' fills in the imported fields.

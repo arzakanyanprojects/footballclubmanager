@@ -1,9 +1,8 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
-import { Plus, Download, Users, FileUp, Paperclip, ArrowRightLeft, Camera, Trash2, UserRound, FileText, Wallet, StickyNote } from 'lucide-react';
+import { Plus, Download, Users, Paperclip, Camera, Trash2, UserRound, FileText, Wallet, StickyNote } from 'lucide-react';
 import { useT, monthName } from '../i18n';
 import { useCan } from '../components/Auth';
 import { useColumns } from '../components/Columns';
-import { ImportModal } from '../components/Import';
 import { useRpc, rpc, fmtDate, saveCsv, todayIso, resizeImage, seasonMonths, money, readFileBase64 } from '../lib';
 import { Avatar, Badge, Button, Empty, Field, Loading, Modal, Money, SearchBox, Segmented, useAction, useClub } from '../components/ui';
 import { PayModal } from './Payments';
@@ -52,7 +51,6 @@ export default function Students({ nav, route }) {
   const [debtOnly, setDebtOnly] = useState(false);
   const [editing, setEditing] = useState(route.create ? {} : null);
   const [paying, setPaying] = useState(null);
-  const [importing, setImporting] = useState(false);
   const { currency } = useClub();
   const months = useMemo(() => seasonMonths(), []);
   const { data: groups } = useRpc('groups.list');
@@ -108,17 +106,19 @@ export default function Students({ nav, route }) {
       cell: (s) => (
         <td>
           {s.group_name ? (
-            <span className="row nowrap" style={{ gap: 7 }}>
-              <span className="dot" style={{ background: s.group_color || undefined }} />
-              {s.group_name}
-            </span>
+            <>
+              <span className="row nowrap" style={{ gap: 7 }}>
+                <span className="dot" style={{ background: s.group_color || undefined }} />
+                {s.group_name}
+              </span>
+              {s.group_coach && <div className="small muted nowrap" title={t('students.coach')}>{s.group_coach}</div>}
+            </>
           ) : (
             <span className="muted">—</span>
           )}
         </td>
       ),
     },
-    plain('coach', t('students.coach'), (s) => s.group_coach),
     {
       id: 'parent',
       label: t('students.parent'),
@@ -133,10 +133,10 @@ export default function Students({ nav, route }) {
     {
       id: 'medical',
       label: t('students.medicalDoc'),
-      head: () => <th>{t('students.medicalDoc')}</th>,
+      head: () => <th title={t('students.medicalDoc')}>{t('students.medicalShort')}</th>,
       cell: (s) => (
-        <td>
-          <Badge tone={s.medical_doc ? 'good' : 'warn'}>{t(s.medical_doc ? 'medicalDoc.provided' : 'medicalDoc.missing')}</Badge>
+        <td title={`${t('students.medicalDoc')}: ${t(s.medical_doc ? 'medicalDoc.provided' : 'medicalDoc.missing')}`}>
+          <Badge tone={s.medical_doc ? 'good' : 'warn'}>{s.medical_doc ? '✓' : '✕'}</Badge>
         </td>
       ),
     },
@@ -198,6 +198,8 @@ export default function Students({ nav, route }) {
     {
       id: 'status',
       label: t('students.status'),
+      // Only with «Բոլորը»: when the list shows active (or inactive) students only, the column says the same on every row.
+      available: status === '',
       head: () => <th>{t('students.status')}</th>,
       cell: (s) => (
         <td>
@@ -218,47 +220,6 @@ export default function Students({ nav, route }) {
     plain('parentAddress', `${t('students.parent')} · ${t('parent.address')}`, (s) => s.parent_address, { defaultHidden: true }),
     plain('inactiveReason', t('students.inactiveReason'), (s) => s.inactive_reason, { defaultHidden: true }),
   ]);
-
-  // Students only, for importing into another FC Manager (see Import: the hidden "_fcmanager" sheet).
-  const exportTransfer = () => {
-    const cols = [
-      ['first_name', 'students.firstName'], ['last_name', 'students.lastName'], ['patronymic', 'students.patronymic'],
-      ['birth_date', 'students.birthDate'], ['document_no', 'students.documentNo'], ['group_name', 'students.group'],
-      ['contract_no', 'students.contractNo'], ['medical_doc', 'students.medicalDoc'], ['category', 'students.category'],
-      ['service', 'students.service'], ['monthly_fee', 'students.monthlyFee'], ['join_date', 'students.joinDate'],
-      ['status', 'students.status'], ['inactive_reason', 'students.inactiveReason'], ['notes', 'students.notes'],
-      ['parent_first_name', 'import.parentFirst'], ['parent_last_name', 'import.parentLast'], ['parent_phone', 'import.parentPhone'],
-      ['parent_messenger', 'import.parentMessenger'], ['parent_email', 'import.parentEmail'], ['parent_doc_no', 'import.parentDocNo'],
-      ['parent_doc_date', 'import.parentDocDate'], ['parent_doc_issuer', 'import.parentDocIssuer'], ['parent_ssn', 'import.parentSsn'],
-      ['parent_address', 'import.parentAddress'],
-    ].map(([key, label]) => ({ key, header: t(label), width: ['parent_address', 'notes'].includes(key) ? 34 : 16 }));
-    const value = (s, k) => {
-      if (k === 'medical_doc') return s.medical_doc ? t('common.yes') : t('common.no');
-      if (k === 'category') return s.category ? t(`category.${s.category}`) : '';
-      if (k === 'status') return t(`status.${s.status}`);
-      return s[k] ?? '';
-    };
-    const group = groupId ? (groups || []).find((g) => String(g.id) === String(groupId))?.name : null;
-    // Their payments go along in a second sheet, linked by contract № (or name + birth date).
-    const keyOf = (s) => s.contract_no || `${s.first_name}|${s.last_name}|${s.birth_date || ''}`;
-    const chargeCols = ['student_key', 'kind', 'period', 'description', 'amount', 'due_date', 'status', 'paid_at', 'method', 'note'];
-    act(async () => {
-      const ids = new Map(rows.map((s) => [s.id, keyOf(s)]));
-      const all = await rpc('charges.list', {});
-      const charges = all.filter((c) => ids.has(c.student_id) && !c.excused_by);
-      await window.fc.saveXlsx({
-        kind: 'students',
-        defaultName: `students-${group || 'all'}-${todayIso()}.xlsx`,
-        columns: cols,
-        rows: rows.map((s) => Object.fromEntries(cols.map((c) => [c.key, value(s, c.key)]))),
-        charges: {
-          columns: chargeCols,
-          headers: [t('import.studentKey'), t('payments.type'), t('payments.month'), t('payments.description'), t('payments.amount'), t('payments.dueDate'), t('payments.status'), t('payments.paidAt'), t('payments.method'), t('payments.note')],
-          rows: charges.map((c) => chargeCols.map((k) => (k === 'student_key' ? ids.get(c.student_id) : c[k] ?? ''))),
-        },
-      });
-    }, t('transfer.saved', { n: rows.length }));
-  };
 
   const exportCsv = () =>
     saveCsv(`students-${todayIso()}.csv`, [
@@ -288,14 +249,6 @@ export default function Students({ nav, route }) {
         <Button icon={Download} onClick={exportCsv} disabled={!rows.length}>
           {t('common.exportCsv')}
         </Button>
-        <Button icon={ArrowRightLeft} onClick={exportTransfer} disabled={!rows.length} title={t('transfer.hint')}>
-          {t('transfer.button')}
-        </Button>
-        {canEdit && (
-          <Button icon={FileUp} onClick={() => setImporting(true)}>
-            {t('import.button')}
-          </Button>
-        )}
         {canEdit && (
           <Button variant="primary" icon={Plus} onClick={() => setEditing({})}>
             {t('students.add')}
@@ -365,7 +318,6 @@ export default function Students({ nav, route }) {
         </div>
       )}
 
-      {importing && <ImportModal onClose={() => setImporting(false)} />}
       {paying && <PayModal charges={paying} onClose={() => setPaying(null)} onDone={() => setPaying(null)} />}
 
       {editing && (

@@ -1,11 +1,11 @@
 import { useMemo, useRef, useState } from 'react';
 import {
-  ArrowLeft, Pencil, Plus, FileSignature, Trash2, Phone, Cake, Shapes, CalendarPlus, Wallet, CalendarCheck, IdCard, UserRound, FileText, Users, StickyNote, FolderOpen, Upload, ExternalLink, Download, Stethoscope, FilePlus2, Printer,
+  ArrowLeft, Pencil, Plus, FileSignature, Trash2, Phone, Cake, Shapes, CalendarPlus, Wallet, CalendarCheck, IdCard, UserRound, FileText, Users, StickyNote, FolderOpen, Upload, ExternalLink, Download, Stethoscope, FilePlus2, Printer, UserX,
 } from 'lucide-react';
 import { useT } from '../i18n';
 import { useCan } from '../components/Auth';
-import { useRpc, rpc, age, fmtDate, fmtDateTime, money, readFileBase64, fileSize } from '../lib';
-import { Avatar, Badge, Button, Empty, Loading, Money, Tabs, useAction, useClub, useConfirm } from '../components/ui';
+import { useRpc, rpc, age, fmtDate, fmtDateTime, money, readFileBase64, fileSize, todayIso } from '../lib';
+import { Avatar, Badge, Button, Empty, Field, Loading, Modal, Money, Tabs, useAction, useClub, useConfirm } from '../components/ui';
 import { StudentForm, FormSection } from './Students';
 import { AbsenceModal, printStoredFile, openStoredFile } from '../components/Absence';
 import { ChargesTable, MonthlyPaymentModal, chargeStatus } from './Payments';
@@ -109,9 +109,16 @@ export default function StudentProfile({ id, nav }) {
                 </Button>
               )}
               {canEdit && (
-                <Button icon={FilePlus2} onClick={() => setModal('absence')}>
-                  {t('absence.button')}
-                </Button>
+                <div className="row nowrap" style={{ gap: 8 }}>
+                  <Button icon={FilePlus2} onClick={() => setModal('absence')}>
+                    {t('absence.button')}
+                  </Button>
+                  {s.status === 'active' && (
+                    <Button variant="danger" icon={UserX} onClick={() => setModal('terminate')}>
+                      {t('terminate.button')}
+                    </Button>
+                  )}
+                </div>
               )}
             </div>
           )}
@@ -304,11 +311,48 @@ export default function StudentProfile({ id, nav }) {
       {modal === 'edit' && <StudentForm student={s} onClose={() => setModal(null)} onSaved={() => setModal(null)} />}
       {modal === 'charge' && <MonthlyPaymentModal student={s} charges={data.charges} onClose={() => setModal(null)} />}
       {modal === 'absence' && <AbsenceModal student={s} onClose={() => setModal(null)} />}
+      {modal === 'terminate' && <TerminateModal student={s} onClose={() => setModal(null)} />}
       {modal === 'contract' && (
         <NewContractModal studentId={s.id} onClose={() => setModal(null)} onCreated={(cid) => setModal({ contract: cid })} />
       )}
       {modal?.contract && <ContractModal id={modal.contract} onClose={() => setModal(null)} />}
     </>
+  );
+}
+
+// «Դադարեցում»: the date the student stops; they become inactive from it.
+function TerminateModal({ student, onClose }) {
+  const t = useT();
+  const act = useAction();
+  const [date, setDate] = useState(todayIso());
+  const [reason, setReason] = useState('');
+  const save = async () => {
+    if (await act(() => rpc('students.terminate', { id: student.id, date, reason }), t('terminate.done'))) onClose();
+  };
+  return (
+    <Modal
+      title={t('terminate.title', { name: `${student.first_name} ${student.last_name}` })}
+      onClose={onClose}
+      width={460}
+      footer={
+        <>
+          <Button onClick={onClose}>{t('common.cancel')}</Button>
+          <Button variant="danger-solid" icon={UserX} onClick={save} disabled={!date}>
+            {t('terminate.confirm')}
+          </Button>
+        </>
+      }
+    >
+      <div className="stack" style={{ gap: 14 }}>
+        <div className="muted small">{t('terminate.text')}</div>
+        <Field label={t('students.leaveDate')}>
+          <input className="input" type="date" value={date} onChange={(e) => setDate(e.target.value)} autoFocus />
+        </Field>
+        <Field label={t('terminate.reason')}>
+          <input className="input" value={reason} onChange={(e) => setReason(e.target.value)} />
+        </Field>
+      </div>
+    </Modal>
   );
 }
 
