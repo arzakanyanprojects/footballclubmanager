@@ -339,4 +339,116 @@ async function buildStudentsTransfer({ columns, rows, charges }) {
   return wb.xlsx.writeBuffer();
 }
 
-module.exports = { buildReport, buildForm, buildSchedule, buildStudentsTransfer };
+// A colour mixed with white (amount 0..1 of white), for light header rows.
+const soften = (argb, amount) => {
+  const c = [2, 4, 6].map((i) => parseInt(argb.slice(i, i + 2), 16));
+  return 'FF' + c.map((v) => Math.round(v + (255 - v) * amount).toString(16).padStart(2, '0')).join('').toUpperCase();
+};
+// Month cells (payments): fill / text colour per status, like the students list.
+const MONTH_STYLE = {
+  paid: ['FFE5F4EB', 'FF0E8A43'],
+  excused: ['FFE3F0FB', 'FF1E6FC2'],
+  overdue: ['FFFDE8E8', 'FFC62828'],
+  unpaid: ['FFFFF4E0', 'FFB26A00'],
+  waived: ['FFF0F0F0', 'FF6B737B'],
+  notyet: ['FFBFBFBF', 'FF6B737B'],
+};
+
+/**
+ * Groups by year: one sheet per year (2012, 2013, …), each in its own colour. On a sheet, every group
+ * is a block: a big merged title (group, coach, assistant) in the sheet colour, a header row, its
+ * students, then an empty separator row before the next group.
+ * columns: [{ key, header, width, type: 'text' | 'index' | 'date' | 'money' | 'month' }]
+ * sheets: [{ name, color: 'FFRRGGBB', groups: [{ title, rows: [{ [key]: value, _inactive, [monthKey]: { mark, status } }] }] }]
+ */
+async function buildGroups({ columns, sheets, emptyText = '', currencySymbol = '֏' }) {
+  const wb = new ExcelJS.Workbook();
+  wb.creator = 'FC Manager';
+  wb.created = new Date();
+  const moneyFmt = `#,##0 "${currencySymbol}"`;
+  const last = columns.length;
+  for (const sheet of sheets) {
+    const ws = wb.addWorksheet(String(sheet.name).slice(0, 31), {
+      properties: { tabColor: { argb: sheet.color } },
+      views: [{ showGridLines: false }],
+      pageSetup: {
+        paperSize: 9,
+        orientation: last > 9 ? 'landscape' : 'portrait',
+        fitToPage: true,
+        fitToWidth: 1,
+        fitToHeight: 0,
+        margins: { left: 0.4, right: 0.4, top: 0.5, bottom: 0.5, header: 0.2, footer: 0.2 },
+      },
+      headerFooter: { oddFooter: '&L&8FC Manager&R&8&P / &N' },
+    });
+    ws.columns = columns.map((c) => ({ width: c.width || (c.type === 'month' ? 6 : 16) }));
+    const soft = soften(sheet.color, 0.82);
+    let r = 1;
+    sheet.groups.forEach((g, gi) => {
+      if (gi > 0) {
+        ws.getRow(r).height = 18; // separator between groups
+        r++;
+      }
+      // Title: group · coach · assistant
+      ws.mergeCells(r, 1, r, last);
+      Object.assign(ws.getCell(r, 1), {
+        value: g.title,
+        font: { name: FONT, size: 13, bold: true, color: { argb: 'FFFFFFFF' } },
+        fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: sheet.color } },
+        alignment: { vertical: 'middle', horizontal: 'left', indent: 1 },
+      });
+      ws.getRow(r).height = 28;
+      r++;
+      // Header
+      columns.forEach((c, i) => {
+        Object.assign(ws.getCell(r, i + 1), {
+          value: c.header,
+          font: { name: FONT, size: 10, bold: true, color: { argb: INK } },
+          fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: soft } },
+          alignment: { vertical: 'middle', horizontal: c.type === 'month' || c.type === 'index' ? 'center' : 'left', wrapText: true },
+          border,
+        });
+      });
+      ws.getRow(r).height = 30;
+      r++;
+      if (!g.rows.length) {
+        ws.mergeCells(r, 1, r, last);
+        Object.assign(ws.getCell(r, 1), { value: emptyText, font: { name: FONT, size: 10, italic: true, color: { argb: MUTED } }, border });
+        r++;
+      }
+      g.rows.forEach((row) => {
+        const color = row._inactive ? MUTED : INK;
+        columns.forEach((c, i) => {
+          const cell = ws.getCell(r, i + 1);
+          const v = row[c.key];
+          cell.border = border;
+          cell.font = { name: FONT, size: 10, color: { argb: color }, italic: !!row._inactive };
+          cell.alignment = { vertical: 'middle', wrapText: c.type === 'text' };
+          if (c.type === 'month') {
+            const st = v?.status;
+            cell.value = v?.mark || '';
+            cell.alignment = { vertical: 'middle', horizontal: 'center' };
+            if (MONTH_STYLE[st]) {
+              cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: MONTH_STYLE[st][0] } };
+              cell.font = { name: FONT, size: 10, bold: true, color: { argb: MONTH_STYLE[st][1] } };
+            }
+          } else if (c.type === 'date') {
+            cell.value = toDate(v);
+            cell.numFmt = 'dd.mm.yyyy';
+          } else if (c.type === 'money') {
+            cell.value = v == null || v === '' ? null : Number(v);
+            cell.numFmt = moneyFmt;
+          } else if (c.type === 'index') {
+            cell.value = v;
+            cell.alignment = { vertical: 'middle', horizontal: 'center' };
+          } else cell.value = v ?? '';
+        });
+        r++;
+      });
+    });
+  }
+  if (!sheets.length) wb.addWorksheet('—');
+  return wb.xlsx.writeBuffer();
+}
+
+module.exports = { buildReport, buildForm, buildSchedule, buildStudentsTransfer, buildGroups };

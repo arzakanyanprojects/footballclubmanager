@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { Plus, Shapes, Users, Pencil, Trash2, LayoutGrid, List, CalendarCheck } from 'lucide-react';
+import { Plus, Shapes, Users, Pencil, Trash2, LayoutGrid, List, CalendarCheck, FileSpreadsheet } from 'lucide-react';
+import { GroupsExportModal } from '../components/GroupsExport';
 import { useT } from '../i18n';
 import { useCan } from '../components/Auth';
 import { useRpc, rpc } from '../lib';
@@ -15,6 +16,7 @@ export default function Groups({ nav }) {
   const toast = useToast();
   const { data, loading } = useRpc('groups.list');
   const [editing, setEditing] = useState(null);
+  const [exporting, setExporting] = useState(false);
   const [search, setSearch] = useState('');
   const [view, setView] = useState(() => {
     try {
@@ -74,6 +76,11 @@ export default function Groups({ nav }) {
           </div>
         </div>
         <div className="spacer" />
+        {data?.length > 0 && (
+          <Button icon={FileSpreadsheet} onClick={() => setExporting(true)}>
+            {t('groupsExport.button')}
+          </Button>
+        )}
         {canEdit && (
           <Button variant="primary" icon={Plus} onClick={() => setEditing({})}>
             {t('groups.add')}
@@ -231,6 +238,7 @@ export default function Groups({ nav }) {
       )}
 
       {editing && <GroupModal group={editing} onClose={() => setEditing(null)} />}
+      {exporting && <GroupsExportModal groups={data} onClose={() => setExporting(false)} />}
     </>
   );
 }

@@ -29,11 +29,11 @@ export const SERVICES = [
   'Ֆուտբոլ անհ.16',
 ];
 
-const MONTH_MARK = { paid: '✓', overdue: '✕', unpaid: '•', waived: '—', excused: '✓', notyet: '' };
+export const MONTH_MARK = { paid: '✓', overdue: '✕', unpaid: '•', waived: '—', excused: '✓', notyet: '' };
 
 // Status of one monthly fee: paid, overdue, unpaid (not yet due), waived, notyet (before the student's
 // join month: not contracted yet — a grey square), or none (no fee for that month).
-function monthStatus(m, period, joinDate) {
+export function monthStatus(m, period, joinDate) {
   if (!m) return period && joinDate && period < joinDate.slice(0, 7) ? 'notyet' : 'none';
   if (m.status === 'waived' && m.excused_by) return 'excused';
   if (m.status !== 'unpaid') return m.status;

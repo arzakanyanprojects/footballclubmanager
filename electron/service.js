@@ -516,7 +516,7 @@ function createService(db, { onWrite, getNotify } = {}) {
         `SELECT s.id, s.first_name, s.last_name, s.birth_date, s.phone, s.parent_name, s.parent_phone,
                 s.group_id, g.name AS group_name, g.color AS group_color, g.coach AS group_coach, s.monthly_fee, s.join_date, s.status, s.inactive_reason, s.medical_doc, s.patronymic, s.category, s.contract_no, s.service,
                 s.parent_first_name, s.parent_last_name, s.parent_doc_no, s.parent_doc_issuer, s.parent_doc_date, s.parent_ssn, s.parent_address, s.parent_email, s.parent_messenger,
-                s.document_no, s.notes,
+                s.document_no, s.notes, s.leave_date,
                 IFNULL((SELECT SUM(amount) FROM charges c
                         WHERE c.student_id = s.id AND c.status = 'unpaid' AND c.due_date < :t), 0) AS overdue,
                 IFNULL((SELECT SUM(amount) FROM charges c
