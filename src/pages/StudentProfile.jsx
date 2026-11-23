@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from 'react';
 import {
-  ArrowLeft, Pencil, Plus, FileSignature, Trash2, Phone, Cake, Shapes, CalendarPlus, Wallet, CalendarCheck, IdCard, UserRound, FileText, Users, StickyNote, FolderOpen, Upload, ExternalLink, Download, Stethoscope, FilePlus2, Printer, UserX,
+  ArrowLeft, Pencil, Plus, FileSignature, Trash2, Phone, Cake, Shapes, CalendarPlus, Wallet, CalendarCheck, IdCard, UserRound, FileText, Users, StickyNote, FolderOpen, Upload, ExternalLink, Download, Stethoscope, FilePlus2, Printer, UserX, Link2, History,
 } from 'lucide-react';
 import { useT } from '../i18n';
 import { useCan } from '../components/Auth';
@@ -10,6 +10,7 @@ import { StudentForm, FormSection } from './Students';
 import { AbsenceModal, printStoredFile, openStoredFile } from '../components/Absence';
 import { ChargesTable, MonthlyPaymentModal, chargeStatus } from './Payments';
 import { NewContractModal, ContractModal, CONTRACT_TONE } from './Contracts';
+import { RelatedTab, HistoryTab } from '../components/StudentExtras';
 
 export default function StudentProfile({ id, nav }) {
   const canEdit = useCan('students');
@@ -149,6 +150,8 @@ export default function StudentProfile({ id, nav }) {
           { id: 'payments', label: t('nav.payments'), icon: Wallet, count: data.charges.filter((c) => c.status === 'unpaid').length || null },
           { id: 'attendance', label: t('nav.attendance'), icon: CalendarCheck },
           { id: 'contracts', label: t('files.tab'), icon: FolderOpen, count: data.contracts.length + (data.files || []).length || null },
+          { id: 'related', label: t('related.tab'), icon: Link2, count: (data.related || []).length || null },
+          { id: 'history', label: t('history.tab'), icon: History },
         ]}
       />
 
@@ -245,6 +248,9 @@ export default function StudentProfile({ id, nav }) {
           )}
         </>
       )}
+
+      {tab === 'related' && <RelatedTab student={s} related={data.related || []} nav={nav} />}
+      {tab === 'history' && <HistoryTab student={s} />}
 
       {tab === 'info' && (
         <div className="card card-pad details-form">

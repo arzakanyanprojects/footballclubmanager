@@ -88,7 +88,7 @@ export default function Students({ nav, route }) {
       cell: (s) => (
         <td className="sticky-col">
           <div className="cell-person">
-            <Avatar first={s.first_name} last={s.last_name} seed={s.id} />
+            <Avatar first={s.first_name} last={s.last_name} seed={s.id} size={28} />
             <div>
               <div className="name nowrap">
                 {s.first_name} {s.last_name}
@@ -125,7 +125,7 @@ export default function Students({ nav, route }) {
       head: () => <th>{t('students.parent')}</th>,
       cell: (s) => (
         <td>
-          <div>{s.parent_name || '—'}</div>
+          <div className="parent-name" title={s.parent_name || ''}>{s.parent_name || '—'}</div>
           <div className="small muted">{s.parent_phone}</div>
         </td>
       ),
@@ -303,7 +303,7 @@ export default function Students({ nav, route }) {
         </div>
       ) : (
         <div className="table-wrap">
-          <table className="table">
+          <table className="table students-table">
             <thead>
               <tr>{columns.map((c) => <Fragment key={c.id}>{c.head()}</Fragment>)}</tr>
             </thead>

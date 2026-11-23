@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { FlaskConical, Trash2, Building2, Monitor, Network, History, Save, RefreshCw, Copy, LogOut, Server, Receipt, UserCog, ImagePlus, BellRing, Database, Printer } from 'lucide-react';
-import { useT } from '../i18n';
+import { FlaskConical, Trash2, Building2, Monitor, Network, History, Save, RefreshCw, Copy, LogOut, Server, Receipt, UserCog, ImagePlus, BellRing, Database, Printer, Plus } from 'lucide-react';
+import { useT, monthName } from '../i18n';
+import { feeShares, parseHolidays } from '../holidays';
 import { useRpc, rpc, fmtDateTime, currentPeriod, fitImage } from '../lib';
 import { HdmSettings } from '../components/Hdm';
 import { ThermalSettings } from '../components/Thermal';
@@ -128,6 +129,7 @@ function ClubSettings() {
           <Field label={t('settings.billingStart')} hint={t('settings.billingStartHint')}>
             <input className="input" type="month" value={f.billing_start || currentPeriod()} onChange={set('billing_start')} />
           </Field>
+          <Holidays value={f.holidays} onChange={(v) => setF({ ...f, holidays: v })} />
         </div>
         <div className="row" style={{ justifyContent: 'flex-end' }}>
           <Button variant="primary" icon={Save} onClick={() => act(() => rpc('settings.update', f), t('common.saved'))}>
@@ -360,5 +362,49 @@ function ActivityLog() {
         </tbody>
       </table>
     </div>
+  );
+}
+
+// Holidays: date ranges (e.g. 15.12 – 15.01). The fee works in half-months, so the months they cover cost
+// less: here December and January cost 50% each. Stored as JSON [{ from, to }] in the club settings.
+function Holidays({ value, onChange }) {
+  const t = useT();
+  const list = parseHolidays(value);
+  const save = (next) => onChange(JSON.stringify(next));
+  const shares = feeShares(list);
+  return (
+    <Field label={t('settings.holidays')} hint={t('settings.holidaysHint')} className="span-2">
+      <div className="stack" style={{ gap: 6 }}>
+        {list.map((h, i) => (
+          <div className="row nowrap" key={i}>
+            <span className="small muted">{t('settings.holidayFrom')}</span>
+            <input className="input" type="date" style={{ maxWidth: 170 }} value={h.from || ''} onChange={(e) => save(list.map((x, j) => (j === i ? { ...x, from: e.target.value } : x)))} />
+            <span className="small muted">{t('settings.holidayTo')}</span>
+            <input
+              className="input"
+              type="date"
+              style={{ maxWidth: 170 }}
+              value={h.to || ''}
+              min={h.from || undefined}
+              onChange={(e) => save(list.map((x, j) => (j === i ? { ...x, to: e.target.value } : x)))}
+            />
+            <Button variant="ghost" icon={Trash2} onClick={() => save(list.filter((_, j) => j !== i))} />
+          </div>
+        ))}
+        <div className="row wrap">
+          <Button size="sm" icon={Plus} onClick={() => save([...list, { from: '', to: '' }])}>
+            {t('settings.holidayAdd')}
+          </Button>
+          {Object.keys(shares).length > 0 && (
+            <span className="small" style={{ color: 'var(--info)' }}>
+              {Object.entries(shares)
+                .sort(([a], [b]) => a.localeCompare(b))
+                .map(([p, n]) => `${monthName(t, p)} — ${n === 0 ? t('settings.feeMonthFree') : t('settings.feeMonthShare', { n })}`)
+                .join(' · ')}
+            </span>
+          )}
+        </div>
+      </div>
+    </Field>
   );
 }

@@ -150,6 +150,14 @@ function createAuth({ all, one, run, AppError, log }) {
       if (!can(a, 'contracts', 'view')) r.contracts = [];
       return r;
     }
+    if (method === 'students.history') {
+      return result.filter(
+        (e) =>
+          (!e.action.startsWith('charge.') || can(a, 'payments', 'view')) &&
+          (!e.action.startsWith('attendance.') || can(a, 'attendance', 'view')) &&
+          (!e.action.startsWith('contract.') || can(a, 'contracts', 'view'))
+      );
+    }
     if (method === 'training.month' && !can(a, 'payments', 'view')) {
       return { ...result, students: (result.students || []).map((s) => ({ ...s, unpaid: 0, overdue: 0 })) };
     }

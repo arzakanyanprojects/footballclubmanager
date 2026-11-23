@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import { Plus, Download, Wallet, CheckCircle2, Pencil, Ban, RotateCcw, Trash2, Printer, Package, Receipt, Undo2 } from 'lucide-react';
 import { useT, monthName } from '../i18n';
+import { feeShares as holidayShares, parseHolidays } from '../holidays';
 import { useCan } from '../components/Auth';
 import { useColumns } from '../components/Columns';
 import { SendRemindersButton } from '../components/Notify';
@@ -428,6 +429,10 @@ function AbsencePicker({ value, onChange, month }) {
 }
 const absenceOk = (v) => !v || (v.from && v.to && v.to >= v.from);
 
+// Holiday months from the club's holidays (date ranges): { "2026-12": 50 } — that month costs 50% of the fee.
+export const feeShares = (club) => holidayShares(parseHolidays(club?.holidays));
+export const monthFee = (fee, period, shares) => (shares?.[period] != null ? Math.round((Number(fee) * Number(shares[period])) / 100) : Number(fee) || 0);
+
 function MethodPicker({ value, onChange }) {
   const t = useT();
   return (
@@ -582,14 +587,15 @@ export function ChargeModal({ studentId: fixedStudent, onClose }) {
   const [note, setNote] = useState('');
   const hdm = useHdm();
   const customer = useCustomerReceipt();
+  const club = useClub();
 
   useEffect(() => {
     if (fixedStudent) rpc('students.get', { id: fixedStudent }).then((r) => setStudent(r.student)).catch(() => {});
   }, [fixedStudent]);
 
   useEffect(() => {
-    if (!amountTouched && kind === 'monthly' && student) setAmount(student.monthly_fee);
-  }, [kind, student, amountTouched]);
+    if (!amountTouched && kind === 'monthly' && student) setAmount(monthFee(student.monthly_fee, period, feeShares(club)));
+  }, [kind, student, amountTouched, period]);
 
   const save = async () => {
     const label = kind === 'monthly' ? chargeLabel(t, { kind, period }) : description.trim() || t('charge.other');
@@ -952,7 +958,11 @@ export function MonthlyPaymentModal({ student, charges, onClose }) {
   const [note, setNote] = useState('');
   const [absence, setAbsence] = useState(null);
   const selected = periods.filter((p) => picked.has(p));
-  const total = selected.length * (Number(amount) || 0);
+  const club = useClub();
+  const shares = feeShares(club);
+  const amountOf = (p) => monthFee(amount, p, shares); // a holiday month costs its share of the fee
+  const total = selected.reduce((n, p) => n + amountOf(p), 0);
+  const holidays = selected.filter((p) => shares[p] != null);
 
   const toggle = (p) =>
     setPicked((s) => {
@@ -967,7 +977,7 @@ export function MonthlyPaymentModal({ student, charges, onClose }) {
     const pre = await hdm.beforePayment({
       method,
       student: who,
-      items: selected.map((p) => ({ label: chargeLabel(t, { kind: 'monthly', period: p }), amount: Number(amount) })),
+      items: selected.map((p) => ({ label: chargeLabel(t, { kind: 'monthly', period: p }), amount: amountOf(p) })),
     });
     if (pre === false) return;
     const ok = await act(
@@ -977,7 +987,7 @@ export function MonthlyPaymentModal({ student, charges, onClose }) {
     if (!ok) return;
     onClose();
     if (!ok.ids?.length) return;
-    const items = ok.ids.map((id, i) => ({ id, label: chargeLabel(t, { kind: 'monthly', period: ok.periods[i] }), amount: Number(amount) }));
+    const items = ok.ids.map((id, i) => ({ id, label: chargeLabel(t, { kind: 'monthly', period: ok.periods[i] }), amount: amountOf(ok.periods[i]) }));
     let r = pre;
     if (pre) await rpc('charges.setReceipt', { ids: ok.ids, receipt: pre.receiptNo, crn: pre.crn, fiscal: pre.fiscalNo }).catch(() => {});
     else r = await hdm.afterPayment({ method, student: who, items });
@@ -1026,6 +1036,11 @@ export function MonthlyPaymentModal({ student, charges, onClose }) {
           <Field label={t('payments.paidAt')}>
             <input className="input" type="date" value={paidAt} onChange={(e) => setPaidAt(e.target.value)} />
           </Field>
+          {holidays.length > 0 && (
+            <div className="span-full small" style={{ color: 'var(--info)' }}>
+              {holidays.map((p) => t('payments.holidayShare', { month: monthName(t, p), n: shares[p] }) + ` — ${money(amountOf(p), club.currency)}`).join(' · ')}
+            </div>
+          )}
           <AbsencePicker value={absence} month={selected[0]} onChange={setAbsence} />
           <Field label={t('payments.method')} className="span-2">
             <MethodPicker value={method} onChange={setMethod} />

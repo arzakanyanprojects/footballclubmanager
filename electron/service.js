@@ -1,6 +1,7 @@
 // All data operations. The host PC runs these directly; client PCs reach them over the LAN
 // through the same method names (see server.js / remote.js), so there is one code path.
 
+const { feeShares: holidayShares, parseHolidays } = require('./holidays');
 const word = require('./word');
 const { createAuth } = require('./auth');
 
@@ -69,12 +70,68 @@ function createService(db, { onWrite, getNotify } = {}) {
   const run = (sql, p) => stmt(sql).run(bind(sql, p));
 
   const settings = () => Object.fromEntries(all('SELECT key, value FROM settings').map((r) => [r.key, r.value]));
-  const log = (ctx, action, details) =>
-    run('INSERT INTO activity_log (user, action, details) VALUES (:user, :action, :details)', {
+  // studentId / meta: the student the action is about and its details (for the student's history).
+  const log = (ctx, action, details, studentId = null, meta = null) =>
+    run('INSERT INTO activity_log (user, action, details, student_id, meta) VALUES (:user, :action, :details, :studentId, :meta)', {
       user: ctx.user || null,
       action,
       details: details || null,
+      studentId: studentId || null,
+      meta: meta ? JSON.stringify(meta) : null,
     });
+  // A charge as the history shows it.
+  const chargeMeta = (id) => {
+    const c = one('SELECT id, kind, period, description, amount, status, method, paid_at, hdm_receipt FROM charges WHERE id = :id', { id });
+    return c ? { chargeId: c.id, kind: c.kind, period: c.period, description: c.description, amount: c.amount, status: c.status, method: c.method, paidAt: c.paid_at, hdm: c.hdm_receipt } : null;
+  };
+  // Student fields compared for «what changed» (photo only as changed / not).
+  const HISTORY_FIELDS = ['first_name', 'last_name', 'patronymic', 'birth_date', 'document_no', 'contract_no', 'category', 'service', 'medical_doc',
+    'group_id', 'monthly_fee', 'join_date', 'status', 'inactive_reason', 'leave_date', 'notes',
+    'parent_first_name', 'parent_last_name', 'parent_phone', 'parent_messenger', 'parent_email', 'parent_ssn', 'parent_doc_no', 'parent_doc_issuer',
+    'parent_doc_date', 'parent_address', 'phone', 'email', 'address', 'photo'];
+  const diffStudent = (before, after) => {
+    const groupName = (id) => (id ? one('SELECT name FROM groups WHERE id = :id', { id })?.name || `#${id}` : '');
+    const out = [];
+    for (const k of HISTORY_FIELDS) {
+      const a = before?.[k] ?? '';
+      const b = after?.[k] ?? '';
+      if (String(a) === String(b)) continue;
+      if (k === 'photo') out.push([k, a ? '•' : '', b ? '•' : '']);
+      else if (k === 'group_id') out.push(['group', groupName(a), groupName(b)]);
+      else out.push([k, a, b]);
+    }
+    return out;
+  };
+  // Students connected to this one through links (directly or through another linked student).
+  const relatedOf = (id) => {
+    const ids = new Set([id]);
+    const queue = [id];
+    const direct = new Map();
+    while (queue.length) {
+      const cur = queue.shift();
+      for (const l of all('SELECT a_id, b_id, relation FROM student_links WHERE a_id = :c OR b_id = :c', { c: cur })) {
+        const other = l.a_id === cur ? l.b_id : l.a_id;
+        if (cur === id) direct.set(other, l.relation);
+        if (!ids.has(other)) {
+          ids.add(other);
+          queue.push(other);
+        }
+      }
+    }
+    ids.delete(id);
+    return [...ids]
+      .map((sid) => {
+        const r = one(
+          `SELECT s.id, s.first_name, s.last_name, s.patronymic, s.birth_date, s.status, s.category, s.contract_no, s.monthly_fee,
+                  g.name AS group_name, g.color AS group_color,
+                  IFNULL((SELECT SUM(amount) FROM charges c WHERE c.student_id = s.id AND c.status = 'unpaid' AND c.due_date < :t), 0) AS overdue
+           FROM students s LEFT JOIN groups g ON g.id = s.group_id WHERE s.id = :sid`,
+          { sid, t: today() }
+        );
+        return r ? { ...r, relation: direct.get(sid) ?? null, direct: direct.has(sid) } : null;
+      })
+      .filter(Boolean);
+  };
   const studentName = (id) => {
     const s = one('SELECT first_name, last_name FROM students WHERE id = :id', { id });
     return s ? `${s.first_name} ${s.last_name}` : `#${id}`;
@@ -82,6 +139,15 @@ function createService(db, { onWrite, getNotify } = {}) {
 
   // Create the monthly fee charge for every active student for every month up to now.
   // Idempotent thanks to the unique (student_id, period) index on monthly charges.
+  // Holidays (date ranges in the settings) → the share of the monthly fee each month costs, e.g. { "2026-12": 50 }.
+  const feeShares = () => holidayShares(parseHolidays(settings().holidays));
+  const feeFor = (fee, period, shares = feeShares()) => (shares[period] != null ? Math.round((Number(fee) * shares[period]) / 100) : Number(fee));
+  // SQL for a month's fee: the student's fee times the month's share.
+  const feeSql = (feeCol, periodCol, shares = feeShares()) => {
+    const cases = Object.entries(shares).map(([p, v]) => `WHEN '${p}' THEN ${Number(v) / 100}`);
+    return cases.length ? `CAST(ROUND(${feeCol} * (CASE ${periodCol} ${cases.join(' ')} ELSE 1 END)) AS INTEGER)` : feeCol;
+  };
+
   function ensureMonthlyCharges() {
     const s = settings();
     const dueDay = Math.min(Math.max(int(s.due_day, 10), 1), 28);
@@ -92,18 +158,22 @@ function createService(db, { onWrite, getNotify } = {}) {
          SELECT strftime('%Y-%m', date(p || '-01', '+1 month')) FROM months WHERE p < :current
        )
        INSERT OR IGNORE INTO charges (student_id, kind, period, amount, due_date, created_by)
-       SELECT st.id, 'monthly', m.p, st.monthly_fee, m.p || '-' || :dueDay, 'system'
+       SELECT st.id, 'monthly', m.p, ${feeSql('st.monthly_fee', 'm.p')}, m.p || '-' || :dueDay, 'system'
        FROM students st
        JOIN months m ON m.p >= substr(st.join_date, 1, 7)
                     AND m.p >= IFNULL(st.billing_from, '0000-00')
-       WHERE st.status = 'active' AND st.monthly_fee > 0`,
+       WHERE st.status = 'active' AND st.monthly_fee > 0
+         ${(() => {
+           const free = Object.entries(feeShares()).filter(([, v]) => v === 0).map(([p]) => `'${p}'`);
+           return free.length ? `AND m.p NOT IN (${free.join(', ')})` : ''; // months with no fee at all
+         })()}`,
       { start: s.billing_start || currentPeriod(), current: currentPeriod(), dueDay: pad(dueDay) }
     );
     return r.changes;
   }
 
   // ---------------------------------------------------------------- settings
-  const SETTING_KEYS = ['club_name', 'club_address', 'club_phone', 'director_name', 'currency', 'due_day', 'billing_start', 'club_logo'];
+  const SETTING_KEYS = ['club_name', 'club_address', 'club_phone', 'director_name', 'currency', 'due_day', 'billing_start', 'club_logo', 'holidays'];
 
   // A «Դիմում» period on a payment: both dates, the end not before the start; otherwise none.
   function absenceRange(from, to) {
@@ -384,6 +454,7 @@ function createService(db, { onWrite, getNotify } = {}) {
     'settings.get': () => settings(),
 
     'settings.update': (p, ctx) => {
+      const sharesBefore = feeShares();
       for (const key of SETTING_KEYS) {
         if (p[key] === undefined) continue;
         run('INSERT INTO settings (key, value) VALUES (:key, :value) ON CONFLICT(key) DO UPDATE SET value = excluded.value', {
@@ -391,6 +462,22 @@ function createService(db, { onWrite, getNotify } = {}) {
           value: p[key] == null ? '' : String(p[key]),
         });
       }
+      // Holiday months changed: unpaid monthly fees of those months take the new share (or the full fee again).
+      const sharesAfter = feeShares();
+      const changed = [...new Set([...Object.keys(sharesBefore), ...Object.keys(sharesAfter)])].filter((m) => sharesBefore[m] !== sharesAfter[m]);
+      for (const period of changed) {
+        if (sharesAfter[period] === 0) {
+          run(`DELETE FROM charges WHERE kind = 'monthly' AND status = 'unpaid' AND period = :period AND excused_by IS NULL`, { period });
+          continue;
+        }
+        run(
+          `UPDATE charges SET amount = ${feeSql('(SELECT monthly_fee FROM students s WHERE s.id = charges.student_id)', 'charges.period', sharesAfter)}
+           WHERE kind = 'monthly' AND status = 'unpaid' AND period = :period AND excused_by IS NULL
+             AND (SELECT monthly_fee FROM students s WHERE s.id = charges.student_id) > 0`,
+          { period }
+        );
+      }
+      if (changed.length) ensureMonthlyCharges();
       log(ctx, 'settings.updated');
       return settings();
     },
@@ -529,7 +616,7 @@ function createService(db, { onWrite, getNotify } = {}) {
          FROM students s LEFT JOIN groups g ON g.id = s.group_id
          WHERE (:status IS NULL OR s.status = :status)
            AND (:groupId IS NULL OR s.group_id = :groupId)
-           AND (:search IS NULL OR ulower(s.first_name || ' ' || s.last_name || ' ' || s.first_name || ' ' ||
+           AND (:search IS NULL OR ulower(s.first_name || ' ' || s.last_name || ' ' || IFNULL(s.patronymic, '') || ' ' || s.first_name || ' ' ||
                 IFNULL(s.phone, '') || ' ' || IFNULL(s.parent_name, '') || ' ' || IFNULL(s.parent_phone, '') || ' ' ||
                 IFNULL(s.contract_no, ''))
                 LIKE '%' || ulower(:search) || '%')
@@ -554,6 +641,8 @@ function createService(db, { onWrite, getNotify } = {}) {
       if (!student) throw new AppError('NOT_FOUND');
       return {
         student,
+        // Linked students (brothers, sisters…): everyone connected through links.
+        related: relatedOf(Number(id)),
         // The group's usual training week (for the customer receipt).
         training: student.group_id
           ? all('SELECT weekday, start, end, pitch FROM schedule_base WHERE group_id = :g ORDER BY ((weekday + 6) % 7), start', { g: student.group_id })
@@ -627,6 +716,7 @@ function createService(db, { onWrite, getNotify } = {}) {
 
       if (p.id) {
         const prev = one('SELECT status, monthly_fee, leave_date, billing_from FROM students WHERE id = :id', { id: p.id });
+        const before = one('SELECT * FROM students WHERE id = :id', { id: p.id });
         if (!prev) throw new AppError('NOT_FOUND');
         row.leave_date = prev.leave_date;
         row.billing_from = prev.billing_from;
@@ -651,13 +741,12 @@ function createService(db, { onWrite, getNotify } = {}) {
         );
         // A changed fee applies to this month's and future unpaid monthly charges.
         if (prev.monthly_fee !== row.monthly_fee) {
-          run(
-            `UPDATE charges SET amount = :fee
-             WHERE student_id = :id AND kind = 'monthly' AND status = 'unpaid' AND period >= :period`,
-            { fee: row.monthly_fee, id: p.id, period: currentPeriod() }
-          );
+          const shares = feeShares();
+          for (const c of all(`SELECT id, period FROM charges WHERE student_id = :id AND kind = 'monthly' AND status = 'unpaid' AND period >= :period`, { id: p.id, period: currentPeriod() }))
+            run('UPDATE charges SET amount = :fee WHERE id = :id', { id: c.id, fee: feeFor(row.monthly_fee, c.period, shares) });
         }
-        log(ctx, 'student.updated', `${row.first_name} ${row.last_name}`);
+        const changes = diffStudent(before, one('SELECT * FROM students WHERE id = :id', { id: p.id }));
+        if (changes.length) log(ctx, 'student.updated', `${row.first_name} ${row.last_name}`, p.id, { changes });
         ensureMonthlyCharges();
         return { id: p.id };
       }
@@ -671,7 +760,7 @@ function createService(db, { onWrite, getNotify } = {}) {
            :parent_first_name, :parent_last_name, :parent_doc_no, :parent_doc_issuer, :parent_doc_date, :parent_ssn, :parent_address, :parent_email, :parent_messenger)`,
         row
       );
-      log(ctx, 'student.created', `${row.first_name} ${row.last_name}`);
+      log(ctx, 'student.created', `${row.first_name} ${row.last_name}`, Number(r.lastInsertRowid));
       ensureMonthlyCharges();
       return { id: Number(r.lastInsertRowid) };
     },
@@ -693,7 +782,7 @@ function createService(db, { onWrite, getNotify } = {}) {
         `DELETE FROM charges WHERE student_id = :id AND kind = 'monthly' AND status = 'unpaid' AND period > :month`,
         { id, month: d.slice(0, 7) }
       ).changes;
-      log(ctx, 'student.terminated', `${studentName(id)} — ${d.split('-').reverse().join('.')}`);
+      log(ctx, 'student.terminated', `${studentName(id)} — ${d.split('-').reverse().join('.')}`, id, { date: d, reason: str(reason), removed });
       return { removed };
     },
 
@@ -748,6 +837,66 @@ function createService(db, { onWrite, getNotify } = {}) {
       });
       log(ctx, 'students.imported', `${result.created} / ${result.updated} / ${result.skipped}`);
       return result;
+    },
+
+    // ---------------------------------------------------------------- linked students (siblings…)
+    // A link is stored once per pair; everyone connected through links counts as related.
+    'students.link': ({ id, otherId, relation, setCategory }, ctx) => {
+      const a = Number(id);
+      const b = Number(otherId);
+      if (!a || !b || a === b) throw new AppError('NOT_FOUND');
+      if (!one('SELECT id FROM students WHERE id = :a', { a }) || !one('SELECT id FROM students WHERE id = :b', { b })) throw new AppError('NOT_FOUND');
+      const [x, y] = a < b ? [a, b] : [b, a];
+      run('INSERT OR IGNORE INTO student_links (a_id, b_id, relation, created_by) VALUES (:x, :y, :relation, :user)', { x, y, relation: str(relation), user: ctx.user || null });
+      // «2 և ավել երեխա»: the added brother / sister gets the siblings category (unless they already have one).
+      if (setCategory) run(`UPDATE students SET category = 'siblings' WHERE id = :b AND (category IS NULL OR category = '')`, { b });
+      log(ctx, 'student.linked', `${studentName(a)} ↔ ${studentName(b)}`, a, { otherId: b, other: studentName(b), relation: str(relation) });
+      log(ctx, 'student.linked', `${studentName(b)} ↔ ${studentName(a)}`, b, { otherId: a, other: studentName(a), relation: str(relation) });
+      return true;
+    },
+    'students.unlink': ({ id, otherId }, ctx) => {
+      const a = Number(id);
+      const b = Number(otherId);
+      run('DELETE FROM student_links WHERE (a_id = :a AND b_id = :b) OR (a_id = :b AND b_id = :a)', { a, b });
+      log(ctx, 'student.unlinked', `${studentName(a)} ↔ ${studentName(b)}`, a, { otherId: b, other: studentName(b) });
+      log(ctx, 'student.unlinked', `${studentName(b)} ↔ ${studentName(a)}`, b, { otherId: a, other: studentName(a) });
+      return true;
+    },
+
+    // ---------------------------------------------------------------- a student's history («Գործողություններ»)
+    // Everything recorded about the student, plus what the data itself shows (payments, documents,
+    // applications, contracts and attendance from before the history was kept).
+    'students.history': ({ id }) => {
+      const logs = all('SELECT id, at, user, action, details, meta FROM activity_log WHERE student_id = :id ORDER BY id DESC', { id }).map((l) => ({
+        ...l,
+        meta: l.meta ? JSON.parse(l.meta) : null,
+      }));
+      const seen = (actions, key, value) => logs.some((l) => actions.includes(l.action) && l.meta?.[key] === value);
+      const events = [...logs];
+      const s = one('SELECT created_at FROM students WHERE id = :id', { id });
+      if (s && !logs.some((l) => ['student.created', 'student.transferred'].includes(l.action)))
+        events.push({ at: s.created_at, user: null, action: 'student.created', derived: true });
+      for (const c of all('SELECT * FROM charges WHERE student_id = :id', { id })) {
+        if (c.status === 'paid' && c.paid_at && !seen(['charge.paid', 'charge.created_paid'], 'chargeId', c.id))
+          events.push({
+            at: c.paid_at, user: c.paid_by, action: 'charge.paid', derived: true,
+            meta: { chargeId: c.id, kind: c.kind, period: c.period, description: c.description, amount: c.amount, method: c.method, hdm: c.hdm_receipt },
+          });
+        if (c.status === 'waived' && c.excused_by)
+          events.push({ at: c.created_at, user: null, action: 'charge.excused', derived: true, meta: { chargeId: c.id, kind: c.kind, period: c.period, amount: c.amount } });
+      }
+      for (const f of all('SELECT id, kind, file_name, created_at, created_by FROM student_files WHERE student_id = :id', { id }))
+        if (!seen(['file.uploaded', 'application.created'], 'fileId', f.id))
+          events.push({ at: f.created_at, user: f.created_by, action: 'file.uploaded', derived: true, meta: { fileId: f.id, name: f.file_name, kind: f.kind } });
+      for (const a of all('SELECT * FROM absences WHERE student_id = :id', { id }))
+        if (!seen(['application.created'], 'absenceId', a.id))
+          events.push({ at: a.created_at, user: a.created_by, action: 'application.created', derived: true, meta: { absenceId: a.id, from: a.date_from, to: a.date_to, reason: a.reason } });
+      for (const c of all('SELECT number, created_at, created_by, status FROM contracts WHERE student_id = :id', { id }))
+        if (!seen(['contract.created'], 'number', c.number || null))
+          events.push({ at: c.created_at, user: c.created_by, action: 'contract.created', derived: true, meta: { number: c.number, status: c.status } });
+      for (const a of all('SELECT date, status, marked_by FROM attendance WHERE student_id = :id', { id }))
+        events.push({ at: `${a.date} 00:00:00`, user: a.marked_by, action: 'attendance.mark', derived: true, meta: { date: a.date, status: a.status } });
+      return events.sort((x, y) => String(y.at).localeCompare(String(x.at)) || (y.id || 0) - (x.id || 0));
     },
 
     // ---------------------------------------------------------------- full transfer to another FC Manager
@@ -848,9 +997,11 @@ function createService(db, { onWrite, getNotify } = {}) {
           const keys = Object.keys(s).filter((k) => tcols.students.has(k) && !['id', 'created_at'].includes(k));
           run(`UPDATE students SET ${keys.map((k) => `${k} = :${k}`).join(', ')}, group_id = :__gid WHERE id = :__id`, { ...s, __gid: gid, __id: sid });
           res.updated++;
+          log(ctx, 'student.transferUpdated', `${s.first_name} ${s.last_name}`, sid, { file: str(data.fileName) });
         } else {
           sid = insert('students', { ...s, group_id: gid });
           res.created++;
+          log(ctx, 'student.transferred', `${s.first_name} ${s.last_name}`, sid, { file: str(data.fileName), exportedAt: data.exportedAt });
         }
 
         // Uploaded documents (skipped when the same file is already there).
@@ -963,7 +1114,7 @@ function createService(db, { onWrite, getNotify } = {}) {
       );
       // An uploaded medical certificate means it has been provided.
       if (k === 'medical') run('UPDATE students SET medical_doc = 1 WHERE id = :id', { id: studentId });
-      log(ctx, 'file.uploaded', `${studentName(studentId)} — ${str(name)}`);
+      log(ctx, 'file.uploaded', `${studentName(studentId)} — ${str(name)}`, studentId, { fileId: Number(r.lastInsertRowid), name: str(name), kind: k });
       return { id: Number(r.lastInsertRowid) };
     },
 
@@ -972,7 +1123,7 @@ function createService(db, { onWrite, getNotify } = {}) {
       if (!f) throw new AppError('NOT_FOUND');
       if (f.kind === 'absence') for (const a of all('SELECT id FROM absences WHERE file_id = :id', { id })) removeAbsence(a.id);
       run('DELETE FROM student_files WHERE id = :id', { id });
-      log(ctx, 'file.deleted', `${studentName(f.student_id)} — ${f.file_name}`);
+      log(ctx, 'file.deleted', `${studentName(f.student_id)} — ${f.file_name}`, f.student_id, { name: f.file_name, kind: f.kind });
       return true;
     },
 
@@ -1036,7 +1187,9 @@ function createService(db, { onWrite, getNotify } = {}) {
         ).lastInsertRowid
       );
       excuseAbsence(absenceId);
-      log(ctx, 'application.created', `${student.first_name} ${student.last_name} — ${formatDate(str(p.from))}–${formatDate(str(p.to))}`);
+      log(ctx, 'application.created', `${student.first_name} ${student.last_name} — ${formatDate(str(p.from))}–${formatDate(str(p.to))}`, p.studentId, {
+        absenceId, fileId, from: str(p.from), to: str(p.to), reason: str(p.reason),
+      });
       return { id: fileId, fileName: name, data: buf.toString('base64') };
     },
 
@@ -1260,8 +1413,8 @@ function createService(db, { onWrite, getNotify } = {}) {
           paidBy: paid ? ctx.user || null : null,
         }
       );
-      log(ctx, paid ? 'charge.created_paid' : 'charge.created', `${studentName(p.studentId)} — ${description || kind} — ${amount}`);
       const newId = Number(r.lastInsertRowid);
+      log(ctx, paid ? 'charge.created_paid' : 'charge.created', `${studentName(p.studentId)} — ${description || kind} — ${amount}`, p.studentId, chargeMeta(newId));
       if (paid) notifyPaid(p.studentId, [one('SELECT * FROM charges WHERE id = :id', { id: newId })], str(p.method) || DEFAULT_METHOD, ctx);
       return { id: newId };
     },
@@ -1304,7 +1457,7 @@ function createService(db, { onWrite, getNotify } = {}) {
         const absence = absenceRange(p.absenceFrom, p.absenceTo);
         run('UPDATE charges SET absence_from = :from, absence_to = :to WHERE id = :id', { id: p.id, ...absence });
       }
-      log(ctx, 'charge.updated', `${studentName(c.student_id)} — ${amount}`);
+      log(ctx, 'charge.updated', `${studentName(c.student_id)} — ${amount}`, c.student_id, { ...chargeMeta(p.id), before: { amount: c.amount, method: c.method, paidAt: c.paid_at, period: c.period } });
       return true;
     },
 
@@ -1324,7 +1477,7 @@ function createService(db, { onWrite, getNotify } = {}) {
         );
         total += amount;
         done.push(id);
-        log(ctx, 'charge.paid', `${studentName(c.student_id)} — ${amount}`);
+        log(ctx, 'charge.paid', `${studentName(c.student_id)} — ${amount}`, c.student_id, chargeMeta(id));
       }
       // One receipt / alert per student.
       const byStudent = new Map();
@@ -1341,7 +1494,7 @@ function createService(db, { onWrite, getNotify } = {}) {
       const c = one('SELECT student_id, amount FROM charges WHERE id = :id', { id });
       if (!c) throw new AppError('NOT_FOUND');
       run(`UPDATE charges SET status = 'unpaid', paid_at = NULL, method = NULL, paid_by = NULL, excused_by = NULL WHERE id = :id`, { id });
-      log(ctx, 'charge.unpaid', `${studentName(c.student_id)} — ${c.amount}`);
+      log(ctx, 'charge.unpaid', `${studentName(c.student_id)} — ${c.amount}`, c.student_id, chargeMeta(id));
       return true;
     },
 
@@ -1349,7 +1502,7 @@ function createService(db, { onWrite, getNotify } = {}) {
       const c = one('SELECT student_id, amount FROM charges WHERE id = :id', { id });
       if (!c) throw new AppError('NOT_FOUND');
       run(`UPDATE charges SET status = 'waived', paid_at = NULL, method = NULL WHERE id = :id`, { id });
-      log(ctx, 'charge.waived', `${studentName(c.student_id)} — ${c.amount}`);
+      log(ctx, 'charge.waived', `${studentName(c.student_id)} — ${c.amount}`, c.student_id, chargeMeta(id));
       return true;
     },
 
@@ -1358,8 +1511,9 @@ function createService(db, { onWrite, getNotify } = {}) {
     'charges.delete': ({ id }, ctx) => {
       const c = one('SELECT student_id, kind, amount FROM charges WHERE id = :id', { id });
       if (!c) throw new AppError('NOT_FOUND');
+      const meta = chargeMeta(id);
       run('DELETE FROM charges WHERE id = :id', { id });
-      log(ctx, 'charge.deleted', `${studentName(c.student_id)} — ${c.amount}`);
+      log(ctx, 'charge.deleted', `${studentName(c.student_id)} — ${c.amount}`, c.student_id, meta);
       return true;
     },
 
@@ -1376,6 +1530,7 @@ function createService(db, { onWrite, getNotify } = {}) {
         paidAt: str(paidAt) || today(), method: str(method) || DEFAULT_METHOD, user: ctx.user || null, note: str(note), amount: fee,
         absFrom: absence.from, absTo: absence.to,
       };
+      const shares = feeShares();
       let total = 0;
       const done = [];
       const donePeriods = [];
@@ -1386,6 +1541,7 @@ function createService(db, { onWrite, getNotify } = {}) {
           { studentId, period }
         );
         if (existing?.status === 'paid') continue;
+        paid.amount = feeFor(fee, period, shares); // a holiday month costs its share of the fee
         if (existing) {
           run(
             `UPDATE charges SET status = 'paid', amount = :amount, paid_at = :paidAt, method = :method, paid_by = :user,
@@ -1402,10 +1558,10 @@ function createService(db, { onWrite, getNotify } = {}) {
           );
           done.push(Number(r.lastInsertRowid));
         }
-        total += fee;
+        total += paid.amount;
         donePeriods.push(period);
       }
-      log(ctx, 'charge.paid', `${studentName(studentId)} — ${(periods || []).join(', ')} — ${total}`);
+      for (const id of done) log(ctx, 'charge.paid', `${studentName(studentId)} — ${total}`, studentId, chargeMeta(id));
       if (done.length) notifyPaid(studentId, done.map((id) => one('SELECT * FROM charges WHERE id = :id', { id })), paid.method, ctx);
       return { total, ids: done, periods: donePeriods };
     },
@@ -1419,6 +1575,11 @@ function createService(db, { onWrite, getNotify } = {}) {
         );
       }
       log(ctx, 'charge.receipt', `${receipt} — ${(ids || []).length}`);
+      for (const id of ids || []) {
+        const m = chargeMeta(id);
+        const sid = one('SELECT student_id FROM charges WHERE id = :id', { id })?.student_id;
+        if (sid) log(ctx, 'charge.hdm', `№ ${receipt}`, sid, { ...m, receipt: str(receipt), fiscal: str(fiscal) });
+      }
       return true;
     },
 
@@ -1429,6 +1590,7 @@ function createService(db, { onWrite, getNotify } = {}) {
         crn: str(crn),
       });
       for (const r of rows) {
+        log(ctx, 'charge.hdmReturned', `№ ${receipt}`, r.student_id, { ...chargeMeta(r.id), receipt: str(receipt), returnNo: str(returnNo) });
         run(
           `UPDATE charges SET status = 'unpaid', paid_at = NULL, method = NULL, paid_by = NULL,
              note = TRIM(IFNULL(note, '') || ' ' || :mark), hdm_receipt = NULL, hdm_crn = NULL, hdm_fiscal = NULL, hdm_at = NULL
@@ -1445,6 +1607,9 @@ function createService(db, { onWrite, getNotify } = {}) {
       if (!date) throw new AppError('DATE_REQUIRED');
       let marked = 0;
       for (const e of entries || []) {
+        const was = one('SELECT status FROM attendance WHERE student_id = :studentId AND date = :date', { studentId: e.studentId, date })?.status || null;
+        if ((was || null) !== (e.status || null) && was)
+          log(ctx, 'attendance.changed', formatDate(date), e.studentId, { date, from: was, to: e.status || null });
         if (!e.status) {
           run('DELETE FROM attendance WHERE student_id = :studentId AND date = :date', { studentId: e.studentId, date });
           continue;
@@ -1712,7 +1877,7 @@ function createService(db, { onWrite, getNotify } = {}) {
           user: ctx.user || null,
         }
       );
-      log(ctx, 'contract.created', `${s.contract_no || ''} — ${studentName(s.id)}`);
+      log(ctx, 'contract.created', `${s.contract_no || ''} — ${studentName(s.id)}`, s.id, { number: s.contract_no || null });
       return { id: Number(r.lastInsertRowid) };
     },
 
@@ -1735,14 +1900,14 @@ function createService(db, { onWrite, getNotify } = {}) {
           signedDate: status === 'signed' ? str(p.signed_date) || today() : str(p.signed_date),
         }
       );
-      log(ctx, 'contract.updated', `${c.number || ''} — ${studentName(c.student_id)}`);
+      log(ctx, 'contract.updated', `${c.number || ''} — ${studentName(c.student_id)}`, c.student_id, { number: c.number || null });
       return true;
     },
 
     'contracts.delete': ({ id }, ctx) => {
       const c = one('SELECT number, student_id FROM contracts WHERE id = :id', { id });
       run('DELETE FROM contracts WHERE id = :id', { id });
-      if (c) log(ctx, 'contract.deleted', `${c.number || ''} — ${studentName(c.student_id)}`);
+      if (c) log(ctx, 'contract.deleted', `${c.number || ''} — ${studentName(c.student_id)}`, c.student_id, { number: c.number || null });
       return true;
     },
 
@@ -1795,7 +1960,12 @@ function createService(db, { onWrite, getNotify } = {}) {
 
     // ---------------------------------------------------------------- activity
     'activity.list': ({ limit } = {}) =>
-      all('SELECT * FROM activity_log ORDER BY id DESC LIMIT :limit', { limit: Math.min(int(limit, 200), 1000) }),
+      // Per-student details (attendance corrections, receipt numbers, transferred students) stay in the student's history.
+      all(
+        `SELECT * FROM activity_log WHERE action NOT IN ('attendance.changed', 'charge.hdm', 'charge.hdmReturned', 'student.transferred', 'student.transferUpdated')
+         ORDER BY id DESC LIMIT :limit`,
+        { limit: Math.min(int(limit, 200), 1000) }
+      ),
   };
 
   // 10 training days spread evenly over the month, moving any Sunday to the next day.
@@ -1811,7 +1981,7 @@ function createService(db, { onWrite, getNotify } = {}) {
     return [...dates].sort();
   }
 
-  const READ_ONLY = /\.(get|list|summary|sheet|month|preview|document|status|export)$/;
+  const READ_ONLY = /\.(get|list|summary|sheet|month|preview|document|status|export|history)$/;
   const auth = createAuth({ all, one, run, AppError, log });
   Object.assign(methods, auth.methods);
 

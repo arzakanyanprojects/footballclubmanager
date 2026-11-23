@@ -351,6 +351,27 @@ const MIGRATIONS = [
   ALTER TABLE charges ADD COLUMN hdm_crn TEXT;
   ALTER TABLE charges ADD COLUMN hdm_fiscal TEXT;
   `,
+  // v25: linked students (siblings…), per-student history, and the December holidays (50% fee from the 15th).
+  `
+  CREATE TABLE student_links (
+    id INTEGER PRIMARY KEY,
+    a_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+    b_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+    relation TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    created_by TEXT,
+    UNIQUE (a_id, b_id)
+  );
+  ALTER TABLE activity_log ADD COLUMN student_id INTEGER;
+  ALTER TABLE activity_log ADD COLUMN meta TEXT;
+  CREATE INDEX activity_log_student ON activity_log (student_id);
+  INSERT OR IGNORE INTO settings (key, value) VALUES ('fee_months', '{"2026-12":50}');
+  `,
+  // v26: holidays as date ranges (15.12 – 15.01 → December and January cost half); replaces fee_months.
+  `
+  INSERT OR IGNORE INTO settings (key, value) VALUES ('holidays', '[{"from":"2026-12-15","to":"2027-01-15"}]');
+  DELETE FROM settings WHERE key = 'fee_months';
+  `,
 ];
 
 function seed(db) {
