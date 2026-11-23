@@ -100,7 +100,7 @@ export function GroupsExportModal({ groups, onClose }) {
       // Excel columns (the months item becomes the season's 12 month columns).
       const columns = chosen.flatMap((id) =>
         id === 'months'
-          ? months.map((p) => ({ key: `m:${p}`, header: `${t(`month.s${Number(p.slice(5))}`)} ${p.slice(2, 4)}`, type: 'month', width: 6 }))
+          ? months.map((p) => ({ key: `m:${p}`, header: `${t(`month.s${Number(p.slice(5))}`)} ${p.slice(2, 4)}`, type: 'month', width: 8 }))
           : [{ key: id, header: byId[id].label, type: byId[id].type || 'text', width: byId[id].width }]
       );
       const rowOf = (s, i) => {
@@ -110,7 +110,9 @@ export function GroupsExportModal({ groups, onClose }) {
           if (c.type === 'month') {
             const p = c.key.slice(2);
             const st = monthStatus(byMonth[p], p, s.join_date);
-            row[c.key] = { mark: st === 'none' ? '' : MONTH_MARK[st] ?? '', status: st };
+            // A paid month shows the amount paid (✓ only if no amount was entered); the others their mark.
+            const paid = st === 'paid' && byMonth[p]?.amount > 0;
+            row[c.key] = { mark: paid ? byMonth[p].amount : st === 'none' ? '' : MONTH_MARK[st] ?? '', status: st };
           } else if (c.key === 'index') row.index = i + 1;
           else row[c.key] = byId[c.key].get(s) ?? '';
         }

@@ -381,7 +381,7 @@ async function buildGroups({ columns, sheets, emptyText = '', currencySymbol = '
       },
       headerFooter: { oddFooter: '&L&8FC Manager&R&8&P / &N' },
     });
-    ws.columns = columns.map((c) => ({ width: c.width || (c.type === 'month' ? 6 : 16) }));
+    ws.columns = columns.map((c) => ({ width: c.width || (c.type === 'month' ? 8 : 16) }));
     const soft = soften(sheet.color, 0.82);
     let r = 1;
     sheet.groups.forEach((g, gi) => {
@@ -426,7 +426,8 @@ async function buildGroups({ columns, sheets, emptyText = '', currencySymbol = '
           cell.alignment = { vertical: 'middle', wrapText: c.type === 'text' };
           if (c.type === 'month') {
             const st = v?.status;
-            cell.value = v?.mark || '';
+            cell.value = v?.mark ?? '';
+            if (typeof cell.value === 'number') cell.numFmt = '#,##0';
             cell.alignment = { vertical: 'middle', horizontal: 'center' };
             if (MONTH_STYLE[st]) {
               cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: MONTH_STYLE[st][0] } };
