@@ -5,6 +5,7 @@ import { useCan } from '../components/Auth';
 import { useColumns } from '../components/Columns';
 import { SendRemindersButton } from '../components/Notify';
 import { useHdm } from '../components/Hdm';
+import { useCustomerReceipt } from '../components/Thermal';
 import { useRpc, rpc, fmtDate, todayIso, currentPeriod, addMonths, saveCsv, money } from '../lib';
 import {
   Badge, Button, Empty, Field, Loading, Modal, Money, RowMenu, SearchBox, Segmented, StudentPicker, Tabs,
@@ -445,6 +446,7 @@ export function PayModal({ charges, student, onClose, onDone }) {
   const t = useT();
   const act = useAction();
   const hdm = useHdm();
+  const customer = useCustomerReceipt();
   const [method, setMethod] = useState(PAYMENT_METHODS[0]);
   const [paidAt, setPaidAt] = useState(todayIso());
   // The amount actually received for each charge; starts at the amount due and can be changed.
@@ -472,6 +474,13 @@ export function PayModal({ charges, student, onClose, onDone }) {
         if (!ok) break;
         if (pre) await rpc('charges.setReceipt', { ids: ok.ids || list.map((c) => c.id), receipt: pre.receiptNo, crn: pre.crn, fiscal: pre.fiscalNo }).catch(() => {});
         saved++;
+        await customer.afterPayment({
+          studentId: list[0].student_id,
+          items: list.map((c) => ({ id: c.id, label: chargeLabel(t, c), amount: Number(amounts[c.id]) })),
+          method,
+          paidAt,
+          hdm: pre || null,
+        });
       }
       if (saved) onDone();
       return;
@@ -491,11 +500,9 @@ export function PayModal({ charges, student, onClose, onDone }) {
     }
     for (const list of byStudent.values()) {
       const c0 = list[0];
-      await hdm.afterPayment({
-        method,
-        student: nameOf(c0),
-        items: list.map((c) => ({ id: c.id, label: chargeLabel(t, c), amount: Number(amounts[c.id]) })),
-      });
+      const items = list.map((c) => ({ id: c.id, label: chargeLabel(t, c), amount: Number(amounts[c.id]) }));
+      const r = await hdm.afterPayment({ method, student: nameOf(c0), items });
+      await customer.afterPayment({ studentId: c0.student_id, items, method, paidAt, hdm: r || null });
     }
   };
   return (
@@ -574,6 +581,7 @@ export function ChargeModal({ studentId: fixedStudent, onClose }) {
   const [method, setMethod] = useState(PAYMENT_METHODS[0]);
   const [note, setNote] = useState('');
   const hdm = useHdm();
+  const customer = useCustomerReceipt();
 
   useEffect(() => {
     if (fixedStudent) rpc('students.get', { id: fixedStudent }).then((r) => setStudent(r.student)).catch(() => {});
@@ -606,8 +614,12 @@ export function ChargeModal({ studentId: fixedStudent, onClose }) {
     );
     if (!ok) return;
     onClose();
-    if (paid && ok.id && pre) await rpc('charges.setReceipt', { ids: [ok.id], receipt: pre.receiptNo, crn: pre.crn, fiscal: pre.fiscalNo }).catch(() => {});
-    else if (paid && ok.id) await hdm.afterPayment({ method, student: who, items: [{ id: ok.id, label, amount: Number(amount) }] });
+    if (!paid || !ok.id) return;
+    const items = [{ id: ok.id, label, amount: Number(amount) }];
+    let r = pre;
+    if (pre) await rpc('charges.setReceipt', { ids: [ok.id], receipt: pre.receiptNo, crn: pre.crn, fiscal: pre.fiscalNo }).catch(() => {});
+    else r = await hdm.afterPayment({ method, student: who, items });
+    await customer.afterPayment({ studentId, items, method, paidAt: todayIso(), hdm: r || null });
   };
 
   return (
@@ -707,6 +719,7 @@ function EditChargeModal({ charge, onClose, onPrint }) {
   const t = useT();
   const act = useAction();
   const hdm = useHdm();
+  const receipt = useCustomerReceipt();
   const confirm = useConfirm();
   const monthly = charge.kind === 'monthly';
   const [f, setF] = useState({
@@ -770,6 +783,22 @@ function EditChargeModal({ charge, onClose, onPrint }) {
                 }}
               >
                 {t('hdm.return')}
+              </Button>
+            )}
+            {charge.status === 'paid' && receipt.available && (
+              <Button
+                icon={Printer}
+                onClick={() =>
+                  receipt.print({
+                    studentId: charge.student_id,
+                    items: [{ id: charge.id, label: chargeLabel(t, charge), amount: charge.amount }],
+                    method: charge.method,
+                    paidAt: charge.paid_at,
+                    hdm: charge.hdm_receipt ? { receiptNo: charge.hdm_receipt, fiscalNo: charge.hdm_fiscal } : null,
+                  })
+                }
+              >
+                {t('thermal.print')}
               </Button>
             )}
             {charge.status === 'paid' && (
@@ -905,6 +934,7 @@ export function MonthlyPaymentModal({ student, charges, onClose }) {
   const t = useT();
   const act = useAction();
   const hdm = useHdm();
+  const customer = useCustomerReceipt();
   const year = todayIso().slice(0, 4);
   const periods = Array.from({ length: 12 }, (_, i) => `${year}-${String(i + 1).padStart(2, '0')}`);
   const byPeriod = Object.fromEntries(charges.filter((c) => c.kind === 'monthly').map((c) => [c.period, c]));
@@ -946,14 +976,12 @@ export function MonthlyPaymentModal({ student, charges, onClose }) {
     );
     if (!ok) return;
     onClose();
-    if (ok.ids?.length && pre) await rpc('charges.setReceipt', { ids: ok.ids, receipt: pre.receiptNo, crn: pre.crn, fiscal: pre.fiscalNo }).catch(() => {});
-    else if (ok.ids?.length) {
-      await hdm.afterPayment({
-        method,
-        student: who,
-        items: ok.ids.map((id, i) => ({ id, label: chargeLabel(t, { kind: 'monthly', period: ok.periods[i] }), amount: Number(amount) })),
-      });
-    }
+    if (!ok.ids?.length) return;
+    const items = ok.ids.map((id, i) => ({ id, label: chargeLabel(t, { kind: 'monthly', period: ok.periods[i] }), amount: Number(amount) }));
+    let r = pre;
+    if (pre) await rpc('charges.setReceipt', { ids: ok.ids, receipt: pre.receiptNo, crn: pre.crn, fiscal: pre.fiscalNo }).catch(() => {});
+    else r = await hdm.afterPayment({ method, student: who, items });
+    await customer.afterPayment({ studentId: student.id, items, method, paidAt, hdm: r || null });
   };
 
   return (

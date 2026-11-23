@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import { FlaskConical, Trash2, Building2, Monitor, Network, History, Save, RefreshCw, Copy, LogOut, Server, Receipt, UserCog, ImagePlus, BellRing, Database } from 'lucide-react';
+import { FlaskConical, Trash2, Building2, Monitor, Network, History, Save, RefreshCw, Copy, LogOut, Server, Receipt, UserCog, ImagePlus, BellRing, Database, Printer } from 'lucide-react';
 import { useT } from '../i18n';
 import { useRpc, rpc, fmtDateTime, currentPeriod, fitImage } from '../lib';
 import { HdmSettings } from '../components/Hdm';
+import { ThermalSettings } from '../components/Thermal';
 import { UpdateSettings } from '../components/Updates';
 import { NotifySettings } from '../components/Notify';
 import { MyAccount, UsersSettings, useAuth } from '../components/Auth';
@@ -226,6 +227,15 @@ function PcSettings({ appState, setAppState }) {
       </div>
       <div className="card-pad">
         <HdmSettings settings={appState.config.hdm} onChange={(hdm) => update({ hdm })} />
+      </div>
+    </div>}
+    {auth.can('payments') && <div className="card settings-section">
+      <div className="card-head">
+        <Printer size={17} />
+        <h3>{t('thermal.section')}</h3>
+      </div>
+      <div className="card-pad">
+        <ThermalSettings settings={appState.config.thermal} onChange={(thermal) => update({ thermal })} />
       </div>
     </div>}
     </>

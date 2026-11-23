@@ -353,6 +353,7 @@ export function ImportModal({ onClose }) {
   const [opts, setOpts] = useState({ order: 'auto', parentOrder: 'auto', mode: 'skip', createGroups: true, fileGroups: false, payments: true });
   const [result, setResult] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [transfer, setTransfer] = useState(null); // a full transfer zip from another FC Manager
 
   // Rows of every chosen file (same layout), each remembering its file for the group.
   const sources = (files || []).map((f) => {
@@ -378,6 +379,13 @@ export function ImportModal({ onClose }) {
       return res.result;
     });
     if (!r) return;
+    if (r.transfer) {
+      setTransfer({ ...r.transfer, fileName: r.fileName });
+      setFiles(null);
+      setResult(null);
+      return;
+    }
+    setTransfer(null);
     const list = (r.files || [r]).filter((f) => f.sheets.length);
     if (!list.length) return act(() => Promise.reject(Object.assign(new Error(), { code: 'IMPORT_EMPTY' })));
     // A file from «Արտահանել տեղափոխման համար» carries its own column list; others are matched by their titles.
@@ -434,6 +442,15 @@ export function ImportModal({ onClose }) {
     if (r) setResult(r);
   };
 
+  const runTransfer = async (mode) => {
+    setBusy(true);
+    await window.fc.backup?.create?.().catch?.(() => {});
+    const r = await act(() => rpc('students.importFull', { data: transfer, mode }));
+    setBusy(false);
+    if (r) setResult(r);
+  };
+  if (transfer && !result) return <TransferImport data={transfer} busy={busy} onRun={runTransfer} onPick={pick} onClose={onClose} />;
+
   if (result)
     return (
       <Modal
@@ -457,7 +474,12 @@ export function ImportModal({ onClose }) {
             <div><b>{result.groupsCreated}</b>{t('import.groupsCreated')}</div>
           </div>
           {result.payments > 0 && <div className="small strong">{t('import.paymentsDone', { n: result.payments })}</div>}
-          {result.errors.length > 0 && (
+          {result.attendance != null && (
+            <div className="small">
+              {t('transfer.doneExtra', { attendance: result.attendance, files: result.files, contracts: result.contracts, absences: result.absences })}
+            </div>
+          )}
+          {(result.errors || []).length > 0 && (
             <div className="small" style={{ color: 'var(--bad)' }}>
               {result.errors.slice(0, 10).map((e) => (
                 <div key={e.row}>
@@ -466,7 +488,7 @@ export function ImportModal({ onClose }) {
               ))}
             </div>
           )}
-          <div className="small muted">{t('import.afterHint')}</div>
+          <div className="small muted">{t(result.attendance != null ? 'transfer.afterHint' : 'import.afterHint')}</div>
         </div>
       </Modal>
     );
@@ -698,6 +720,76 @@ export function ImportModal({ onClose }) {
           </div>
         </div>
       )}
+    </Modal>
+  );
+}
+
+// A transfer zip from «Արտահանել տեղափոխման համար»: what it holds, and bringing it all in.
+function TransferImport({ data, busy, onRun, onPick, onClose }) {
+  const t = useT();
+  const [mode, setMode] = useState('skip');
+  const st = data.students || [];
+  const count = (k) => st.reduce((n, s) => n + (s[k]?.length || 0), 0);
+  const groups = [...new Set(st.map((s) => s.group).filter(Boolean))];
+  return (
+    <Modal
+      title={t('import.title')}
+      onClose={onClose}
+      width={640}
+      footer={
+        <>
+          <Button onClick={onPick}>{t('import.otherFile')}</Button>
+          <div className="spacer" />
+          <Button onClick={onClose}>{t('common.cancel')}</Button>
+          <Button variant="primary" icon={Upload} onClick={() => onRun(mode)} disabled={busy || !st.length}>
+            {t('import.run', { n: st.length })}
+          </Button>
+        </>
+      }
+    >
+      <div className="stack">
+        <div className="small muted">
+          {data.fileName} · {t('transfer.exportedAt', { at: new Date(data.exportedAt).toLocaleString('en-GB') })}
+        </div>
+        <div className="import-stats">
+          <div><b>{st.length}</b>{t('transfer.statStudents')}</div>
+          <div><b>{count('charges')}</b>{t('transfer.statPayments')}</div>
+          <div><b>{count('attendance')}</b>{t('transfer.statAttendance')}</div>
+          <div><b>{count('files')}</b>{t('transfer.statFiles')}</div>
+          <div><b>{count('contracts')}</b>{t('transfer.statContracts')}</div>
+          <div><b>{count('absences')}</b>{t('transfer.statAbsences')}</div>
+        </div>
+        {groups.length > 0 && (
+          <div className="small">
+            <span className="strong">{t('nav.groups')}:</span> {groups.join(', ')}
+          </div>
+        )}
+        <div className="field">
+          <label>{t('transfer.existing')}</label>
+          <label className="check">
+            <input type="radio" checked={mode === 'skip'} onChange={() => setMode('skip')} /> {t('transfer.modeSkip')}
+          </label>
+          <label className="check">
+            <input type="radio" checked={mode === 'update'} onChange={() => setMode('update')} /> {t('transfer.modeUpdate')}
+          </label>
+        </div>
+        <div className="table-wrap" style={{ maxHeight: 260 }}>
+          <table className="table">
+            <tbody>
+              {st.map((s, i) => (
+                <tr key={i}>
+                  <td className="nowrap">{[s.student.first_name, s.student.last_name, s.student.patronymic].filter(Boolean).join(' ')}</td>
+                  <td className="nowrap muted">{s.group || '—'}</td>
+                  <td className="nowrap small muted">
+                    {t('transfer.rowCounts', { p: s.charges?.length || 0, a: s.attendance?.length || 0, f: s.files?.length || 0, c: s.contracts?.length || 0 })}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div className="small muted">{t('transfer.importHint')}</div>
+      </div>
     </Modal>
   );
 }

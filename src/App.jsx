@@ -27,6 +27,7 @@ import Contracts from './pages/Contracts';
 import Settings from './pages/Settings';
 import Schedule from './pages/Schedule';
 import { HdmProvider } from './components/Hdm';
+import { ThermalProvider } from './components/Thermal';
 import { UpdateNotice } from './components/Updates';
 import { AuthGate, useAuth } from './components/Auth';
 
@@ -136,9 +137,11 @@ function SignedIn({ appState, setAppState, route, nav, online }) {
   const operator = auth.user ? auth.user.full_name || auth.user.username : appState.config.operator;
   return (
     <HdmProvider settings={appState.config.hdm} operator={operator}>
-      <Layout route={shown} nav={nav} navItems={allowed} appState={appState} online={online}>
-        <Page route={shown} nav={nav} appState={appState} setAppState={setAppState} />
-      </Layout>
+      <ThermalProvider settings={appState.config.thermal} operator={operator}>
+        <Layout route={shown} nav={nav} navItems={allowed} appState={appState} online={online}>
+          <Page route={shown} nav={nav} appState={appState} setAppState={setAppState} />
+        </Layout>
+      </ThermalProvider>
     </HdmProvider>
   );
 }

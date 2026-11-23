@@ -6,6 +6,7 @@ const { openDatabase } = require('./db');
 const { createService, DEFAULT_TEMPLATES } = require('./service');
 const notify = require('./notify');
 const network = require('./network');
+const PizZip = require('pizzip');
 const { buildReport, buildForm, buildSchedule, buildStudentsTransfer, buildGroups } = require('./xlsx');
 const hdm = require('./hdm');
 const updater = require('./updater');
@@ -49,6 +50,7 @@ function loadConfig() {
     theme: 'system',
     operator: '',
     hdm: hdm.DEFAULTS,
+    thermal: { enabled: false, printer: '', width: 80, auto: false }, // customer receipt printer (80 mm)
     autoStart: true, // start hidden in the tray when Windows starts
     trayHintShown: false,
     cloud: { enabled: false, folder: '', lastAt: null, lastFile: null, lastError: null },
@@ -290,6 +292,22 @@ function appState() {
   };
 }
 
+// Reads a transfer zip back: transfer.json with each document's bytes put back in as base64.
+function readTransfer(file) {
+  const zip = new PizZip(fs.readFileSync(file));
+  const json = zip.file('transfer.json');
+  if (!json) throw new Error('not an FC Manager transfer file');
+  const data = JSON.parse(json.asText());
+  for (const st of data.students || [])
+    for (const f of st.files || []) {
+      if (!f.path) continue;
+      const entry = zip.file(f.path);
+      f.data = entry ? entry.asNodeBuffer().toString('base64') : null;
+      delete f.path;
+    }
+  return data;
+}
+
 async function renderHtmlWindow(html) {
   const w = new BrowserWindow({ show: false, webPreferences: { sandbox: true } });
   await w.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
@@ -424,6 +442,7 @@ function registerIpc() {
       createTray();
     }
     if (patch.hdm) config.hdm = { ...hdm.DEFAULTS, ...config.hdm, ...patch.hdm };
+    if (patch.thermal) config.thermal = { ...(config.thermal || {}), ...patch.thermal };
     saveConfig();
     return appState();
   });
@@ -565,7 +584,7 @@ function registerIpc() {
     let paths = process.env.FC_IMPORT_FILE ? process.env.FC_IMPORT_FILE.split('|') : null;
     if (!paths) {
       const r = await dialog.showOpenDialog(win, {
-        filters: [{ name: 'Excel / CSV', extensions: ['xlsx', 'csv', 'txt'] }],
+        filters: [{ name: 'Excel / CSV / FC Manager', extensions: ['xlsx', 'csv', 'txt', 'zip'] }],
         properties: ['openFile', 'multiSelections'],
       });
       if (r.canceled || !r.filePaths.length) return { ok: false, error: 'CANCELLED' };
@@ -574,12 +593,48 @@ function registerIpc() {
     // Excel's lock files ("~$2012-1.xlsx") are skipped.
     paths = paths.filter((p) => !path.basename(p).startsWith('~$'));
     try {
+      // A full transfer from another FC Manager (zip): its data instead of a table.
+      const zipPath = paths.find((p) => /\.zip$/i.test(p));
+      if (zipPath) return { ok: true, result: { transfer: readTransfer(zipPath), fileName: path.basename(zipPath) } };
       const files = [];
       for (const p of paths) files.push(await importer.readTable(p));
       return { ok: true, result: { files } };
     } catch (err) {
       return { ok: false, error: 'IMPORT_READ_FAILED', detail: err.message };
     }
+  });
+
+  // «Արտահանել տեղափոխման համար»: a zip with transfer.json (all the data), the uploaded documents in files/,
+  // and students.xlsx (the same students as a readable table, also importable on its own).
+  ipcMain.handle('transfer:save', async (_e, { defaultName, data, xlsx }) => {
+    const r = process.env.FC_EXPORT_DIR
+      ? { filePath: path.join(process.env.FC_EXPORT_DIR, defaultName) }
+      : await dialog.showSaveDialog(win, { defaultPath: defaultName, filters: [{ name: 'FC Manager', extensions: ['zip'] }] });
+    if (r.canceled || !r.filePath) return { ok: false, error: 'CANCELLED' };
+    try {
+      const zip = new PizZip();
+      let n = 0;
+      const out = {
+        ...data,
+        students: (data.students || []).map((st) => ({
+          ...st,
+          files: (st.files || []).map((f) => {
+            if (!f.data) return f;
+            const name = `files/${++n}-${String(f.file_name || 'file').replace(/[^\w.-]+/g, '_').slice(-60)}`;
+            zip.file(name, Buffer.from(f.data, 'base64'));
+            const { data: _d, ...rest } = f;
+            return { ...rest, path: name };
+          }),
+        })),
+      };
+      zip.file('transfer.json', JSON.stringify(out));
+      if (xlsx) zip.file('students.xlsx', Buffer.from(await buildStudentsTransfer(xlsx)));
+      fs.writeFileSync(r.filePath, zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' }));
+    } catch (err) {
+      return { ok: false, error: 'FILE_LOCKED', detail: err.message };
+    }
+    if (!process.env.FC_EXPORT_DIR) shell.showItemInFolder(r.filePath);
+    return { ok: true, result: r.filePath };
   });
 
   ipcMain.handle('xlsx:save', async (_e, report) => {
@@ -628,6 +683,38 @@ function registerIpc() {
         resolve({ ok: success, error: success ? undefined : reason });
       });
     });
+  });
+
+  // The printers installed in Windows (for choosing the receipt printer).
+  ipcMain.handle('printers:list', async () =>
+    (await win.webContents.getPrintersAsync()).map((p) => ({ name: p.name, displayName: p.displayName || p.name, isDefault: !!p.isDefault }))
+  );
+
+  // A customer receipt on the thermal (roll) printer, straight to the chosen printer without a dialog.
+  // The page is as wide as the roll and as long as the receipt.
+  ipcMain.handle('thermal:print', async (_e, { html }) => {
+    const t = config.thermal || {};
+    if (!t.printer && !process.env.FC_EXPORT_DIR) return { ok: false, error: 'THERMAL_NOT_SET' };
+    const widthMm = Number(t.width) || 80;
+    const w = await renderHtmlWindow(html);
+    try {
+      const heightPx = await w.webContents.executeJavaScript('Math.ceil(document.documentElement.scrollHeight)');
+      const pageSize = { width: widthMm * 1000, height: Math.max(40000, Math.ceil(((heightPx + 8) * 25.4 * 1000) / 96)) }; // microns
+      if (process.env.FC_EXPORT_DIR) {
+        const pdf = await w.webContents.printToPDF({ printBackground: true, pageSize: { width: pageSize.width / 25400, height: pageSize.height / 25400 }, margins: { top: 0, bottom: 0, left: 0, right: 0 } });
+        const stamp = Date.now();
+        fs.writeFileSync(path.join(process.env.FC_EXPORT_DIR, `thermal-${stamp}.pdf`), pdf);
+        fs.writeFileSync(path.join(process.env.FC_EXPORT_DIR, `thermal-${stamp}.html`), html);
+        return { ok: true };
+      }
+      return await new Promise((resolve) =>
+        w.webContents.print({ silent: true, deviceName: t.printer, printBackground: true, margins: { marginType: 'none' }, pageSize }, (success, reason) =>
+          resolve({ ok: success, error: success ? undefined : reason })
+        )
+      );
+    } finally {
+      w.destroy();
+    }
   });
 
   ipcMain.handle('shell:openPath', (_e, p) => shell.openPath(p));

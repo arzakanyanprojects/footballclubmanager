@@ -58,7 +58,7 @@ function TransferCard() {
       ['birth_date', 'students.birthDate'], ['document_no', 'students.documentNo'], ['group_name', 'students.group'],
       ['contract_no', 'students.contractNo'], ['medical_doc', 'students.medicalDoc'], ['category', 'students.category'],
       ['service', 'students.service'], ['monthly_fee', 'students.monthlyFee'], ['join_date', 'students.joinDate'],
-      ['status', 'students.status'], ['inactive_reason', 'students.inactiveReason'], ['notes', 'students.notes'],
+      ['status', 'students.status'], ['inactive_reason', 'students.inactiveReason'], ['leave_date', 'students.leaveDate'], ['notes', 'students.notes'],
       ['parent_first_name', 'import.parentFirst'], ['parent_last_name', 'import.parentLast'], ['parent_phone', 'import.parentPhone'],
       ['parent_messenger', 'import.parentMessenger'], ['parent_email', 'import.parentEmail'], ['parent_doc_no', 'import.parentDocNo'],
       ['parent_doc_date', 'import.parentDocDate'], ['parent_doc_issuer', 'import.parentDocIssuer'], ['parent_ssn', 'import.parentSsn'],
@@ -78,9 +78,12 @@ function TransferCard() {
       const ids = new Map(rows.map((s) => [s.id, keyOf(s)]));
       const all = await rpc('charges.list', {});
       const charges = all.filter((c) => ids.has(c.student_id) && !c.excused_by);
-      await window.fc.saveXlsx({
-        kind: 'students',
-        defaultName: `students-${group || 'all'}-${todayIso()}.xlsx`,
+      // Everything about these students (documents, attendance, contracts…) plus the readable table.
+      const data = await rpc('students.export', { studentIds: rows.map((s) => s.id) });
+      const r = await window.fc.saveTransfer({
+        defaultName: `FC-Manager-${group || 'all'}-${todayIso()}.zip`,
+        data,
+        xlsx: {
         columns: cols,
         rows: rows.map((s) => Object.fromEntries(cols.map((c) => [c.key, value(s, c.key)]))),
         charges: {
@@ -88,7 +91,9 @@ function TransferCard() {
           headers: [t('import.studentKey'), t('payments.type'), t('payments.month'), t('payments.description'), t('payments.amount'), t('payments.dueDate'), t('payments.status'), t('payments.paidAt'), t('payments.method'), t('payments.note')],
           rows: charges.map((c) => chargeCols.map((k) => (k === 'student_key' ? ids.get(c.student_id) : c[k] ?? ''))),
         },
+        },
       });
+      if (!r.ok) throw Object.assign(new Error(r.error), { code: r.error, detail: r.detail });
     }, t('transfer.saved', { n: rows.length }));
   };
 

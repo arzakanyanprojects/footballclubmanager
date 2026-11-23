@@ -546,13 +546,18 @@ function createService(db, { onWrite, getNotify } = {}) {
 
     'students.get': ({ id }) => {
       const student = one(
-        `SELECT s.*, g.name AS group_name, g.color AS group_color, g.schedule AS group_schedule
+        `SELECT s.*, g.name AS group_name, g.color AS group_color, g.schedule AS group_schedule,
+                g.coach AS group_coach, g.assistant AS group_assistant
          FROM students s LEFT JOIN groups g ON g.id = s.group_id WHERE s.id = :id`,
         { id }
       );
       if (!student) throw new AppError('NOT_FOUND');
       return {
         student,
+        // The group's usual training week (for the customer receipt).
+        training: student.group_id
+          ? all('SELECT weekday, start, end, pitch FROM schedule_base WHERE group_id = :g ORDER BY ((weekday + 6) % 7), start', { g: student.group_id })
+          : [],
         charges: all(
           `SELECT * FROM charges WHERE student_id = :id
            ORDER BY CASE status WHEN 'unpaid' THEN 0 ELSE 1 END, IFNULL(due_date, created_at) DESC, id DESC`,
@@ -743,6 +748,191 @@ function createService(db, { onWrite, getNotify } = {}) {
       });
       log(ctx, 'students.imported', `${result.created} / ${result.updated} / ${result.skipped}`);
       return result;
+    },
+
+    // ---------------------------------------------------------------- full transfer to another FC Manager
+    // Everything about the chosen students, for moving them to another PC: the student (incl. termination
+    // date and photo), payments (incl. «Դիմում» periods, «Հարգելի» months and ՀԴՄ numbers), attendance,
+    // absence applications, uploaded documents (as base64) and contracts, plus their groups' training days.
+    'students.export': ({ studentIds }) => {
+      const ids = (studentIds || []).map(Number).filter(Boolean);
+      const cols = (table) => all(`PRAGMA table_info(${table})`).map((c) => c.name);
+      const pick = (row, drop) => Object.fromEntries(Object.entries(row).filter(([k]) => !drop.includes(k)));
+      const groups = new Map();
+      const students = [];
+      for (const id of ids) {
+        const s = one(`SELECT s.*, g.name AS group_name FROM students s LEFT JOIN groups g ON g.id = s.group_id WHERE s.id = :id`, { id });
+        if (!s) continue;
+        if (s.group_id && !groups.has(s.group_id)) groups.set(s.group_id, one('SELECT * FROM groups WHERE id = :id', { id: s.group_id }));
+        students.push({
+          student: pick(s, ['id', 'group_id']),
+          group: s.group_name || null,
+          charges: all('SELECT * FROM charges WHERE student_id = :id ORDER BY id', { id }).map((c) => pick(c, ['student_id', 'product_id'])),
+          attendance: all('SELECT date, status, marked_by FROM attendance WHERE student_id = :id ORDER BY date', { id }),
+          absences: all('SELECT * FROM absences WHERE student_id = :id ORDER BY id', { id }).map((a) => pick(a, ['student_id'])),
+          files: all('SELECT * FROM student_files WHERE student_id = :id ORDER BY id', { id }).map((f) => ({
+            ...pick(f, ['student_id', 'data']),
+            data: f.data ? Buffer.from(f.data).toString('base64') : null,
+          })),
+          contracts: all(
+            `SELECT c.*, t.name AS template_name, d.name AS doc_template_name FROM contracts c
+             LEFT JOIN contract_templates t ON t.id = c.template_id LEFT JOIN doc_templates d ON d.id = c.doc_template_id
+             WHERE c.student_id = :id ORDER BY c.id`,
+            { id }
+          ).map((c) => pick(c, ['student_id', 'template_id', 'doc_template_id'])),
+        });
+      }
+      return {
+        format: 'fcmanager-transfer',
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        columns: { students: cols('students') },
+        groups: [...groups.values()].map((g) => ({
+          ...pick(g, ['id']),
+          trainingDays: all('SELECT date FROM training_days WHERE group_id = :id ORDER BY date', { id: g.id }).map((d) => d.date),
+          trainingMonths: all('SELECT month, submitted_at, submitted_by FROM training_months WHERE group_id = :id', { id: g.id }),
+        })),
+        students,
+      };
+    },
+
+    // Brings in a file from «students.export». A student already here (same contract №, or name + birth
+    // date) is skipped, or with mode 'update' updated and its other data added where missing.
+    'students.importFull': ({ data, mode = 'skip' }, ctx) => {
+      if (!data || data.format !== 'fcmanager-transfer') throw new AppError('IMPORT_READ_FAILED');
+      const colsOf = (table) => new Set(all(`PRAGMA table_info(${table})`).map((c) => c.name));
+      const tcols = {
+        students: colsOf('students'), charges: colsOf('charges'), absences: colsOf('absences'),
+        student_files: colsOf('student_files'), contracts: colsOf('contracts'), groups: colsOf('groups'),
+      };
+      const insert = (table, row) => {
+        const keys = Object.keys(row).filter((k) => tcols[table].has(k) && k !== 'id');
+        const r = run(`INSERT INTO ${table} (${keys.join(', ')}) VALUES (${keys.map((k) => ':' + k).join(', ')})`, row);
+        return Number(r.lastInsertRowid);
+      };
+      const res = { created: 0, updated: 0, skipped: 0, groupsCreated: 0, payments: 0, attendance: 0, files: 0, contracts: 0, absences: 0 };
+
+      // Groups by name (created with their coaches and colour when missing) and their training days.
+      const groupIds = new Map(all('SELECT id, name FROM groups').map((g) => [g.name.trim().toLowerCase(), g.id]));
+      for (const g of data.groups || []) {
+        const key = String(g.name || '').trim().toLowerCase();
+        if (!key) continue;
+        if (!groupIds.has(key)) {
+          const { trainingDays, trainingMonths, ...row } = g;
+          groupIds.set(key, insert('groups', row));
+          res.groupsCreated++;
+        }
+        const gid = groupIds.get(key);
+        for (const d of g.trainingDays || []) run('INSERT OR IGNORE INTO training_days (group_id, date) VALUES (:gid, :d)', { gid, d });
+        for (const m of g.trainingMonths || [])
+          run('INSERT OR IGNORE INTO training_months (group_id, month, submitted_at, submitted_by) VALUES (:gid, :month, :submitted_at, :submitted_by)', { gid, ...m });
+      }
+      const templateId = (table, name) => (name ? one(`SELECT id FROM ${table} WHERE name = :name`, { name })?.id ?? null : null);
+
+      for (const item of data.students || []) {
+        const s = item.student || {};
+        const gid = item.group ? groupIds.get(String(item.group).trim().toLowerCase()) ?? null : null;
+        const existing =
+          (str(s.contract_no) && one('SELECT id FROM students WHERE contract_no = :c', { c: str(s.contract_no) })) ||
+          one(
+            `SELECT id FROM students WHERE ulower(first_name) = ulower(:f) AND ulower(last_name) = ulower(:l) AND IFNULL(birth_date, '') = IFNULL(:b, '')`,
+            { f: str(s.first_name), l: str(s.last_name), b: str(s.birth_date) }
+          );
+        let sid;
+        if (existing) {
+          if (mode !== 'update') {
+            res.skipped++;
+            continue;
+          }
+          sid = existing.id;
+          const keys = Object.keys(s).filter((k) => tcols.students.has(k) && !['id', 'created_at'].includes(k));
+          run(`UPDATE students SET ${keys.map((k) => `${k} = :${k}`).join(', ')}, group_id = :__gid WHERE id = :__id`, { ...s, __gid: gid, __id: sid });
+          res.updated++;
+        } else {
+          sid = insert('students', { ...s, group_id: gid });
+          res.created++;
+        }
+
+        // Uploaded documents (skipped when the same file is already there).
+        const fileIds = new Map();
+        for (const f of item.files || []) {
+          const dup = one('SELECT id FROM student_files WHERE student_id = :sid AND file_name = :n AND IFNULL(size, 0) = IFNULL(:size, 0) AND kind = :kind', {
+            sid, n: f.file_name, size: f.size, kind: f.kind,
+          });
+          if (dup) {
+            fileIds.set(f.id, dup.id);
+            continue;
+          }
+          fileIds.set(f.id, insert('student_files', { ...f, student_id: sid, data: f.data ? Buffer.from(f.data, 'base64') : null }));
+          res.files++;
+        }
+        // Absence applications («Դիմում»), linked to their document.
+        const absenceIds = new Map();
+        for (const a of item.absences || []) {
+          const dup = one('SELECT id FROM absences WHERE student_id = :sid AND date_from = :f AND date_to = :t', { sid, f: a.date_from, t: a.date_to });
+          if (dup) {
+            absenceIds.set(a.id, dup.id);
+            continue;
+          }
+          absenceIds.set(a.id, insert('absences', { ...a, student_id: sid, file_id: a.file_id ? fileIds.get(a.file_id) ?? null : null, created_charges: '[]' }));
+          res.absences++;
+        }
+        // Payments: a month already settled here stays as it is; others are added once.
+        const chargeIds = new Map();
+        for (const c of item.charges || []) {
+          const row = { ...c, student_id: sid, excused_by: c.excused_by ? absenceIds.get(c.excused_by) ?? null : null };
+          if (c.kind === 'monthly' && c.period) {
+            const ex = one(`SELECT id, status FROM charges WHERE student_id = :sid AND kind = 'monthly' AND period = :p`, { sid, p: c.period });
+            if (ex) {
+              chargeIds.set(c.id, ex.id);
+              if (ex.status === 'unpaid' && c.status !== 'unpaid') {
+                const keys = Object.keys(row).filter((k) => tcols.charges.has(k) && !['id', 'student_id', 'created_at'].includes(k));
+                run(`UPDATE charges SET ${keys.map((k) => `${k} = :${k}`).join(', ')} WHERE id = :__id`, { ...row, __id: ex.id });
+                res.payments++;
+              }
+              continue;
+            }
+          } else {
+            const dup = one(
+              `SELECT id FROM charges WHERE student_id = :sid AND kind = :kind AND IFNULL(description, '') = IFNULL(:d, '') AND amount = :amount AND IFNULL(due_date, '') = IFNULL(:due, '')`,
+              { sid, kind: c.kind, d: c.description, amount: c.amount, due: c.due_date }
+            );
+            if (dup) {
+              chargeIds.set(c.id, dup.id);
+              continue;
+            }
+          }
+          chargeIds.set(c.id, insert('charges', row));
+          res.payments++;
+        }
+        // The applications remember the fees they added (so cancelling one removes them).
+        for (const a of item.absences || []) {
+          const nid = absenceIds.get(a.id);
+          const created = JSON.parse(a.created_charges || '[]').map((id) => chargeIds.get(id)).filter(Boolean);
+          if (nid && created.length) run('UPDATE absences SET created_charges = :c WHERE id = :id', { id: nid, c: JSON.stringify(created) });
+        }
+        // Attendance.
+        for (const a of item.attendance || []) {
+          const r = run('INSERT OR IGNORE INTO attendance (student_id, date, status, group_id, marked_by) VALUES (:sid, :date, :status, :gid, :marked_by)', {
+            sid, gid, ...a,
+          });
+          res.attendance += r.changes;
+        }
+        // Contracts (by number), with the template of the same name when this PC has it.
+        for (const c of item.contracts || []) {
+          if (c.number && one('SELECT id FROM contracts WHERE student_id = :sid AND number = :n', { sid, n: c.number })) continue;
+          const { template_name, doc_template_name, ...row } = c;
+          insert('contracts', {
+            ...row,
+            student_id: sid,
+            template_id: templateId('contract_templates', template_name),
+            doc_template_id: templateId('doc_templates', doc_template_name),
+          });
+          res.contracts++;
+        }
+      }
+      log(ctx, 'students.imported', `${res.created} / ${res.updated} / ${res.skipped}`);
+      return res;
     },
 
     // ---------------------------------------------------------------- student documents
@@ -1621,7 +1811,7 @@ function createService(db, { onWrite, getNotify } = {}) {
     return [...dates].sort();
   }
 
-  const READ_ONLY = /\.(get|list|summary|sheet|month|preview|document|status)$/;
+  const READ_ONLY = /\.(get|list|summary|sheet|month|preview|document|status|export)$/;
   const auth = createAuth({ all, one, run, AppError, log });
   Object.assign(methods, auth.methods);
 

@@ -35,6 +35,7 @@ contextBridge.exposeInMainWorld('fc', {
   onCloseRequested: on('close-requested'),
   confirmClose: () => ipcRenderer.invoke('app:confirmClose'),
   importRead: () => ipcRenderer.invoke('import:read'),
+  saveTransfer: (job) => ipcRenderer.invoke('transfer:save', job),
   notify: {
     get: () => ipcRenderer.invoke('notify:get'),
     set: (patch) => ipcRenderer.invoke('notify:set', patch),
@@ -47,6 +48,8 @@ contextBridge.exposeInMainWorld('fc', {
   printFile: (file) => ipcRenderer.invoke('file:print', file),
   setAuthToken: (token, remember) => ipcRenderer.invoke('auth:setToken', token, remember),
   hdmPrint: (receipt) => ipcRenderer.invoke('hdm:print', receipt),
+  printers: () => ipcRenderer.invoke('printers:list'),
+  thermalPrint: (job) => ipcRenderer.invoke('thermal:print', job),
   hdmTest: (settings) => ipcRenderer.invoke('hdm:test', settings),
   hdmAction: (req) => ipcRenderer.invoke('hdm:action', req),
   update: {
