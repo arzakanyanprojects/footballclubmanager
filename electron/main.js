@@ -441,6 +441,8 @@ function registerIpc() {
       return config.hdm.testCounter;
     })
   );
+  ipcMain.handle('hdm:test', (_e, settings) => hdm.testConnection({ ...hdm.DEFAULTS, ...config.hdm, ...(settings || {}) }));
+  ipcMain.handle('hdm:action', (_e, req) => hdm.action({ ...hdm.DEFAULTS, ...config.hdm }, req || {}));
 
   ipcMain.handle('net:discover', () => network.discoverHosts());
   ipcMain.handle('net:test', (_e, o) => network.testHost({ host: o.hostAddress, port: o.hostPort, key: o.accessKey }));

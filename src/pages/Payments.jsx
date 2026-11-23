@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useState } from 'react';
-import { Plus, Download, Wallet, CheckCircle2, Pencil, Ban, RotateCcw, Trash2, Printer, Package, Receipt } from 'lucide-react';
+import { Plus, Download, Wallet, CheckCircle2, Pencil, Ban, RotateCcw, Trash2, Printer, Package, Receipt, Undo2 } from 'lucide-react';
 import { useT, monthName } from '../i18n';
 import { useCan } from '../components/Auth';
 import { useColumns } from '../components/Columns';
@@ -451,7 +451,31 @@ export function PayModal({ charges, student, onClose, onDone }) {
   const [amounts, setAmounts] = useState(() => Object.fromEntries(charges.map((c) => [c.id, String(c.amount)])));
   const total = charges.reduce((s, c) => s + (Number(amounts[c.id]) || 0), 0);
   const valid = charges.every((c) => Number(amounts[c.id]) > 0);
+  const nameOf = (c) => (c.first_name ? `${c.first_name} ${c.last_name}` : student ? `${student.first_name} ${student.last_name}` : '');
   const pay = async () => {
+    // Real ՀԴՄ: one receipt per student first; that student's payment is saved only when the ՀԴՄ confirms.
+    if (hdm.device) {
+      const groups = new Map();
+      for (const c of charges) {
+        if (!groups.has(c.student_id)) groups.set(c.student_id, []);
+        groups.get(c.student_id).push(c);
+      }
+      let saved = 0;
+      for (const list of groups.values()) {
+        const pre = await hdm.beforePayment({
+          method,
+          student: nameOf(list[0]),
+          items: list.map((c) => ({ label: chargeLabel(t, c), amount: Number(amounts[c.id]) })),
+        });
+        if (pre === false) break;
+        const ok = await act(() => rpc('charges.markPaid', { ids: list.map((c) => c.id), amounts, method, paidAt }), t('payments.paidToast'));
+        if (!ok) break;
+        if (pre) await rpc('charges.setReceipt', { ids: ok.ids || list.map((c) => c.id), receipt: pre.receiptNo, crn: pre.crn, fiscal: pre.fiscalNo }).catch(() => {});
+        saved++;
+      }
+      if (saved) onDone();
+      return;
+    }
     const ok = await act(
       () => rpc('charges.markPaid', { ids: charges.map((c) => c.id), amounts, method, paidAt }),
       t('payments.paidToast')
@@ -469,7 +493,7 @@ export function PayModal({ charges, student, onClose, onDone }) {
       const c0 = list[0];
       await hdm.afterPayment({
         method,
-        student: c0.first_name ? `${c0.first_name} ${c0.last_name}` : student ? `${student.first_name} ${student.last_name}` : '',
+        student: nameOf(c0),
         items: list.map((c) => ({ id: c.id, label: chargeLabel(t, c), amount: Number(amounts[c.id]) })),
       });
     }
@@ -560,6 +584,11 @@ export function ChargeModal({ studentId: fixedStudent, onClose }) {
   }, [kind, student, amountTouched]);
 
   const save = async () => {
+    const label = kind === 'monthly' ? chargeLabel(t, { kind, period }) : description.trim() || t('charge.other');
+    const who = student ? `${student.first_name} ${student.last_name}` : '';
+    // Real ՀԴՄ: the receipt (and the card payment) first; nothing is saved if it doesn't go through.
+    const pre = paid ? await hdm.beforePayment({ method, student: who, items: [{ label, amount: Number(amount) }] }) : undefined;
+    if (pre === false) return;
     const ok = await act(
       () =>
         rpc('charges.create', {
@@ -577,14 +606,8 @@ export function ChargeModal({ studentId: fixedStudent, onClose }) {
     );
     if (!ok) return;
     onClose();
-    if (paid && ok.id) {
-      const label = kind === 'monthly' ? chargeLabel(t, { kind, period }) : description.trim() || t('charge.other');
-      await hdm.afterPayment({
-        method,
-        student: student ? `${student.first_name} ${student.last_name}` : '',
-        items: [{ id: ok.id, label, amount: Number(amount) }],
-      });
-    }
+    if (paid && ok.id && pre) await rpc('charges.setReceipt', { ids: [ok.id], receipt: pre.receiptNo, crn: pre.crn, fiscal: pre.fiscalNo }).catch(() => {});
+    else if (paid && ok.id) await hdm.afterPayment({ method, student: who, items: [{ id: ok.id, label, amount: Number(amount) }] });
   };
 
   return (
@@ -737,6 +760,16 @@ function EditChargeModal({ charge, onClose, onPrint }) {
                 }}
               >
                 {t('hdm.printNow')}
+              </Button>
+            )}
+            {charge.status === 'paid' && hdm.device && charge.hdm_receipt && (
+              <Button
+                icon={Undo2}
+                onClick={async () => {
+                  if (await hdm.returnReceipt(charge)) onClose();
+                }}
+              >
+                {t('hdm.return')}
               </Button>
             )}
             {charge.status === 'paid' && (
@@ -899,16 +932,25 @@ export function MonthlyPaymentModal({ student, charges, onClose }) {
     });
 
   const save = async () => {
+    const who = `${student.first_name} ${student.last_name}`;
+    // Real ՀԴՄ: the receipt (and the card payment) first; the months are saved only when it confirms.
+    const pre = await hdm.beforePayment({
+      method,
+      student: who,
+      items: selected.map((p) => ({ label: chargeLabel(t, { kind: 'monthly', period: p }), amount: Number(amount) })),
+    });
+    if (pre === false) return;
     const ok = await act(
       () => rpc('charges.payMonths', { studentId: student.id, periods: selected, amount, method, paidAt, note, absenceFrom: absence?.from, absenceTo: absence?.to }),
       t('payments.paidToast')
     );
     if (!ok) return;
     onClose();
-    if (ok.ids?.length) {
+    if (ok.ids?.length && pre) await rpc('charges.setReceipt', { ids: ok.ids, receipt: pre.receiptNo, crn: pre.crn, fiscal: pre.fiscalNo }).catch(() => {});
+    else if (ok.ids?.length) {
       await hdm.afterPayment({
         method,
-        student: `${student.first_name} ${student.last_name}`,
+        student: who,
         items: ok.ids.map((id, i) => ({ id, label: chargeLabel(t, { kind: 'monthly', period: ok.periods[i] }), amount: Number(amount) })),
       });
     }

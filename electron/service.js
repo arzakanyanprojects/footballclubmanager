@@ -1221,12 +1221,33 @@ function createService(db, { onWrite, getNotify } = {}) {
     },
 
     // Saves the ՀԴՄ receipt number printed for these payments.
-    'charges.setReceipt': ({ ids, receipt }, ctx) => {
+    'charges.setReceipt': ({ ids, receipt, crn, fiscal }, ctx) => {
       for (const id of ids || []) {
-        run(`UPDATE charges SET hdm_receipt = :receipt, hdm_at = datetime('now', 'localtime') WHERE id = :id`, { id, receipt: str(receipt) });
+        run(
+          `UPDATE charges SET hdm_receipt = :receipt, hdm_crn = :crn, hdm_fiscal = :fiscal, hdm_at = datetime('now', 'localtime') WHERE id = :id`,
+          { id, receipt: str(receipt), crn: str(crn), fiscal: str(fiscal) }
+        );
       }
       log(ctx, 'charge.receipt', `${receipt} — ${(ids || []).length}`);
       return true;
+    },
+
+    // After a ՀԴՄ return receipt: every payment of that receipt is unpaid again (the money went back).
+    'charges.receiptReturned': ({ receipt, crn, returnNo }, ctx) => {
+      const rows = all(`SELECT id, student_id FROM charges WHERE hdm_receipt = :receipt AND IFNULL(hdm_crn, '') = IFNULL(:crn, '')`, {
+        receipt: str(receipt),
+        crn: str(crn),
+      });
+      for (const r of rows) {
+        run(
+          `UPDATE charges SET status = 'unpaid', paid_at = NULL, method = NULL, paid_by = NULL,
+             note = TRIM(IFNULL(note, '') || ' ' || :mark), hdm_receipt = NULL, hdm_crn = NULL, hdm_fiscal = NULL, hdm_at = NULL
+           WHERE id = :id`,
+          { id: r.id, mark: `[ՀԴՄ վերադարձ ${str(returnNo) || ''} ← № ${str(receipt)}]` }
+        );
+      }
+      log(ctx, 'charge.receiptReturned', `№ ${receipt} — ${rows.length}`);
+      return { count: rows.length };
     },
 
     // ---------------------------------------------------------------- attendance

@@ -346,6 +346,11 @@ const MIGRATIONS = [
   ALTER TABLE charges ADD COLUMN absence_from TEXT;
   ALTER TABLE charges ADD COLUMN absence_to TEXT;
   `,
+  // v24: the ՀԴՄ that printed a payment's receipt (registration № — needed for a return receipt) and the fiscal №.
+  `
+  ALTER TABLE charges ADD COLUMN hdm_crn TEXT;
+  ALTER TABLE charges ADD COLUMN hdm_fiscal TEXT;
+  `,
 ];
 
 function seed(db) {

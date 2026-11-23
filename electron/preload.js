@@ -47,6 +47,8 @@ contextBridge.exposeInMainWorld('fc', {
   printFile: (file) => ipcRenderer.invoke('file:print', file),
   setAuthToken: (token, remember) => ipcRenderer.invoke('auth:setToken', token, remember),
   hdmPrint: (receipt) => ipcRenderer.invoke('hdm:print', receipt),
+  hdmTest: (settings) => ipcRenderer.invoke('hdm:test', settings),
+  hdmAction: (req) => ipcRenderer.invoke('hdm:action', req),
   update: {
     status: () => ipcRenderer.invoke('update:status'),
     check: () => ipcRenderer.invoke('update:check'),
