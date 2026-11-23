@@ -111,8 +111,15 @@ export function GroupsExportModal({ groups, onClose }) {
             const p = c.key.slice(2);
             const st = monthStatus(byMonth[p], p, s.join_date);
             // A paid month shows the amount paid (✓ only if no amount was entered); the others their mark.
-            const paid = st === 'paid' && byMonth[p]?.amount > 0;
-            row[c.key] = { mark: paid ? byMonth[p].amount : st === 'none' ? '' : MONTH_MARK[st] ?? '', status: st };
+            const m = byMonth[p];
+            const paid = st === 'paid' && m?.amount > 0;
+            row[c.key] = {
+              mark: paid ? m.amount : st === 'none' ? '' : MONTH_MARK[st] ?? '',
+              status: st,
+              // For the totals under the group: paid amounts, and amounts still owed (overdue or not yet due).
+              paid: st === 'paid' ? m.amount || 0 : 0,
+              debt: st === 'overdue' || st === 'unpaid' ? m.amount || 0 : 0,
+            };
           } else if (c.key === 'index') row.index = i + 1;
           else row[c.key] = byId[c.key].get(s) ?? '';
         }
@@ -121,11 +128,11 @@ export function GroupsExportModal({ groups, onClose }) {
       const yearOf = (name) => (String(name).match(/^\s*((?:19|20)\d{2})/) || [])[1] || null;
       const other = t('groupsExport.other');
       const bySheet = new Map();
-      const block = (title, members) => ({ title, rows: members.map(rowOf) });
+      const block = (title, members, name = title) => ({ title, name, rows: members.map(rowOf) });
       for (const g of list) {
         const sheet = yearOf(g.name) || other;
         if (!bySheet.has(sheet)) bySheet.set(sheet, []);
-        bySheet.get(sheet).push(block([g.name, g.coach, g.assistant].filter(Boolean).join('   •   '), students.filter((s) => s.group_id === g.id)));
+        bySheet.get(sheet).push(block([g.name, g.coach, g.assistant].filter(Boolean).join('   •   '), students.filter((s) => s.group_id === g.id), g.name));
       }
       const loose = students.filter((s) => !s.group_id || !list.some((g) => g.id === s.group_id));
       if (loose.length) {
@@ -138,6 +145,13 @@ export function GroupsExportModal({ groups, onClose }) {
         defaultName: `groups-${todayIso()}.xlsx`,
         currencySymbol: money(0, currency).replace(/[\d,.\s]/g, '') || currency,
         emptyText: t('groupsExport.noStudents'),
+        labels: {
+          paid: t('groupsExport.totalPaid'),
+          debt: t('groupsExport.totalDebt'),
+          grandSheet: t('groupsExport.grandSheet'),
+          grandTotal: t('groupsExport.grandTotal'),
+          group: t('students.group'),
+        },
         columns,
         sheets: names.map((name, i) => ({ name, color: SHEET_COLORS[i % SHEET_COLORS.length], groups: bySheet.get(name) })),
       });

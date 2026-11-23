@@ -361,7 +361,7 @@ const MONTH_STYLE = {
  * columns: [{ key, header, width, type: 'text' | 'index' | 'date' | 'money' | 'month' }]
  * sheets: [{ name, color: 'FFRRGGBB', groups: [{ title, rows: [{ [key]: value, _inactive, [monthKey]: { mark, status } }] }] }]
  */
-async function buildGroups({ columns, sheets, emptyText = '', currencySymbol = '֏' }) {
+async function buildGroups({ columns, sheets, emptyText = '', currencySymbol = '֏', labels = {} }) {
   const wb = new ExcelJS.Workbook();
   wb.creator = 'FC Manager';
   wb.created = new Date();
@@ -384,6 +384,29 @@ async function buildGroups({ columns, sheets, emptyText = '', currencySymbol = '
     ws.columns = columns.map((c) => ({ width: c.width || (c.type === 'month' ? 8 : 16) }));
     const soft = soften(sheet.color, 0.82);
     let r = 1;
+    // With month columns: under a list of students, the paid and the owed amounts of every month.
+    const monthCols = columns.map((c, i) => (c.type === 'month' ? i + 1 : 0)).filter(Boolean);
+    const totals = (rows) => {
+      if (!monthCols.length) return;
+      const first = monthCols[0];
+      [
+        ['paid', labels.paid, MONTH_STYLE.paid],
+        ['debt', labels.debt, MONTH_STYLE.overdue],
+      ].forEach(([kind, label, [fill, ink]]) => {
+        const style = { font: { name: FONT, size: 10, bold: true, color: { argb: ink } }, fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: fill } }, border };
+        // The label fills the columns before the months (or the first month cell if they come first).
+        if (first > 2) ws.mergeCells(r, 1, r, first - 1);
+        for (let col = 1; col <= last; col++) Object.assign(ws.getCell(r, col), style);
+        Object.assign(ws.getCell(r, 1), { value: label, alignment: { vertical: 'middle', horizontal: 'right', indent: 1 } });
+        columns.forEach((c, i) => {
+          if (c.type !== 'month') return;
+          const sum = rows.reduce((n, row) => n + (Number(row[c.key]?.[kind]) || 0), 0);
+          Object.assign(ws.getCell(r, i + 1), { value: sum, numFmt: '#,##0;-#,##0;""', alignment: { vertical: 'middle', horizontal: 'center' } });
+        });
+        ws.getRow(r).height = 20;
+        r++;
+      });
+    };
     sheet.groups.forEach((g, gi) => {
       if (gi > 0) {
         ws.getRow(r).height = 18; // separator between groups
@@ -446,7 +469,68 @@ async function buildGroups({ columns, sheets, emptyText = '', currencySymbol = '
         });
         r++;
       });
+      totals(g.rows);
     });
+  }
+  // Last sheet: every group's paid / owed amounts per month, then the grand total of all groups.
+  const months = columns.filter((c) => c.type === 'month');
+  if (months.length && sheets.length) {
+    const ws = wb.addWorksheet(String(labels.grandSheet || 'Total').slice(0, 31), {
+      properties: { tabColor: { argb: INK } },
+      views: [{ showGridLines: false, state: 'frozen', ySplit: 2 }],
+      pageSetup: { paperSize: 9, orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
+    });
+    ws.columns = [{ width: 26 }, { width: 12 }, ...months.map(() => ({ width: 10 }))];
+    const lastCol = months.length + 2;
+    const sum = (rows, key, kind) => rows.reduce((n, row) => n + (Number(row[key]?.[kind]) || 0), 0);
+    const numFmt = '#,##0;-#,##0;""';
+    let r = 1;
+    ws.mergeCells(r, 1, r, lastCol);
+    Object.assign(ws.getCell(r, 1), {
+      value: labels.grandSheet || 'Total',
+      font: { name: FONT, size: 14, bold: true, color: { argb: 'FFFFFFFF' } },
+      fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: INK } },
+      alignment: { vertical: 'middle', indent: 1 },
+    });
+    ws.getRow(r).height = 30;
+    r++;
+    [labels.group || '', '', ...months.map((c) => c.header)].forEach((v, i) =>
+      Object.assign(ws.getCell(r, i + 1), {
+        value: v,
+        font: { name: FONT, size: 10, bold: true, color: { argb: INK } },
+        fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE9ECEF' } },
+        alignment: { vertical: 'middle', horizontal: i < 2 ? 'left' : 'center', wrapText: true },
+        border,
+      })
+    );
+    ws.getRow(r).height = 30;
+    r++;
+    // name: shown once over its two lines; rows: the students the sums are made of.
+    const block = (name, rows, color, strong) => {
+      ws.mergeCells(r, 1, r + 1, 1);
+      Object.assign(ws.getCell(r, 1), {
+        value: name,
+        font: { name: FONT, size: strong ? 11 : 10, bold: true, color: { argb: strong ? 'FFFFFFFF' : INK } },
+        fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: color } },
+        alignment: { vertical: 'middle', indent: 1 },
+        border,
+      });
+      [
+        ['paid', labels.paid, MONTH_STYLE.paid],
+        ['debt', labels.debt, MONTH_STYLE.overdue],
+      ].forEach(([kind, label, [fill, ink]], k) => {
+        const font = { name: FONT, size: strong ? 11 : 10, bold: true, color: { argb: ink } };
+        const f = { type: 'pattern', pattern: 'solid', fgColor: { argb: fill } };
+        Object.assign(ws.getCell(r + k, 2), { value: label, font, fill: f, border, alignment: { vertical: 'middle' } });
+        months.forEach((c, i) =>
+          Object.assign(ws.getCell(r + k, i + 3), { value: sum(rows, c.key, kind), numFmt, font, fill: f, border, alignment: { vertical: 'middle', horizontal: 'center' } })
+        );
+      });
+      r += 2;
+    };
+    for (const sheet of sheets) for (const g of sheet.groups) block(g.name || g.title, g.rows, soften(sheet.color, 0.75), false);
+    r++;
+    block(labels.grandTotal || 'Total', sheets.flatMap((sh) => sh.groups.flatMap((g) => g.rows)), INK, true);
   }
   if (!sheets.length) wb.addWorksheet('—');
   return wb.xlsx.writeBuffer();
