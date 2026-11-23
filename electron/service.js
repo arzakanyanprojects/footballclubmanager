@@ -1,7 +1,7 @@
 // All data operations. The host PC runs these directly; client PCs reach them over the LAN
 // through the same method names (see server.js / remote.js), so there is one code path.
 
-const { feeShares: holidayShares, parseHolidays } = require('./holidays');
+const { feeShares: holidayShares, freeHalves, parseHolidays } = require('./holidays');
 const word = require('./word');
 const { createAuth } = require('./auth');
 
@@ -142,6 +142,25 @@ function createService(db, { onWrite, getNotify } = {}) {
   // Holidays (date ranges in the settings) → the share of the monthly fee each month costs, e.g. { "2026-12": 50 }.
   const feeShares = () => holidayShares(parseHolidays(settings().holidays));
   const feeFor = (fee, period, shares = feeShares()) => (shares[period] != null ? Math.round((Number(fee) * shares[period]) / 100) : Number(fee));
+  // A student who joins on the 16th or later owes only the 2nd half of that month (with the holidays: their halves too).
+  const joinsLate = (joinDate) => /^\d{4}-\d{2}-\d{2}/.test(joinDate || '') && Number(String(joinDate).slice(8, 10)) >= 16;
+  const studentFee = (fee, period, joinDate) => {
+    if (!(joinsLate(joinDate) && String(joinDate).slice(0, 7) === period)) return feeFor(fee, period);
+    const free = new Set([1, ...(freeHalves(parseHolidays(settings().holidays)).get(period) || [])]);
+    return Math.round((Number(fee) * (100 - 50 * free.size)) / 100);
+  };
+  // The joining month of late joiners gets its half price (unpaid system fees only).
+  function priceJoinMonths() {
+    for (const c of all(
+      `SELECT c.id, c.amount, c.period, s.monthly_fee, s.join_date FROM charges c JOIN students s ON s.id = c.student_id
+       WHERE c.kind = 'monthly' AND c.status = 'unpaid' AND c.excused_by IS NULL AND c.period = substr(s.join_date, 1, 7)
+         AND CAST(substr(s.join_date, 9, 2) AS INTEGER) >= 16`
+    )) {
+      const want = studentFee(c.monthly_fee, c.period, c.join_date);
+      if (want <= 0) run('DELETE FROM charges WHERE id = :id', { id: c.id });
+      else if (want !== c.amount) run('UPDATE charges SET amount = :want WHERE id = :id', { id: c.id, want });
+    }
+  }
   // SQL for a month's fee: the student's fee times the month's share.
   const feeSql = (feeCol, periodCol, shares = feeShares()) => {
     const cases = Object.entries(shares).map(([p, v]) => `WHEN '${p}' THEN ${Number(v) / 100}`);
@@ -169,6 +188,7 @@ function createService(db, { onWrite, getNotify } = {}) {
          })()}`,
       { start: s.billing_start || currentPeriod(), current: currentPeriod(), dueDay: pad(dueDay) }
     );
+    priceJoinMonths();
     return r.changes;
   }
 
@@ -248,8 +268,10 @@ function createService(db, { onWrite, getNotify } = {}) {
   }
 
   // ---------------------------------------------------------------- excused absences
-  // Training days in the period become «Հարգելի» (unless marked present) and the monthly fee of each
-  // month the period touches is not owed (waived, marked with the absence; paid months stay paid).
+  // Training days in the period become «Հարգելի» (unless marked present). The fee works in half-months
+  // (1–15, 16 – end), like the holidays: a half mostly covered by the application is not owed. A month
+  // with both halves free (application and holidays together) is waived; with one half free it costs half,
+  // and the payment shows the application's dates. Paid months stay as they are.
   function excuseAbsence(absenceId) {
     const a = one('SELECT * FROM absences WHERE id = :id', { id: absenceId });
     const s = one('SELECT id, group_id, monthly_fee FROM students WHERE id = :id', { id: a.student_id });
@@ -268,21 +290,45 @@ function createService(db, { onWrite, getNotify } = {}) {
       }
     }
     const dueDay = pad(int(settings().due_day, 15));
+    const own = freeHalves([{ from: a.date_from, to: a.date_to }]);
+    const holiday = freeHalves(parseHolidays(settings().holidays));
     const created = [];
-    for (let period = a.date_from.slice(0, 7); period <= a.date_to.slice(0, 7); period = addMonths(period, 1)) {
-      const c = one(`SELECT id, status FROM charges WHERE student_id = :sid AND kind = 'monthly' AND period = :period`, { sid: s.id, period });
+    const reduced = {};
+    for (const [period, halves] of own) {
+      const free = new Set([...halves, ...(holiday.get(period) || [])]);
+      const c = one(`SELECT id, status, amount FROM charges WHERE student_id = :sid AND kind = 'monthly' AND period = :period`, { sid: s.id, period });
+      if (free.size >= 2) {
+        if (c) {
+          if (c.status === 'unpaid') run(`UPDATE charges SET status = 'waived', excused_by = :aid WHERE id = :id`, { id: c.id, aid: a.id });
+        } else if (s.monthly_fee > 0) {
+          const r = run(
+            `INSERT INTO charges (student_id, kind, period, amount, due_date, status, excused_by, created_by)
+             VALUES (:sid, 'monthly', :period, :fee, :due, 'waived', :aid, :user)`,
+            { sid: s.id, period, fee: s.monthly_fee, due: `${period}-${dueDay}`, aid: a.id, user: a.created_by }
+          );
+          created.push(Number(r.lastInsertRowid));
+        }
+        continue;
+      }
+      // Half the month: the fee is halved (still owed).
+      const half = Math.round((Number(s.monthly_fee) || Number(c?.amount) || 0) / 2);
+      if (!(half > 0)) continue;
       if (c) {
-        if (c.status === 'unpaid') run(`UPDATE charges SET status = 'waived', excused_by = :aid WHERE id = :id`, { id: c.id, aid: a.id });
-      } else if (s.monthly_fee > 0) {
+        if (c.status !== 'unpaid') continue;
+        reduced[c.id] = c.amount;
+        run(`UPDATE charges SET amount = :amount, excused_by = :aid, absence_from = :from, absence_to = :to WHERE id = :id`, {
+          id: c.id, amount: half, aid: a.id, from: a.date_from, to: a.date_to,
+        });
+      } else {
         const r = run(
-          `INSERT INTO charges (student_id, kind, period, amount, due_date, status, excused_by, created_by)
-           VALUES (:sid, 'monthly', :period, :fee, :due, 'waived', :aid, :user)`,
-          { sid: s.id, period, fee: s.monthly_fee, due: `${period}-${dueDay}`, aid: a.id, user: a.created_by }
+          `INSERT INTO charges (student_id, kind, period, amount, due_date, status, excused_by, absence_from, absence_to, created_by)
+           VALUES (:sid, 'monthly', :period, :amount, :due, 'unpaid', :aid, :from, :to, :user)`,
+          { sid: s.id, period, amount: half, due: `${period}-${dueDay}`, aid: a.id, from: a.date_from, to: a.date_to, user: a.created_by }
         );
         created.push(Number(r.lastInsertRowid));
       }
     }
-    run('UPDATE absences SET created_charges = :c WHERE id = :id', { id: a.id, c: JSON.stringify(created) });
+    run('UPDATE absences SET created_charges = :c, reduced_charges = :r WHERE id = :id', { id: a.id, c: JSON.stringify(created), r: JSON.stringify(reduced) });
   }
 
   // Undoes an absence (its application was deleted).
@@ -291,9 +337,16 @@ function createService(db, { onWrite, getNotify } = {}) {
     if (!a) return;
     // Fees this absence created for months still ahead go away; normal monthly billing adds them when their time comes.
     for (const cid of JSON.parse(a.created_charges || '[]')) {
-      run(`DELETE FROM charges WHERE id = :cid AND excused_by = :id AND status = 'waived' AND period > :now`, { cid, id: a.id, now: currentPeriod() });
+      run(`DELETE FROM charges WHERE id = :cid AND excused_by = :id AND status != 'paid' AND period > :now`, { cid, id: a.id, now: currentPeriod() });
     }
+    // Halved fees get their amount back (if still unpaid); waived months are owed again.
+    for (const [cid, amount] of Object.entries(JSON.parse(a.reduced_charges || '{}')))
+      run(`UPDATE charges SET amount = :amount WHERE id = :cid AND status = 'unpaid'`, { cid: Number(cid), amount });
     run(`UPDATE charges SET status = 'unpaid', excused_by = NULL WHERE excused_by = :id AND status = 'waived'`, { id: a.id });
+    run(
+      `UPDATE charges SET excused_by = NULL, absence_from = NULL, absence_to = NULL WHERE excused_by = :id AND status != 'waived'`,
+      { id: a.id }
+    );
     run(
       `DELETE FROM attendance WHERE student_id = :sid AND status = 'excused' AND date BETWEEN :from AND :to
          AND NOT EXISTS (SELECT 1 FROM absences b WHERE b.id != :id AND b.student_id = :sid AND attendance.date BETWEEN b.date_from AND b.date_to)`,
@@ -742,8 +795,8 @@ function createService(db, { onWrite, getNotify } = {}) {
         // A changed fee applies to this month's and future unpaid monthly charges.
         if (prev.monthly_fee !== row.monthly_fee) {
           const shares = feeShares();
-          for (const c of all(`SELECT id, period FROM charges WHERE student_id = :id AND kind = 'monthly' AND status = 'unpaid' AND period >= :period`, { id: p.id, period: currentPeriod() }))
-            run('UPDATE charges SET amount = :fee WHERE id = :id', { id: c.id, fee: feeFor(row.monthly_fee, c.period, shares) });
+          for (const c of all(`SELECT id, period FROM charges WHERE student_id = :id AND kind = 'monthly' AND status = 'unpaid' AND period >= :period AND excused_by IS NULL`, { id: p.id, period: currentPeriod() }))
+            run('UPDATE charges SET amount = :fee WHERE id = :id', { id: c.id, fee: studentFee(row.monthly_fee, c.period, row.join_date) });
         }
         const changes = diffStudent(before, one('SELECT * FROM students WHERE id = :id', { id: p.id }));
         if (changes.length) log(ctx, 'student.updated', `${row.first_name} ${row.last_name}`, p.id, { changes });
@@ -1520,7 +1573,7 @@ function createService(db, { onWrite, getNotify } = {}) {
     // Records the monthly fee as paid for the chosen months (YYYY-MM): settles the month's charge if it
     // exists (with the amount received), or creates it already paid. Months already paid are skipped.
     'charges.payMonths': ({ studentId, periods, amount, method, paidAt, note, absenceFrom, absenceTo }, ctx) => {
-      const st = one('SELECT monthly_fee FROM students WHERE id = :id', { id: studentId });
+      const st = one('SELECT monthly_fee, join_date FROM students WHERE id = :id', { id: studentId });
       if (!st) throw new AppError('NOT_FOUND');
       const fee = blank(amount) ? st.monthly_fee : int(amount);
       if (!(fee > 0)) throw new AppError('AMOUNT_REQUIRED');
@@ -1541,7 +1594,10 @@ function createService(db, { onWrite, getNotify } = {}) {
           { studentId, period }
         );
         if (existing?.status === 'paid') continue;
-        paid.amount = feeFor(fee, period, shares); // a holiday month costs its share of the fee
+        paid.amount = joinsLate(st.join_date) && st.join_date.slice(0, 7) === period ? studentFee(fee, period, st.join_date) : feeFor(fee, period, shares); // holidays / joining after the 15th
+        // A month halved by an application costs what that fee says.
+        const halved = existing?.status === 'unpaid' ? one('SELECT amount, excused_by FROM charges WHERE id = :id', { id: existing.id }) : null;
+        if (halved?.excused_by) paid.amount = halved.amount;
         if (existing) {
           run(
             `UPDATE charges SET status = 'paid', amount = :amount, paid_at = :paidAt, method = :method, paid_by = :user,
@@ -1953,6 +2009,19 @@ function createService(db, { onWrite, getNotify } = {}) {
       return require('./demo').load({ methods, one, all, run, settings, ctx });
     },
 
+    // Temporary: deletes all students and everything about them, and all groups (settings, users, templates and
+    // pitches stay). The screen makes a backup first.
+    'demo.wipeAll': ({ confirm }, ctx) => {
+      if (confirm !== 'WIPE') throw new AppError('NOT_CONFIRMED');
+      const tables = ['charges', 'attendance', 'absences', 'student_files', 'contracts', 'outbox', 'student_links', 'students',
+        'training_days', 'training_months', 'schedule_days', 'schedule_base', 'groups'];
+      const counts = Object.fromEntries(tables.map((t) => [t, one(`SELECT COUNT(*) AS n FROM ${t}`).n]));
+      for (const t of tables) run(`DELETE FROM ${t}`);
+      run(`UPDATE settings SET value = '0' WHERE key = 'demo_loaded'`);
+      log(ctx, 'data.wiped', `${counts.students} / ${counts.charges} / ${counts.groups}`);
+      return counts;
+    },
+
     'demo.clear': (p, ctx) => {
       if (settings().demo_loaded !== '1') throw new AppError('NO_DEMO');
       return require('./demo').clear({ run, settings, ctx });
@@ -2034,6 +2103,39 @@ function createService(db, { onWrite, getNotify } = {}) {
     autoReminders: () => (emailOn() ? remindOverdue(null, { user: 'FC Manager' }, { skipReminded: true }) : null),
     preview: (kind, when) => summaryText(kind, when),
   };
+
+  // Applications made before the half-month rule freed every month they touched: recalculate them once.
+  function recalcOldAbsences() {
+    if (settings().absence_halves === '1') return;
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      const holiday = freeHalves(parseHolidays(settings().holidays));
+      for (const a of all('SELECT * FROM absences WHERE reduced_charges IS NULL')) {
+        const own = freeHalves([{ from: a.date_from, to: a.date_to }]);
+        const fee = one('SELECT monthly_fee FROM students WHERE id = :id', { id: a.student_id })?.monthly_fee || 0;
+        const reduced = {};
+        for (const c of all(`SELECT id, period, amount FROM charges WHERE excused_by = :aid AND status = 'waived' AND kind = 'monthly'`, { aid: a.id })) {
+          const free = new Set([...(own.get(c.period) || []), ...(holiday.get(c.period) || [])]);
+          if (free.size >= 2) continue;
+          if (!(own.get(c.period) || new Set()).size) {
+            run(`UPDATE charges SET status = 'unpaid', excused_by = NULL WHERE id = :id`, { id: c.id }); // touched, but no half covered
+            continue;
+          }
+          reduced[c.id] = c.amount;
+          run(`UPDATE charges SET status = 'unpaid', amount = :amount, absence_from = :from, absence_to = :to WHERE id = :id`, {
+            id: c.id, amount: Math.round((Number(fee) || Number(c.amount)) / 2), from: a.date_from, to: a.date_to,
+          });
+        }
+        run('UPDATE absences SET reduced_charges = :r WHERE id = :id', { id: a.id, r: JSON.stringify(reduced) });
+      }
+      run(`INSERT INTO settings (key, value) VALUES ('absence_halves', '1') ON CONFLICT(key) DO UPDATE SET value = '1'`);
+      db.exec('COMMIT');
+    } catch (err) {
+      db.exec('ROLLBACK');
+      console.error('[service] recalcOldAbsences failed:', err);
+    }
+  }
+  recalcOldAbsences();
 
   return { call, ensureMonthlyCharges, settings, outbox };
 }

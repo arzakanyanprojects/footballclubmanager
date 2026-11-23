@@ -263,6 +263,10 @@ function paymentsOf(cells, fills, monthCols, t) {
     const period = periods[0];
     const firstDate = all.length ? all.reduce((a, b) => (b.date < a.date ? b : a)).date : '';
     start = firstDate.slice(0, 7) === period ? firstDate : `${period}-01`;
+    // Only the 2nd half of that month is open (I grey, II not): joined in the 2nd half → the 16th (that month costs half).
+    const cols = monthCols.filter((m) => m.period === period);
+    const used = (half) => cols.some((m) => m.half === half && (!isGrey(fills?.[m.col]) || all.some((x) => x.col === m.col)));
+    if (cols.some((m) => m.half === 'I') && !used('I') && used('II')) start = firstDate.slice(0, 7) === period && firstDate >= `${period}-16` ? firstDate : `${period}-16`;
   }
   return { payments, warn, start };
 }

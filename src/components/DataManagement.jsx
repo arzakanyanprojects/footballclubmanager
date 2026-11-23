@@ -2,12 +2,12 @@
 // (importing students, exporting them for another FC Manager, database backups).
 // Printing and Excel/CSV reports stay on their own pages.
 import { useEffect, useState } from 'react';
-import { FileUp, ArrowRightLeft, DatabaseBackup, FolderOpen, Upload, Cloud, CheckCircle2, AlertTriangle } from 'lucide-react';
+import { FileUp, ArrowRightLeft, DatabaseBackup, FolderOpen, Upload, Cloud, CheckCircle2, AlertTriangle, Trash2 } from 'lucide-react';
 import { useT } from '../i18n';
 import { useRpc, rpc, todayIso } from '../lib';
 import { useAuth } from './Auth';
 import { ImportModal } from './Import';
-import { Button, Field, Segmented, useAction, useConfirm, useToast } from './ui';
+import { Button, Field, Modal, Segmented, useAction, useConfirm, useToast } from './ui';
 
 export default function DataManagement({ appState, setAppState }) {
   const auth = useAuth();
@@ -17,6 +17,7 @@ export default function DataManagement({ appState, setAppState }) {
       {auth.can('students', 'edit') && <ImportCard />}
       {auth.can('students', 'view') && <TransferCard />}
       {isHost && auth.can('settings', 'view') && <BackupsCard appState={appState} setAppState={setAppState} />}
+      {isHost && auth.can('settings', 'edit') && <WipeCard setAppState={setAppState} />}
     </>
   );
 }
@@ -134,6 +135,68 @@ function TransferCard() {
           </Button>
         </div>
       </div>
+    </div>
+  );
+}
+
+// Temporary: delete all students and groups (a backup is made first; it can be restored from «Պահուստային պատճեններ»).
+function WipeCard({ setAppState }) {
+  const t = useT();
+  const act = useAction();
+  const [open, setOpen] = useState(false);
+  const [word, setWord] = useState('');
+  const WORD = t('wipe.word');
+  const run = async () => {
+    const r = await act(async () => {
+      const b = await window.fc.backup.create();
+      if (!b.ok) throw Object.assign(new Error(b.error), { code: 'BACKUP_FAILED', detail: b.error });
+      return rpc('demo.wipeAll', { confirm: 'WIPE' });
+    });
+    if (r) {
+      setOpen(false);
+      setWord('');
+      setAppState(await window.fc.state());
+      toast(r);
+    }
+  };
+  const toastApi = useToast();
+  const toast = (r) => toastApi.success(t('wipe.done', { students: r.students, payments: r.charges, groups: r.groups }));
+  return (
+    <div className="card settings-section" style={{ borderColor: 'var(--bad)' }}>
+      <div className="card-head">
+        <Trash2 size={17} style={{ color: 'var(--bad)' }} />
+        <h3 style={{ color: 'var(--bad)' }}>{t('wipe.title')}</h3>
+      </div>
+      <div className="card-pad">
+        <div className="muted small">{t('wipe.text')}</div>
+        <div className="row">
+          <Button variant="danger" icon={Trash2} onClick={() => setOpen(true)}>
+            {t('wipe.button')}
+          </Button>
+        </div>
+      </div>
+      {open && (
+        <Modal
+          title={t('wipe.title')}
+          onClose={() => setOpen(false)}
+          width={460}
+          footer={
+            <>
+              <Button onClick={() => setOpen(false)}>{t('common.cancel')}</Button>
+              <Button variant="danger-solid" icon={Trash2} onClick={run} disabled={word.trim().toUpperCase() !== WORD.toUpperCase()}>
+                {t('wipe.button')}
+              </Button>
+            </>
+          }
+        >
+          <div className="stack" style={{ gap: 12 }}>
+            <div className="small">{t('wipe.confirmText')}</div>
+            <Field label={t('wipe.typeWord', { word: WORD })}>
+              <input className="input" value={word} onChange={(e) => setWord(e.target.value)} autoFocus />
+            </Field>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }

@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import { Plus, Download, Wallet, CheckCircle2, Pencil, Ban, RotateCcw, Trash2, Printer, Package, Receipt, Undo2 } from 'lucide-react';
 import { useT, monthName } from '../i18n';
-import { feeShares as holidayShares, parseHolidays } from '../holidays';
+import { feeShares as holidayShares, freeHalves, parseHolidays } from '../holidays';
 import { useCan } from '../components/Auth';
 import { useColumns } from '../components/Columns';
 import { SendRemindersButton } from '../components/Notify';
@@ -432,6 +432,13 @@ const absenceOk = (v) => !v || (v.from && v.to && v.to >= v.from);
 // Holiday months from the club's holidays (date ranges): { "2026-12": 50 } — that month costs 50% of the fee.
 export const feeShares = (club) => holidayShares(parseHolidays(club?.holidays));
 export const monthFee = (fee, period, shares) => (shares?.[period] != null ? Math.round((Number(fee) * Number(shares[period])) / 100) : Number(fee) || 0);
+// The fee of one month for this student: holidays, and joining on the 16th or later (that month costs half).
+export function studentMonthFee(fee, period, club, joinDate) {
+  const late = /^\d{4}-\d{2}-\d{2}/.test(joinDate || '') && joinDate.slice(0, 7) === period && Number(joinDate.slice(8, 10)) >= 16;
+  if (!late) return monthFee(fee, period, feeShares(club));
+  const free = new Set([1, ...(freeHalves(parseHolidays(club?.holidays)).get(period) || [])]);
+  return Math.round((Number(fee) * (100 - 50 * free.size)) / 100);
+}
 
 function MethodPicker({ value, onChange }) {
   const t = useT();
@@ -594,7 +601,7 @@ export function ChargeModal({ studentId: fixedStudent, onClose }) {
   }, [fixedStudent]);
 
   useEffect(() => {
-    if (!amountTouched && kind === 'monthly' && student) setAmount(monthFee(student.monthly_fee, period, feeShares(club)));
+    if (!amountTouched && kind === 'monthly' && student) setAmount(studentMonthFee(student.monthly_fee, period, club, student.join_date));
   }, [kind, student, amountTouched, period]);
 
   const save = async () => {
@@ -960,7 +967,10 @@ export function MonthlyPaymentModal({ student, charges, onClose }) {
   const selected = periods.filter((p) => picked.has(p));
   const club = useClub();
   const shares = feeShares(club);
-  const amountOf = (p) => monthFee(amount, p, shares); // a holiday month costs its share of the fee
+  // A holiday month costs its share of the fee; a month halved by an application costs what that fee says.
+  const amountOf = (p) =>
+    byPeriod[p]?.status === 'unpaid' && byPeriod[p]?.excused_by ? Number(byPeriod[p].amount) : studentMonthFee(amount, p, club, student.join_date);
+  const lateJoin = selected.find((p) => p === student.join_date?.slice(0, 7) && Number(student.join_date.slice(8, 10)) >= 16);
   const total = selected.reduce((n, p) => n + amountOf(p), 0);
   const holidays = selected.filter((p) => shares[p] != null);
 
@@ -1036,6 +1046,11 @@ export function MonthlyPaymentModal({ student, charges, onClose }) {
           <Field label={t('payments.paidAt')}>
             <input className="input" type="date" value={paidAt} onChange={(e) => setPaidAt(e.target.value)} />
           </Field>
+          {lateJoin && (
+            <div className="span-full small" style={{ color: 'var(--info)' }}>
+              {t('payments.lateJoin', { month: monthName(t, lateJoin), date: fmtDate(student.join_date) })} — {money(amountOf(lateJoin), club.currency)}
+            </div>
+          )}
           {holidays.length > 0 && (
             <div className="span-full small" style={{ color: 'var(--info)' }}>
               {holidays.map((p) => t('payments.holidayShare', { month: monthName(t, p), n: shares[p] }) + ` — ${money(amountOf(p), club.currency)}`).join(' · ')}

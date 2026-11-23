@@ -372,6 +372,11 @@ const MIGRATIONS = [
   INSERT OR IGNORE INTO settings (key, value) VALUES ('holidays', '[{"from":"2026-12-15","to":"2027-01-15"}]');
   DELETE FROM settings WHERE key = 'fee_months';
   `,
+  // v27: an application that covers only half a month halves that month's fee instead of freeing it;
+  // the fees it lowered are remembered ({ chargeId: amount before }) so deleting it restores them.
+  `
+  ALTER TABLE absences ADD COLUMN reduced_charges TEXT;
+  `,
 ];
 
 function seed(db) {

@@ -7,8 +7,9 @@ const pad = (n) => String(n).padStart(2, '0');
 const daysIn = (y, m) => new Date(y, m, 0).getDate();
 const toDay = (iso) => Date.UTC(Number(iso.slice(0, 4)), Number(iso.slice(5, 7)) - 1, Number(iso.slice(8, 10))) / 86400000;
 
-function feeShares(holidays) {
-  const halves = new Map(); // "YYYY-MM" → Set of free halves (1, 2)
+// "YYYY-MM" → Set of the halves (1, 2) the date ranges cover.
+function freeHalves(holidays) {
+  const halves = new Map();
   for (const h of Array.isArray(holidays) ? holidays : []) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(h?.from || '') || !/^\d{4}-\d{2}-\d{2}$/.test(h?.to || '') || h.to < h.from) continue;
     const a = toDay(h.from);
@@ -35,7 +36,11 @@ function feeShares(holidays) {
       }
     }
   }
-  return Object.fromEntries([...halves].map(([p, set]) => [p, 100 - 50 * set.size]));
+  return halves;
+}
+
+function feeShares(holidays) {
+  return Object.fromEntries([...freeHalves(holidays)].map(([p, set]) => [p, 100 - 50 * set.size]));
 }
 
 const parseHolidays = (raw) => {
@@ -47,4 +52,4 @@ const parseHolidays = (raw) => {
   }
 };
 
-module.exports = { feeShares, parseHolidays };
+module.exports = { feeShares, freeHalves, parseHolidays };
