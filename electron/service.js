@@ -573,6 +573,16 @@ function createService(db, { onWrite, getNotify } = {}) {
           { t }
         ),
         collections: months.map((m) => ({ period: m, total: byPeriod[m] || 0 })),
+        // The same money by the month the fee is for (as in the groups Excel), whenever it was paid.
+        feesPaid: (() => {
+          const rows = Object.fromEntries(
+            all(
+              `SELECT period, SUM(amount) AS total FROM charges WHERE status = 'paid' AND kind = 'monthly' AND period >= :from GROUP BY period`,
+              { from: months[0] }
+            ).map((r) => [r.period, r.total])
+          );
+          return months.map((m) => ({ period: m, total: rows[m] || 0 }));
+        })(),
         debtors: all(
           `SELECT s.id, s.first_name, s.last_name, g.name AS group_name, SUM(c.amount) AS debt,
                   MIN(c.due_date) AS oldest
@@ -651,6 +661,11 @@ function createService(db, { onWrite, getNotify } = {}) {
     },
 
     // ---------------------------------------------------------------- students
+    // How many students there are: active, inactive, all (for «shown N of M»).
+    'students.summary': () => one(
+      `SELECT SUM(status = 'active') AS active, SUM(status != 'active') AS inactive, COUNT(*) AS total FROM students`
+    ),
+
     'students.list': (p = {}) =>
       all(
         `SELECT s.id, s.first_name, s.last_name, s.birth_date, s.phone, s.parent_name, s.parent_phone,

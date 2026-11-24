@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
-import { Plus, Download, Users, Paperclip, Camera, Trash2, UserRound, FileText, Wallet, StickyNote } from 'lucide-react';
+import { Plus, Download, Users, Paperclip, Camera, Trash2, UserRound, FileText, Wallet, StickyNote, FilterX } from 'lucide-react';
 import { useT, monthName } from '../i18n';
 import { useCan } from '../components/Auth';
 import { useColumns } from '../components/Columns';
@@ -48,7 +48,8 @@ export default function Students({ nav, route }) {
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState('active');
   const [groupId, setGroupId] = useState(route.groupId ? String(route.groupId) : '');
-  const [debtOnly, setDebtOnly] = useState(false);
+  const [debtOnly, setDebtOnly] = useState(!!route.debtOnly);
+  const [category, setCategory] = useState(''); // '' all · 'none' without a category · a category key
   const [editing, setEditing] = useState(route.create ? {} : null);
   const [paying, setPaying] = useState(null);
   const { currency } = useClub();
@@ -66,10 +67,29 @@ export default function Students({ nav, route }) {
     () =>
       (data || [])
         .filter((s) => !debtOnly || s.overdue > 0)
+        .filter((s) => !category || (category === 'none' ? !s.category : s.category === category))
         .map((s) => ({ ...s, byMonth: Object.fromEntries(s.months.map((m) => [m.period, m])) })),
-    [data, debtOnly]
+    [data, debtOnly, category]
   );
 
+
+  // «Ցուցադրված է 2 սան 97-ից»: the students shown with the filters, of all students in this tab (active / inactive / all).
+  const { data: counts } = useRpc('students.summary');
+  const totalHere = counts ? Number(status === 'active' ? counts.active : status === 'inactive' ? counts.inactive : counts.total) || 0 : null;
+  const shownText =
+    totalHere != null && rows.length !== totalHere
+      ? t('students.shownOf', { n: rows.length, total: totalHere })
+      : t('students.count', { n: rows.length });
+
+  // Any filter differing from the default (active students, everything else off) → «Մաքրել ֆիլտրերը».
+  const filtered = !!(search.trim() || groupId || category || debtOnly || status !== 'active');
+  const clearFilters = () => {
+    setSearch('');
+    setGroupId('');
+    setCategory('');
+    setDebtOnly(false);
+    setStatus('active');
+  };
 
   const text = (v) => v || <span className="muted">—</span>;
   const plain = (id, label, get, opts = {}) => ({
@@ -242,7 +262,7 @@ export default function Students({ nav, route }) {
       <div className="page-head">
         <div>
           <h1>{t('nav.students')}</h1>
-          <div className="sub">{data ? t('students.count', { n: rows.length }) : ' '}</div>
+          <div className="sub">{data ? shownText : ' '}</div>
         </div>
         <div className="spacer" />
         {columnsButton}
@@ -266,6 +286,15 @@ export default function Students({ nav, route }) {
             </option>
           ))}
         </select>
+        <select className="select" style={{ width: 'auto', maxWidth: 240 }} value={category} onChange={(e) => setCategory(e.target.value)} title={t('students.category')}>
+          <option value="">{t('students.allCategories')}</option>
+          {CATEGORIES.map((c) => (
+            <option key={c} value={c}>
+              {t(`category.${c}`)}
+            </option>
+          ))}
+          <option value="none">{t('students.noCategory')}</option>
+        </select>
         <Segmented
           value={status}
           onChange={setStatus}
@@ -280,6 +309,11 @@ export default function Students({ nav, route }) {
             <input type="checkbox" checked={debtOnly} onChange={(e) => setDebtOnly(e.target.checked)} />
             {t('students.withDebt')}
           </label>
+        )}
+        {filtered && (
+          <Button variant="ghost" icon={FilterX} onClick={clearFilters}>
+            {t('students.clearFilters')}
+          </Button>
         )}
         <div className="grow" />
         {canPay && columns.some((c) => c.id === 'months') && (
@@ -315,6 +349,7 @@ export default function Students({ nav, route }) {
               ))}
             </tbody>
           </table>
+          <div className="table-foot small muted">{shownText}</div>
         </div>
       )}
 

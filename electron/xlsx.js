@@ -487,7 +487,7 @@ async function buildGroups({ columns, sheets, emptyText = '', currencySymbol = '
     let r = 1;
     ws.mergeCells(r, 1, r, lastCol);
     Object.assign(ws.getCell(r, 1), {
-      value: labels.grandSheet || 'Total',
+      value: labels.grandTitle || labels.grandSheet || 'Total',
       font: { name: FONT, size: 14, bold: true, color: { argb: 'FFFFFFFF' } },
       fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: INK } },
       alignment: { vertical: 'middle', indent: 1 },

@@ -697,3 +697,5 @@ table.table { width: 100%; border-collapse: collapse; }
 .history-changes { margin-top: 3px; padding-left: 10px; border-left: 2px solid var(--border); display: grid; gap: 1px; }
 .list-item.on { background: var(--accent-soft, rgba(34, 197, 94, 0.12)); }
 .students-table .parent-name { white-space: nowrap; max-width: 190px; overflow: hidden; text-overflow: ellipsis; }
+
+.table-foot { padding: 8px 14px; border-top: 1px solid var(--border); }

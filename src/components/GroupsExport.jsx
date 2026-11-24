@@ -149,6 +149,7 @@ export function GroupsExportModal({ groups, onClose }) {
           paid: t('groupsExport.totalPaid'),
           debt: t('groupsExport.totalDebt'),
           grandSheet: t('groupsExport.grandSheet'),
+          grandTitle: t('groupsExport.grandTitle'),
           grandTotal: t('groupsExport.grandTotal'),
           group: t('students.group'),
         },

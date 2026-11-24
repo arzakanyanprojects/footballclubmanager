@@ -13,6 +13,7 @@ export default function Dashboard({ nav }) {
   const { currency } = useClub();
   const { data } = useRpc('dashboard.summary');
   const [exporting, setExporting] = useState(false);
+  const [chartMode, setChartMode] = useState('paid'); // 'paid': by payment date · 'fees': by the month the fee is for
   if (!data) return <Loading />;
 
   const m = data.monthlyThisPeriod;
@@ -62,7 +63,7 @@ export default function Dashboard({ nav }) {
             {money(Math.abs(delta), currency)} {t('dash.vsLastMonth')}
           </div>
         </div>
-        <div className="card stat click" style={{ cursor: 'pointer' }} onClick={() => nav('payments', { preset: 'overdue' })}>
+        <div className="card stat click" style={{ cursor: 'pointer' }} onClick={() => nav('students', { debtOnly: true })}>
           <div className="stat-top">
             {t('dash.overdue')}
             <div className="stat-icon bad">
@@ -115,18 +116,23 @@ export default function Dashboard({ nav }) {
 
           <div className="card">
             <div className="card-head">
-              <h3>{t('dash.collections')}</h3>
+              <h3>{t(chartMode === 'fees' ? 'dash.feesPaid' : 'dash.collections')}</h3>
+              <div className="spacer" />
+              <div className="seg">
+                {['paid', 'fees'].map((m) => (
+                  <button key={m} className={chartMode === m ? 'on' : ''} onClick={() => setChartMode(m)}>
+                    {t(`dash.chart_${m}`)}
+                  </button>
+                ))}
+              </div>
             </div>
-            <CollectionsChart rows={data.collections} currency={currency} />
+            <div className="small muted" style={{ padding: '0 18px' }}>{t(chartMode === 'fees' ? 'dash.feesPaidHint' : 'dash.collectionsHint')}</div>
+            <CollectionsChart rows={chartMode === 'fees' ? data.feesPaid || data.collections : data.collections} currency={currency} />
           </div>
 
           <div className="card">
             <div className="card-head">
               <h3>{t('dash.recentPayments')}</h3>
-              <div className="spacer" />
-              <Button size="sm" variant="ghost" onClick={() => nav('payments', { preset: 'paid' })}>
-                {t('common.viewAll')} <ChevronRight size={15} />
-              </Button>
             </div>
             {data.recentPayments.length === 0 ? (
               <Empty title={t('dash.noPayments')} />
@@ -156,7 +162,7 @@ export default function Dashboard({ nav }) {
             <div className="card-head">
               <h3>{t('dash.debtors')}</h3>
               <div className="spacer" />
-              <Button size="sm" variant="ghost" onClick={() => nav('payments', { preset: 'overdue' })}>
+              <Button size="sm" variant="ghost" onClick={() => nav('students', { debtOnly: true })}>
                 {t('common.viewAll')} <ChevronRight size={15} />
               </Button>
             </div>
