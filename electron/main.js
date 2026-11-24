@@ -314,6 +314,40 @@ async function renderHtmlWindow(html) {
   return w;
 }
 
+// The thermal receipt as a pure black-and-white PNG (no grey: thermal heads print grey as faint dots).
+// Drawn 2× (≈ the 203 dpi of the printer head), as wide as the printed area of the roll.
+async function receiptImage(html, widthMm) {
+  const zoom = 2;
+  const cssWidth = Math.ceil(((widthMm - 8) * 96) / 25.4);
+  const w = new BrowserWindow({ show: false, useContentSize: true, width: cssWidth * zoom, height: 400, webPreferences: { sandbox: true, zoomFactor: zoom, offscreen: true } });
+  try {
+    // Offscreen: painted although never shown, and not limited to the screen height.
+    await w.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
+    await w.webContents.insertCSS('html { overflow: hidden !important; } ::-webkit-scrollbar { display: none; }');
+    w.webContents.setZoomFactor(zoom);
+    const h = await w.webContents.executeJavaScript(
+      `document.fonts.ready.then(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))).then(() => Math.ceil(document.documentElement.scrollHeight))`
+    );
+    const width = cssWidth * zoom;
+    const height = Math.ceil(h * zoom);
+    w.setContentSize(width, height);
+    await w.webContents.executeJavaScript('new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(r, 120))))');
+    const img = await w.webContents.capturePage({ x: 0, y: 0, width, height });
+    const size = img.getSize();
+    if (!size.width || !size.height) throw new Error('THERMAL_RENDER');
+    const bmp = img.toBitmap(); // BGRA
+    for (let i = 0; i < bmp.length; i += 4) {
+      const lum = 0.114 * bmp[i] + 0.587 * bmp[i + 1] + 0.299 * bmp[i + 2];
+      const v = lum < 170 ? 0 : 255;
+      bmp[i] = bmp[i + 1] = bmp[i + 2] = v;
+      bmp[i + 3] = 255;
+    }
+    return nativeImage.createFromBitmap(bmp, size).toPNG();
+  } finally {
+    w.destroy();
+  }
+}
+
 // ------------------------------------------------------------------ IPC
 function registerIpc() {
   ipcMain.handle('auth:setToken', (_e, token, remember) => {
@@ -692,26 +726,42 @@ function registerIpc() {
 
   // A customer receipt on the thermal (roll) printer, straight to the chosen printer without a dialog.
   // The page is as wide as the roll and as long as the receipt.
+  // Modes (Settings → receipt printer):
+  //   image  — the receipt as a black-and-white picture on a roll-long page (default: works with POS drivers
+  //            that swap in their own fonts, which have no Armenian letters and print blank paper)
+  //   imageA — the same picture on the driver's own paper size (drivers that ignore a custom page size)
+  //   text   — the receipt as text on a roll-long page (the first way; sharpest where the driver allows it)
   ipcMain.handle('thermal:print', async (_e, { html }) => {
     const t = config.thermal || {};
     if (!t.printer && !process.env.FC_EXPORT_DIR) return { ok: false, error: 'THERMAL_NOT_SET' };
     const widthMm = Number(t.width) || 80;
-    const w = await renderHtmlWindow(html);
+    const mode = ['image', 'imageA', 'text'].includes(t.mode) ? t.mode : 'image';
+    const stamp = Date.now();
+    let page = html;
+    if (mode !== 'text') {
+      const png = await receiptImage(html, widthMm);
+      if (process.env.FC_EXPORT_DIR) fs.writeFileSync(path.join(process.env.FC_EXPORT_DIR, `thermal-${stamp}.png`), png);
+      page = `<!doctype html><html><head><meta charset="utf-8"><style>
+        @page { margin: 0; } html, body { margin: 0; padding: 0; background: #fff; }
+        img { display: block; width: ${widthMm - 8}mm; }
+      </style></head><body><img src="data:image/png;base64,${png.toString('base64')}"></body></html>`;
+    }
+    const w = await renderHtmlWindow(page);
     try {
-      const heightPx = await w.webContents.executeJavaScript('Math.ceil(document.documentElement.scrollHeight)');
+      // Fonts and the picture fully laid out before printing.
+      const heightPx = await w.webContents.executeJavaScript(
+        `document.fonts.ready.then(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))).then(() => Math.ceil(document.documentElement.scrollHeight))`
+      );
       const pageSize = { width: widthMm * 1000, height: Math.max(40000, Math.ceil(((heightPx + 8) * 25.4 * 1000) / 96)) }; // microns
       if (process.env.FC_EXPORT_DIR) {
         const pdf = await w.webContents.printToPDF({ printBackground: true, pageSize: { width: pageSize.width / 25400, height: pageSize.height / 25400 }, margins: { top: 0, bottom: 0, left: 0, right: 0 } });
-        const stamp = Date.now();
         fs.writeFileSync(path.join(process.env.FC_EXPORT_DIR, `thermal-${stamp}.pdf`), pdf);
         fs.writeFileSync(path.join(process.env.FC_EXPORT_DIR, `thermal-${stamp}.html`), html);
-        return { ok: true };
+        return { ok: true, mode };
       }
-      return await new Promise((resolve) =>
-        w.webContents.print({ silent: true, deviceName: t.printer, printBackground: true, margins: { marginType: 'none' }, pageSize }, (success, reason) =>
-          resolve({ ok: success, error: success ? undefined : reason })
-        )
-      );
+      const opts = { silent: true, deviceName: t.printer, printBackground: true, margins: { marginType: 'none' } };
+      if (mode !== 'imageA') opts.pageSize = pageSize;
+      return await new Promise((resolve) => w.webContents.print(opts, (success, reason) => resolve({ ok: success, error: success ? undefined : reason })));
     } finally {
       w.destroy();
     }

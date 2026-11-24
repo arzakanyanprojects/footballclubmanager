@@ -186,6 +186,16 @@ export function ThermalSettings({ settings, onChange }) {
                 <option value={58}>58 mm</option>
               </select>
             </Field>
+            <Field label={t('thermal.mode')} className="span-2">
+              <select className="select" value={s.mode || 'image'} onChange={(e) => set({ mode: e.target.value })}>
+                {['image', 'imageA', 'text'].map((m) => (
+                  <option key={m} value={m}>
+                    {t(`thermal.mode_${m}`)}
+                  </option>
+                ))}
+              </select>
+              <div className="small muted" style={{ marginTop: 4 }}>{t('thermal.modeHint')}</div>
+            </Field>
           </div>
           <div className="grid-2">
             <Field label={t('thermal.headerName')}>
