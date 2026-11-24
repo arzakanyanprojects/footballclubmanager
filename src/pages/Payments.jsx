@@ -7,6 +7,7 @@ import { useColumns } from '../components/Columns';
 import { SendRemindersButton } from '../components/Notify';
 import { useHdm } from '../components/Hdm';
 import { useCustomerReceipt } from '../components/Thermal';
+import { useMessenger } from '../components/Messenger';
 import { useRpc, rpc, fmtDate, todayIso, currentPeriod, addMonths, saveCsv, money } from '../lib';
 import {
   Badge, Button, Empty, Field, Loading, Modal, Money, RowMenu, SearchBox, Segmented, StudentPicker, Tabs,
@@ -461,6 +462,7 @@ export function PayModal({ charges, student, onClose, onDone }) {
   const lock = useEditLock((student ? [student.id] : [...new Set(charges.map((c) => c.student_id))]).filter(Boolean).map((id) => `student:${id}`));
   const hdm = useHdm();
   const customer = useCustomerReceipt();
+  const messenger = useMessenger();
   const [method, setMethod] = useState(PAYMENT_METHODS[0]);
   const [paidAt, setPaidAt] = useState(todayIso());
   // The amount actually received for each charge; starts at the amount due and can be changed.
@@ -488,6 +490,7 @@ export function PayModal({ charges, student, onClose, onDone }) {
         if (!ok) break;
         if (pre) await rpc('charges.setReceipt', { ids: ok.ids || list.map((c) => c.id), receipt: pre.receiptNo, crn: pre.crn, fiscal: pre.fiscalNo }).catch(() => {});
         saved++;
+        messenger?.afterPayment(list[0].student_id, nameOf(list[0]));
         await customer.afterPayment({
           studentId: list[0].student_id,
           items: list.map((c) => ({ id: c.id, label: chargeLabel(t, c), amount: Number(amounts[c.id]) })),
@@ -516,6 +519,7 @@ export function PayModal({ charges, student, onClose, onDone }) {
       const c0 = list[0];
       const items = list.map((c) => ({ id: c.id, label: chargeLabel(t, c), amount: Number(amounts[c.id]) }));
       const r = await hdm.afterPayment({ method, student: nameOf(c0), items });
+      messenger?.afterPayment(c0.student_id, nameOf(c0));
       await customer.afterPayment({ studentId: c0.student_id, items, method, paidAt, hdm: r || null });
     }
   };
@@ -598,6 +602,7 @@ export function ChargeModal({ studentId: fixedStudent, onClose }) {
   const [note, setNote] = useState('');
   const hdm = useHdm();
   const customer = useCustomerReceipt();
+  const messenger = useMessenger();
   const club = useClub();
 
   useEffect(() => {
@@ -636,6 +641,7 @@ export function ChargeModal({ studentId: fixedStudent, onClose }) {
     let r = pre;
     if (pre) await rpc('charges.setReceipt', { ids: [ok.id], receipt: pre.receiptNo, crn: pre.crn, fiscal: pre.fiscalNo }).catch(() => {});
     else r = await hdm.afterPayment({ method, student: who, items });
+    messenger?.afterPayment(studentId, who);
     await customer.afterPayment({ studentId, items, method, paidAt: todayIso(), hdm: r || null });
   };
 
@@ -956,6 +962,7 @@ export function MonthlyPaymentModal({ student, charges, onClose }) {
   const lock = useEditLock(`student:${student.id}`);
   const hdm = useHdm();
   const customer = useCustomerReceipt();
+  const messenger = useMessenger();
   const year = todayIso().slice(0, 4);
   const periods = Array.from({ length: 12 }, (_, i) => `${year}-${String(i + 1).padStart(2, '0')}`);
   const byPeriod = Object.fromEntries(charges.filter((c) => c.kind === 'monthly').map((c) => [c.period, c]));
@@ -1009,6 +1016,7 @@ export function MonthlyPaymentModal({ student, charges, onClose }) {
     let r = pre;
     if (pre) await rpc('charges.setReceipt', { ids: ok.ids, receipt: pre.receiptNo, crn: pre.crn, fiscal: pre.fiscalNo }).catch(() => {});
     else r = await hdm.afterPayment({ method, student: who, items });
+    messenger?.afterPayment(student.id, who);
     await customer.afterPayment({ studentId: student.id, items, method, paidAt, hdm: r || null });
   };
 

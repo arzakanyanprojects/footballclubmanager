@@ -395,6 +395,16 @@ const MIGRATIONS = [
      BEGIN UPDATE groups SET version = OLD.version + 1 WHERE id = OLD.id; END;
    CREATE TRIGGER charges_version AFTER UPDATE ON charges FOR EACH ROW WHEN NEW.version = OLD.version
      BEGIN UPDATE charges SET version = OLD.version + 1 WHERE id = OLD.id; END;`,
+  // v30: the club's new contract (2026) replaces the built-in contract template; contracts made from it
+  // print with the new text from now on.
+  (db) => {
+    const file = fs.readFileSync(path.join(__dirname, 'templates', 'pyunik-contract.docx'));
+    const name = 'Վճարովի թիմերի պայմանագիր';
+    const r = db
+      .prepare(`UPDATE doc_templates SET file = ?, file_name = ?, updated_at = datetime('now', 'localtime') WHERE name = ?`)
+      .run(file, `${name}.docx`, name);
+    if (!r.changes) db.prepare('INSERT INTO doc_templates (name, file, file_name) VALUES (?, ?, ?)').run(name, file, `${name}.docx`);
+  },
 ];
 
 function seed(db) {

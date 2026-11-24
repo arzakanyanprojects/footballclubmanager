@@ -7,6 +7,7 @@ import { HdmSettings } from '../components/Hdm';
 import { ThermalSettings } from '../components/Thermal';
 import { UpdateSettings } from '../components/Updates';
 import { NotifySettings } from '../components/Notify';
+import { MessengerTemplates } from '../components/Messenger';
 import { MyAccount, UsersSettings, useAuth } from '../components/Auth';
 import DataManagement from '../components/DataManagement';
 import { useEditLock } from '../components/Locks';
@@ -43,7 +44,12 @@ export default function Settings({ route, appState, setAppState }) {
         {tab === 'network' && <NetworkSettings appState={appState} setAppState={setAppState} />}
         {tab === 'data' && <DataManagement appState={appState} setAppState={setAppState} />}
         {tab === 'users' && <UsersSettings />}
-        {tab === 'notify' && <NotifySettings />}
+        {tab === 'notify' && (
+          <>
+            <MessengerTemplates />
+            <NotifySettings />
+          </>
+        )}
         {tab === 'activity' && <ActivityLog />}
       </div>
     </>

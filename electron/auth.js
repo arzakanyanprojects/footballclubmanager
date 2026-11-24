@@ -51,7 +51,7 @@ const SHARED_READS = {
   'docTemplates.list': ['contracts', 'students'],
 };
 // Writes that only prepare data for viewing.
-const VIEW_WRITES = new Set(['training.ensure']);
+const VIEW_WRITES = new Set(['training.ensure', 'notify.messenger']);
 // Open to anyone (the sign-in screen needs them).
 const PUBLIC = new Set(['auth.status', 'auth.login', 'settings.get']);
 // Open to anyone signed in.

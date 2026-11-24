@@ -1,4 +1,4 @@
-﻿const { app, BrowserWindow, ipcMain, dialog, shell, nativeTheme, Tray, Menu, nativeImage, safeStorage } = require('electron');
+﻿const { app, BrowserWindow, ipcMain, dialog, shell, nativeTheme, Tray, Menu, nativeImage, safeStorage, clipboard } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
@@ -77,14 +77,19 @@ const newAccessKey = () => {
 };
 
 // ------------------------------------------------------------------ backend lifecycle
+// A message to the page — only while the window still exists (timers can fire after it is gone, e.g. when quitting).
+function toPage(channel, ...args) {
+  if (win && !win.isDestroyed() && !win.webContents.isDestroyed()) win.webContents.send(channel, ...args);
+}
+
 let changeTimer = null;
 function notifyChanged() {
   clearTimeout(changeTimer);
-  changeTimer = setTimeout(() => win?.webContents.send('data-changed'), 80);
+  changeTimer = setTimeout(() => toPage('data-changed'), 80);
 }
 
 function sendStatus() {
-  win?.webContents.send('connection-status', remote ? remote.isOnline() : true);
+  toPage('connection-status', remote ? remote.isOnline() : true);
 }
 
 function stopBackend() {
@@ -211,7 +216,7 @@ const gdrive = createGDrive({
   lang: () => config.language,
 });
 const notifyGdrive = () => {
-  if (win && !win.isDestroyed()) win.webContents.send('gdrive:changed', gdrive.status());
+  toPage('gdrive:changed', gdrive.status());
 };
 
 function listBackups() {
@@ -277,7 +282,7 @@ function createWindow() {
     if (quitting) return;
     e.preventDefault();
     win.hide();
-    win.webContents.send('logout-requested');
+    toPage('logout-requested');
     // In case the page could not do it itself: forget that sign-in here too (not a newer one).
     const was = authToken;
     setTimeout(() => {
@@ -285,7 +290,7 @@ function createWindow() {
       authToken = null;
       delete config.authToken;
       saveConfig();
-      if (win && !win.isDestroyed()) win.webContents.send('logout-requested');
+      toPage('logout-requested');
     }, 3000);
     if (!config.trayHintSignOut && tray) {
       tray.displayBalloon({
@@ -709,6 +714,49 @@ function registerIpc() {
     }
   });
 
+  // A Word file with Word's own print screen (preview, printer, copies) instead of printing straight away.
+  // Without Word, the file just opens in its usual program.
+  ipcMain.handle('file:printDialog', async (_e, { name, data }) => {
+    const dir = path.join(app.getPath('temp'), 'FC Manager');
+    fs.mkdirSync(dir, { recursive: true });
+    const safe = String(name || 'document.docx').replace(/[\\/:*?"<>|]+/g, '_').slice(-120);
+    const file = path.join(dir, `${Date.now()}-${safe}`);
+    fs.writeFileSync(file, Buffer.from(data, 'base64'));
+    if (process.env.FC_EXPORT_DIR) {
+      fs.copyFileSync(file, path.join(process.env.FC_EXPORT_DIR, `print-dialog-${safe}`));
+      return { ok: true, via: 'test' };
+    }
+    const { execFile, spawn } = require('child_process');
+    const hasWord = await new Promise((resolve) =>
+      execFile('reg.exe', ['query', 'HKCR\\Word.Application\\CurVer'], { windowsHide: true, timeout: 10000 }, (err) => resolve(!err))
+    );
+    if (!hasWord) {
+      const err = await shell.openPath(file); // no Word: its usual program (print from there)
+      return err ? { ok: false, error: 'PRINT_FAILED', detail: err } : { ok: true, via: 'open' };
+    }
+    // Word's Print window (printer, pages, copies). Printing finishes before the file is closed again;
+    // Word itself closes only if nothing else is open in it. The app doesn't wait for the window.
+    const script = [
+      "$ErrorActionPreference = 'Stop'",
+      '$w = New-Object -ComObject Word.Application',
+      '$w.Visible = $true',
+      '$d = $w.Documents.Open($env:FC_DOC, $false, $true)',
+      '$w.Options.PrintBackground = $false',
+      '$w.Activate()',
+      // Windows keeps a program started in the background behind FC Manager: a tap of Alt lets Word come forward.
+      "try { Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public static class FcFg { [DllImport(\"user32.dll\")] public static extern bool SetForegroundWindow(IntPtr h); [DllImport(\"user32.dll\")] public static extern bool ShowWindow(IntPtr h, int c); [DllImport(\"user32.dll\")] public static extern void keybd_event(byte k, byte s, uint f, UIntPtr e); }'; $h = [IntPtr]$w.ActiveWindow.Hwnd; [FcFg]::keybd_event(0x12, 0, 0, [UIntPtr]::Zero); [void][FcFg]::ShowWindow($h, 3); [void][FcFg]::SetForegroundWindow($h); [FcFg]::keybd_event(0x12, 0, 2, [UIntPtr]::Zero) } catch { }",
+      'try { [void]$w.Dialogs.Item(88).Show() } finally { $d.Close(0); if ($w.Documents.Count -eq 0) { $w.Quit() } }',
+    ].join('; ');
+    const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
+      env: { ...process.env, FC_DOC: file },
+      windowsHide: true,
+      stdio: 'ignore', // not awaited: the app goes on while Word's Print window is open
+    });
+    child.on('error', () => {});
+    child.unref();
+    return { ok: true, via: 'word' };
+  });
+
   // Import from another program: pick one or more Excel/CSV files (e.g. one per team) and read them as rows of text.
   ipcMain.handle('import:read', async () => {
     // FC_IMPORT_FILE (testing, several separated by "|"): read without the file dialog.
@@ -883,11 +931,46 @@ function registerIpc() {
   });
 
   ipcMain.handle('shell:openPath', (_e, p) => shell.openPath(p));
+
+  // WhatsApp / Viber: opens the parent's chat in the app installed on this PC.
+  // WhatsApp gets the text in the box; Viber links can't carry text, so it goes to the clipboard to paste.
+  ipcMain.handle('messenger:open', async (_e, { app: which, phone, text }) => {
+    const digits = String(phone || '').replace(/\D/g, '');
+    if (digits.length < 8) return { ok: false, error: 'NO_PHONE' };
+    // Testing (FC_EXPORT_DIR): write the link that would open instead of opening it.
+    const openLink = (url) =>
+      process.env.FC_EXPORT_DIR ? fs.appendFileSync(path.join(process.env.FC_EXPORT_DIR, 'messenger.txt'), `${url}\n`) : shell.openExternal(url);
+    const installed = (proto) => {
+      if (process.env.FC_EXPORT_DIR) return proto === 'whatsapp://' || proto === 'viber://';
+      try {
+        return !!app.getApplicationNameForProtocol(proto);
+      } catch {
+        return false;
+      }
+    };
+    try {
+      if (which === 'viber') {
+        if (!installed('viber://')) return { ok: false, error: 'VIBER_MISSING' };
+        clipboard.writeText(String(text || ''));
+        await openLink(`viber://chat?number=%2B${digits}`);
+        return { ok: true, via: 'viber', copied: true };
+      }
+      const msg = encodeURIComponent(String(text || ''));
+      if (installed('whatsapp://')) {
+        await openLink(`whatsapp://send?phone=${digits}&text=${msg}`);
+        return { ok: true, via: 'app' };
+      }
+      await openLink(`https://wa.me/${digits}?text=${msg}`); // WhatsApp Web in the browser
+      return { ok: true, via: 'web' };
+    } catch (err) {
+      return { ok: false, error: 'MESSENGER_FAILED', detail: err.message };
+    }
+  });
 }
 
 // ------------------------------------------------------------------ tray + start with Windows
 function showWindow() {
-  if (!win) return;
+  if (!win || win.isDestroyed()) return;
   if (win.isMinimized()) win.restore();
   win.show();
   win.focus();
@@ -895,13 +978,13 @@ function showWindow() {
 
 // Quit from the tray: asks in the app's own confirm window (CloseGuard in App.jsx), unless the page can't answer.
 function requestQuit() {
-  if (!win || win.webContents.isLoading() || win.webContents.isCrashed()) {
+  if (!win || win.isDestroyed() || win.webContents.isLoading() || win.webContents.isCrashed()) {
     quitting = true;
     app.quit();
     return;
   }
   showWindow();
-  win.webContents.send('close-requested');
+  toPage('close-requested');
 }
 
 function createTray() {
@@ -947,7 +1030,7 @@ if (!app.requestSingleInstanceLock()) {
     createWindow();
     createTray();
     applyAutoStart();
-    updater.setup((s) => win?.webContents.send('update-status', s));
+    updater.setup((s) => toPage('update-status', s));
   });
 
   app.on('window-all-closed', () => {

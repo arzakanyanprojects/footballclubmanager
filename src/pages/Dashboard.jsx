@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import { Users, Wallet, AlertTriangle, CalendarCheck, Plus, ChevronRight, FileClock, FileSpreadsheet } from 'lucide-react';
+import { Users, Wallet, AlertTriangle, CalendarCheck, Plus, ChevronRight, FileClock, FileSpreadsheet, MessageCircle } from 'lucide-react';
 import { useT, monthName } from '../i18n';
 import { useCan } from '../components/Auth';
-import { useRpc, compactMoney, fmtDate, fmtDateTime, money, todayIso } from '../lib';
+import { MessageButton, useMessenger } from '../components/Messenger';
+import { useRpc, rpc, compactMoney, fmtDate, fmtDateTime, money, todayIso } from '../lib';
 import { Avatar, Button, Empty, Loading, Money, useClub } from '../components/ui';
 import { chargeLabel, MethodTag } from './Payments';
 import ReportExport from '../components/ReportExport';
@@ -162,6 +163,7 @@ export default function Dashboard({ nav }) {
             <div className="card-head">
               <h3>{t('dash.debtors')}</h3>
               <div className="spacer" />
+              {data.debtors.length > 0 && <DebtorsMessageButton />}
               <Button size="sm" variant="ghost" onClick={() => nav('students', { debtOnly: true })}>
                 {t('common.viewAll')} <ChevronRight size={15} />
               </Button>
@@ -184,6 +186,7 @@ export default function Dashboard({ nav }) {
                     <span className="strong num" style={{ color: 'var(--bad)' }}>
                       {money(d.debt, currency)}
                     </span>
+                    <MessageButton studentIds={[d.id]} kind="reminder" variant="ghost" label="" />
                   </div>
                 ))}
               </div>
@@ -319,4 +322,30 @@ function niceStep(raw) {
   const mag = 10 ** Math.floor(Math.log10(raw));
   const n = raw / mag;
   return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10) * mag;
+}
+
+// «Հիշեցնել բոլորին»: every student with an overdue payment, biggest debt first, one chat after another.
+function DebtorsMessageButton() {
+  const t = useT();
+  const messenger = useMessenger();
+  const [busy, setBusy] = useState(false);
+  return (
+    <Button
+      size="sm"
+      icon={MessageCircle}
+      disabled={busy}
+      onClick={async () => {
+        setBusy(true);
+        try {
+          const list = await rpc('students.list', { status: 'active' });
+          const ids = list.filter((s) => s.overdue > 0).sort((a, b) => b.overdue - a.overdue).map((s) => s.id);
+          messenger?.open(ids, 'reminder');
+        } finally {
+          setBusy(false);
+        }
+      }}
+    >
+      {t('messenger.remindAll')}
+    </Button>
+  );
 }

@@ -4,6 +4,7 @@ import {
 } from 'lucide-react';
 import { useT } from '../i18n';
 import { useCan } from '../components/Auth';
+import { MessageButton } from '../components/Messenger';
 import { useRpc, rpc, age, fmtDate, fmtDateTime, money, readFileBase64, fileSize, todayIso } from '../lib';
 import { Avatar, Badge, Button, Empty, Field, Loading, Modal, Money, Tabs, useAction, useClub, useConfirm } from '../components/ui';
 import { StudentForm, FormSection } from './Students';
@@ -95,6 +96,7 @@ export default function StudentProfile({ id, nav }) {
                   <Phone size={15} />
                   {s.parent_phone || s.phone}
                   {s.parent_name ? ` (${s.parent_name})` : ''}
+                  {canPay && <MessageButton studentIds={[s.id]} kind={totals.overdue > 0 ? 'reminder' : 'free'} variant="ghost" />}
                 </span>
               )}
               <span>

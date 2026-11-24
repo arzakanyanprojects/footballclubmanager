@@ -54,10 +54,10 @@ export async function downloadContract(id) {
   const doc = await rpc('contracts.document', { id });
   return saveBase64(doc.fileName, doc.data);
 }
-// The same filled Word file, sent straight to the printer / opened in Word.
+// The same filled Word file in Word's print screen (preview, printer, copies) / opened in Word.
 export async function printContract(id) {
   const doc = await rpc('contracts.document', { id });
-  const r = await window.fc.printFile({ name: doc.fileName, data: doc.data });
+  const r = await window.fc.printDialog({ name: doc.fileName, data: doc.data });
   if (!r.ok) throw Object.assign(new Error(r.error), { code: r.error, detail: r.detail, showDetail: true });
 }
 export async function openContract(id) {

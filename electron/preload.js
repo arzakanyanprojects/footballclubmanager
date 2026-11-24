@@ -59,6 +59,8 @@ contextBridge.exposeInMainWorld('fc', {
   },
   openTemp: (file) => ipcRenderer.invoke('file:openTemp', file),
   printFile: (file) => ipcRenderer.invoke('file:print', file),
+  printDialog: (file) => ipcRenderer.invoke('file:printDialog', file),
+  openMessenger: (job) => ipcRenderer.invoke('messenger:open', job),
   setAuthToken: (token, remember) => ipcRenderer.invoke('auth:setToken', token, remember),
   hdmPrint: (receipt) => ipcRenderer.invoke('hdm:print', receipt),
   printers: () => ipcRenderer.invoke('printers:list'),

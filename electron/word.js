@@ -18,10 +18,14 @@ const PLACEHOLDERS = [
   'student_name', 'student_birth_date', 'student_document_no', 'student_birth_doc', 'student_status', 'group_name',
   'monthly_fee', 'chk_regular', 'chk_team', 'parent_name', 'parent_doc_no', 'parent_doc_issuer', 'parent_doc_date',
   'parent_ssn', 'parent_address', 'parent_phone', 'parent_email',
+  // the club's contract (2026): dates as 27/05/2020, the passport line, Annex 1 ticks
+  'parent_doc_date_s', 'parent_doc_full', 'parent_relation', 'student_doc_birth',
+  'chk_none', 'chk_war', 'chk_orphan_half', 'chk_orphan_full',
 ];
 
 const val = (v) => (v == null || String(v).trim() === '' ? undefined : String(v).trim());
 const fmtDate = (iso) => (iso ? iso.slice(0, 10).split('-').reverse().join('.') : undefined);
+const fmtSlash = (iso) => (iso ? iso.slice(0, 10).split('-').reverse().join('/') : undefined);
 const money = (n) => (n ? Number(n).toLocaleString('en-US').replace(/,/g, ' ') : undefined);
 
 function dateParts(iso) {
@@ -35,6 +39,12 @@ function contractValues(student, contract) {
   const sign = dateParts(contract.contract_date);
   const start = dateParts(contract.start_date);
   const fee = Number(student.monthly_fee) || 0;
+  // The package price before a 50% discount (Annex 1 ticks the package, and the benefit separately).
+  const base = ['orphan', 'half'].includes(student.category) ? fee * 2 : fee;
+  const tick = (on) => (on ? CHECKED : UNCHECKED);
+  const docFull = [student.parent_doc_no, fmtSlash(student.parent_doc_date), student.parent_doc_issuer ? `${student.parent_doc_issuer}-ի կողմից` : '']
+    .filter(Boolean)
+    .join(', ');
   return {
     contract_no: val(contract.number),
     sign_day: sign.day,
@@ -51,8 +61,17 @@ function contractValues(student, contract) {
     student_status: CATEGORIES[student.category] || '—',
     group_name: val(student.group_name),
     monthly_fee: money(fee),
-    chk_regular: fee === FEE_REGULAR ? CHECKED : UNCHECKED,
-    chk_team: fee === FEE_TEAM ? CHECKED : UNCHECKED,
+    chk_regular: tick(base === FEE_REGULAR),
+    chk_team: tick(base === FEE_TEAM),
+    // Social benefit (Annex 1): the app's categories that are benefits of the contract (§3.3).
+    chk_none: tick(!['war', 'orphan'].includes(student.category)),
+    chk_war: tick(student.category === 'war'),
+    chk_orphan_half: tick(student.category === 'orphan'),
+    chk_orphan_full: UNCHECKED,
+    parent_doc_date_s: fmtSlash(student.parent_doc_date),
+    parent_doc_full: val(docFull),
+    parent_relation: undefined, // not kept in the app: a line to fill in by hand
+    student_doc_birth: val([student.document_no, fmtSlash(student.birth_date)].filter(Boolean).join(', ')),
     parent_name: val([student.parent_first_name, student.parent_last_name].filter(Boolean).join(' ')),
     parent_doc_no: val(student.parent_doc_no),
     parent_doc_issuer: val(student.parent_doc_issuer),

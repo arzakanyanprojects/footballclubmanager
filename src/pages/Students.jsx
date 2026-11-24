@@ -139,7 +139,10 @@ export default function Students({ nav, route }) {
   useEffect(() => {
     const el = moreRef.current;
     if (!el || limit >= rows.length) return;
-    const io = new IntersectionObserver((e) => e[0].isIntersecting && setLimit((l) => l + STEP * 2), { rootMargin: '600px' });
+    const io = new IntersectionObserver((e) => e[0].isIntersecting && setLimit((l) => l + STEP * 2), {
+      root: el.closest('.table-wrap'),
+      rootMargin: '600px',
+    });
     io.observe(el);
     return () => io.disconnect();
   }, [limit, rows.length]);
@@ -333,7 +336,8 @@ export default function Students({ nav, route }) {
     ]);
 
   return (
-    <>
+    // The page fills the window: title, filters and column headers stay; only the rows scroll.
+    <div className="fill-page">
       <div className="page-head">
         <div>
           <h1>{t('nav.students')}</h1>
@@ -474,7 +478,7 @@ export default function Students({ nav, route }) {
           }}
         />
       )}
-    </>
+    </div>
   );
 }
 

@@ -201,7 +201,8 @@ function createService(db, { onWrite, getNotify } = {}) {
   }
 
   // ---------------------------------------------------------------- settings
-  const SETTING_KEYS = ['club_name', 'club_address', 'club_phone', 'director_name', 'currency', 'due_day', 'billing_start', 'club_logo', 'holidays'];
+  const SETTING_KEYS = ['club_name', 'club_address', 'club_phone', 'director_name', 'currency', 'due_day', 'billing_start', 'club_logo', 'holidays',
+    'msg_reminder', 'msg_receipt', 'msg_free']; // msg_*: WhatsApp / Viber message texts
 
   // A «Դիմում» period on a payment: both dates, the end not before the start; otherwise none.
   function absenceRange(from, to) {
@@ -1291,6 +1292,14 @@ function createService(db, { onWrite, getNotify } = {}) {
         { limit: Math.min(int(limit, 50), 500) }
       ),
 
+    // A WhatsApp / Viber message opened for a parent (sent by a person from their own app): kept in history.
+    'notify.messenger': ({ studentId, channel, kind }, ctx) => {
+      if (!one('SELECT id FROM students WHERE id = :id', { id: studentId })) throw new AppError('NOT_FOUND');
+      const ch = channel === 'viber' ? 'Viber' : 'WhatsApp';
+      const k = ['reminder', 'receipt', 'free'].includes(kind) ? kind : 'free';
+      log(ctx, 'message.messenger', `${studentName(studentId)} — ${ch}`, studentId, { channel: ch, kind: k });
+      return true;
+    },
     'notify.retry': ({ id }) => {
       run(`UPDATE outbox SET status = 'pending', attempts = 0, error = NULL WHERE id = :id AND status = 'failed'`, { id });
       return true;
