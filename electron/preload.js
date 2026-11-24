@@ -50,6 +50,7 @@ contextBridge.exposeInMainWorld('fc', {
   hdmPrint: (receipt) => ipcRenderer.invoke('hdm:print', receipt),
   printers: () => ipcRenderer.invoke('printers:list'),
   thermalPrint: (job) => ipcRenderer.invoke('thermal:print', job),
+  printerAddress: (name) => ipcRenderer.invoke('printers:address', name),
   hdmTest: (settings) => ipcRenderer.invoke('hdm:test', settings),
   hdmAction: (req) => ipcRenderer.invoke('hdm:action', req),
   update: {

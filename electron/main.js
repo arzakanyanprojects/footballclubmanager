@@ -11,6 +11,7 @@ const { buildReport, buildForm, buildSchedule, buildStudentsTransfer, buildGroup
 const hdm = require('./hdm');
 const updater = require('./updater');
 const importer = require('./importer');
+const escpos = require('./escpos');
 
 // Lets a second copy run on the same PC with its own data (useful for testing host + client together).
 if (process.env.FC_USER_DATA) app.setPath('userData', process.env.FC_USER_DATA);
@@ -314,12 +315,13 @@ async function renderHtmlWindow(html) {
   return w;
 }
 
-// The thermal receipt as a pure black-and-white PNG (no grey: thermal heads print grey as faint dots).
-// Drawn 2× (≈ the 203 dpi of the printer head), as wide as the printed area of the roll.
-async function receiptImage(html, widthMm) {
-  const zoom = 2;
+// The thermal receipt as a pure black-and-white picture (no grey: thermal heads print grey as faint dots).
+// Drawn as wide as `px` (default 2× ≈ the 203 dpi of the printer head). Returns the PNG and the 1-bit pixels.
+async function receiptImage(html, widthMm, px) {
   const cssWidth = Math.ceil(((widthMm - 8) * 96) / 25.4);
-  const w = new BrowserWindow({ show: false, useContentSize: true, width: cssWidth * zoom, height: 400, webPreferences: { sandbox: true, zoomFactor: zoom, offscreen: true } });
+  const width = px || cssWidth * 2;
+  const zoom = width / cssWidth;
+  const w = new BrowserWindow({ show: false, useContentSize: true, width, height: 400, webPreferences: { sandbox: true, zoomFactor: zoom, offscreen: true } });
   try {
     // Offscreen: painted although never shown, and not limited to the screen height.
     await w.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
@@ -328,21 +330,22 @@ async function receiptImage(html, widthMm) {
     const h = await w.webContents.executeJavaScript(
       `document.fonts.ready.then(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))).then(() => Math.ceil(document.documentElement.scrollHeight))`
     );
-    const width = cssWidth * zoom;
     const height = Math.ceil(h * zoom);
     w.setContentSize(width, height);
     await w.webContents.executeJavaScript('new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(r, 120))))');
-    const img = await w.webContents.capturePage({ x: 0, y: 0, width, height });
+    let img = await w.webContents.capturePage({ x: 0, y: 0, width, height });
+    if (!img.getSize().width) throw new Error('THERMAL_RENDER');
+    if (img.getSize().width !== width) img = img.resize({ width, quality: 'best' }); // display scaling
     const size = img.getSize();
-    if (!size.width || !size.height) throw new Error('THERMAL_RENDER');
     const bmp = img.toBitmap(); // BGRA
-    for (let i = 0; i < bmp.length; i += 4) {
-      const lum = 0.114 * bmp[i] + 0.587 * bmp[i + 1] + 0.299 * bmp[i + 2];
-      const v = lum < 170 ? 0 : 255;
-      bmp[i] = bmp[i + 1] = bmp[i + 2] = v;
+    const bits = new Uint8Array(size.width * size.height);
+    for (let i = 0, k = 0; i < bmp.length; i += 4, k++) {
+      const black = 0.114 * bmp[i] + 0.587 * bmp[i + 1] + 0.299 * bmp[i + 2] < 170;
+      bits[k] = black ? 1 : 0;
+      bmp[i] = bmp[i + 1] = bmp[i + 2] = black ? 0 : 255;
       bmp[i + 3] = 255;
     }
-    return nativeImage.createFromBitmap(bmp, size).toPNG();
+    return { png: nativeImage.createFromBitmap(bmp, size).toPNG(), width: size.width, height: size.height, bits };
   } finally {
     w.destroy();
   }
@@ -720,6 +723,8 @@ function registerIpc() {
   });
 
   // The printers installed in Windows (for choosing the receipt printer).
+  // The network address of a Windows printer (for the direct network mode).
+  ipcMain.handle('printers:address', (_e, name) => escpos.printerAddress(name));
   ipcMain.handle('printers:list', async () =>
     (await win.webContents.getPrintersAsync()).map((p) => ({ name: p.name, displayName: p.displayName || p.name, isDefault: !!p.isDefault }))
   );
@@ -727,19 +732,35 @@ function registerIpc() {
   // A customer receipt on the thermal (roll) printer, straight to the chosen printer without a dialog.
   // The page is as wide as the roll and as long as the receipt.
   // Modes (Settings → receipt printer):
+  //   net    — straight to a network printer (ESC/POS picture on TCP 9100), without the Windows driver;
+  //            the default when the printer is on a TCP/IP port
   //   image  — the receipt as a black-and-white picture on a roll-long page (default: works with POS drivers
   //            that swap in their own fonts, which have no Armenian letters and print blank paper)
   //   imageA — the same picture on the driver's own paper size (drivers that ignore a custom page size)
   //   text   — the receipt as text on a roll-long page (the first way; sharpest where the driver allows it)
   ipcMain.handle('thermal:print', async (_e, { html }) => {
     const t = config.thermal || {};
-    if (!t.printer && !process.env.FC_EXPORT_DIR) return { ok: false, error: 'THERMAL_NOT_SET' };
+    if (!t.printer && !t.host && !process.env.FC_EXPORT_DIR) return { ok: false, error: 'THERMAL_NOT_SET' };
     const widthMm = Number(t.width) || 80;
-    const mode = ['image', 'imageA', 'text'].includes(t.mode) ? t.mode : 'image';
     const stamp = Date.now();
+    let mode = ['net', 'image', 'imageA', 'text'].includes(t.mode) ? t.mode : null;
+    let addr = t.host ? { host: t.host, port: Number(t.port) || 9100 } : null;
+    if (mode === 'net' || !mode) addr = addr || (await escpos.printerAddress(t.printer));
+    if (!mode) mode = addr ? 'net' : 'image';
+    if (mode === 'net') {
+      if (!addr) return { ok: false, error: 'THERMAL_NO_HOST' };
+      try {
+        const img = await receiptImage(html, widthMm, escpos.headDots(widthMm));
+        if (process.env.FC_EXPORT_DIR) fs.writeFileSync(path.join(process.env.FC_EXPORT_DIR, `thermal-${stamp}.png`), img.png);
+        await escpos.sendRaw(addr.host, addr.port, escpos.rasterJob(img, { cut: t.cut !== false }));
+        return { ok: true, mode };
+      } catch (err) {
+        return { ok: false, error: err.code || 'PRINT_FAILED', detail: err.message };
+      }
+    }
     let page = html;
     if (mode !== 'text') {
-      const png = await receiptImage(html, widthMm);
+      const { png } = await receiptImage(html, widthMm);
       if (process.env.FC_EXPORT_DIR) fs.writeFileSync(path.join(process.env.FC_EXPORT_DIR, `thermal-${stamp}.png`), png);
       page = `<!doctype html><html><head><meta charset="utf-8"><style>
         @page { margin: 0; } html, body { margin: 0; padding: 0; background: #fff; }

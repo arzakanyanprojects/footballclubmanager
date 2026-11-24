@@ -100,9 +100,15 @@ export function thermalHtml(t, club, r, widthMm = 80, opts = {}) {
 
 export async function printThermal(t, club, data, widthMm, opts) {
   const r = await window.fc.thermalPrint({ html: thermalHtml(t, club, data, widthMm, opts) });
-  if (!r?.ok) throw Object.assign(new Error(r?.error || 'PRINT_FAILED'), { code: r?.error || 'PRINT_FAILED' });
+  if (!r?.ok) throw Object.assign(new Error(r?.error || 'PRINT_FAILED'), { code: r?.error || 'PRINT_FAILED', detail: r?.detail });
   return true;
 }
+
+// The message for a failed print, with the printer's address when the network print failed.
+const errorText = (t, err) => {
+  const key = `error.${err.code}`;
+  return `${t(key) === key ? err.message : t(key)}${err.detail ? ` (${err.detail})` : ''}`;
+};
 
 // Builds and prints the customer receipt for a payment; returns false (with a message) if it failed.
 export function useCustomerReceipt() {
@@ -117,8 +123,7 @@ export function useCustomerReceipt() {
         await printThermal(t, club, await receiptData(t, club, { cashier: thermal.operator, ...pay }), thermal.width, { logo: thermal.logo, header: headerOf(thermal) });
         return true;
       } catch (err) {
-        const key = `error.${err.code}`;
-        toast.error(`${t('thermal.failed')} ${t(key) === key ? err.message : t(key)}`);
+        toast.error(`${t('thermal.failed')} ${errorText(t, err)}`);
         return false;
       }
     },
@@ -143,6 +148,21 @@ export function ThermalSettings({ settings, onChange }) {
   useEffect(() => {
     load();
   }, []);
+  // The chosen printer's network address (Standard TCP/IP port), for printing straight to it.
+  const [found, setFound] = useState(undefined);
+  useEffect(() => {
+    setFound(undefined);
+    if (!s.printer || !window.fc.printerAddress) return;
+    let live = true;
+    window.fc
+      .printerAddress(s.printer)
+      .then((a) => live && setFound(a || null))
+      .catch(() => live && setFound(null));
+    return () => {
+      live = false;
+    };
+  }, [s.printer]);
+  const mode = s.mode || (s.host || found ? 'net' : 'image');
   const set = (patch) => {
     const next = { ...s, ...patch };
     setS(next);
@@ -153,7 +173,7 @@ export function ThermalSettings({ settings, onChange }) {
       await printThermal(t, club, sample(t, club), s.width, { logo: s.logo, header: headerOf(s) });
       toast.success(t('thermal.sent', { printer: s.printer }));
     } catch (err) {
-      toast.error(t(`error.${err.code}`) === `error.${err.code}` ? err.message : t(`error.${err.code}`));
+      toast.error(errorText(t, err));
     }
   };
   return (
@@ -187,8 +207,8 @@ export function ThermalSettings({ settings, onChange }) {
               </select>
             </Field>
             <Field label={t('thermal.mode')} className="span-2">
-              <select className="select" value={s.mode || 'image'} onChange={(e) => set({ mode: e.target.value })}>
-                {['image', 'imageA', 'text'].map((m) => (
+              <select className="select" value={mode} onChange={(e) => set({ mode: e.target.value })}>
+                {['net', 'image', 'imageA', 'text'].map((m) => (
                   <option key={m} value={m}>
                     {t(`thermal.mode_${m}`)}
                   </option>
@@ -196,6 +216,24 @@ export function ThermalSettings({ settings, onChange }) {
               </select>
               <div className="small muted" style={{ marginTop: 4 }}>{t('thermal.modeHint')}</div>
             </Field>
+            {mode === 'net' && (
+              <>
+                <Field label={t('thermal.host')}>
+                  <input
+                    className="input"
+                    value={s.host || ''}
+                    placeholder={found ? found.host : found === undefined ? '…' : '192.168.1.100'}
+                    onChange={(e) => set({ host: e.target.value.trim() })}
+                  />
+                </Field>
+                <Field label={t('thermal.port')}>
+                  <input className="input" value={s.port || ''} placeholder={String(found?.port || 9100)} onChange={(e) => set({ port: e.target.value.replace(/\D/g, '') })} />
+                </Field>
+                <div className="span-2 small muted">
+                  {s.host ? t('thermal.hostManual') : found ? t('thermal.hostFound', { host: `${found.host}:${found.port}` }) : found === null ? t('thermal.hostMissing') : ''}
+                </div>
+              </>
+            )}
           </div>
           <div className="grid-2">
             <Field label={t('thermal.headerName')}>
