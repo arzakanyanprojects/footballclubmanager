@@ -1,4 +1,4 @@
-﻿const { app, BrowserWindow, ipcMain, dialog, shell, nativeTheme, Tray, Menu, nativeImage } = require('electron');
+﻿const { app, BrowserWindow, ipcMain, dialog, shell, nativeTheme, Tray, Menu, nativeImage, safeStorage } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
@@ -12,6 +12,9 @@ const hdm = require('./hdm');
 const updater = require('./updater');
 const importer = require('./importer');
 const escpos = require('./escpos');
+// This app window, for edit locks (one person on two computers is two editors).
+const INSTANCE_ID = crypto.randomBytes(8).toString('hex');
+const { createGDrive } = require('./gdrive');
 
 // Lets a second copy run on the same PC with its own data (useful for testing host + client together).
 if (process.env.FC_USER_DATA) app.setPath('userData', process.env.FC_USER_DATA);
@@ -137,6 +140,7 @@ async function startBackend() {
     }
   } else if (config.mode === 'client') {
     remote = network.createRemote({
+      owner: INSTANCE_ID,
       host: config.hostAddress,
       port: config.hostPort,
       key: config.accessKey,
@@ -151,12 +155,13 @@ async function startBackend() {
 // ------------------------------------------------------------------ backups (host only)
 const stamp = () => new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
 
-function createBackup(label = 'manual') {
+function createBackup(label = 'manual', { drive = true } = {}) {
   if (!db) throw new Error('Backups are made on the host PC');
   fs.mkdirSync(backupDir(), { recursive: true });
   const file = path.join(backupDir(), `fcmanager-${stamp()}-${label}.db`);
   db.exec(`VACUUM INTO '${file.replace(/'/g, "''")}'`);
   cloudCopy(file);
+  if (drive) gdrive.upload(file);
   return file;
 }
 
@@ -188,6 +193,26 @@ function cloudCopy(file) {
   }
   saveConfig();
 }
+
+// ------------------------------------------------------------------ Google Drive copy of backups
+const gdrive = createGDrive({
+  getCfg: () => config.gdrive,
+  setCfg: (patch) => {
+    config.gdrive = { ...(config.gdrive || {}), ...patch };
+    saveConfig();
+    notifyGdrive();
+  },
+  // The sign-in token, encrypted with Windows' own protection for this user.
+  encrypt: (str) => (safeStorage.isEncryptionAvailable() ? 'enc:' + safeStorage.encryptString(str).toString('base64') : 'raw:' + str),
+  decrypt: (str) => (str.startsWith('enc:') ? safeStorage.decryptString(Buffer.from(str.slice(4), 'base64')) : str.replace(/^raw:/, '')),
+  // Testing (FC_GDRIVE_MOCK): the fake Google answers the sign-in page itself.
+  openUrl: (url) => (process.env.FC_GDRIVE_MOCK ? fetch(url).catch(() => {}) : shell.openExternal(url)),
+  keep: BACKUPS_KEPT,
+  lang: () => config.language,
+});
+const notifyGdrive = () => {
+  if (win && !win.isDestroyed()) win.webContents.send('gdrive:changed', gdrive.status());
+};
 
 function listBackups() {
   try {
@@ -234,6 +259,8 @@ function createWindow() {
     icon: path.join(__dirname, 'icons', 'icon.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
+      // Keeps timers on time while minimized (edit locks say "still here" every 20 s).
+      backgroundThrottling: false,
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
@@ -244,20 +271,31 @@ function createWindow() {
     if (!process.argv.includes('--hidden')) win.show();
   });
 
-  // × hides the window to the tray; the app keeps running (other PCs stay connected).
+  // × signs the user out and hides the window to the tray; the app keeps running (other PCs stay
+  // connected). Opening it again asks for the sign-in.
   win.on('close', (e) => {
     if (quitting) return;
     e.preventDefault();
     win.hide();
-    if (!config.trayHintShown && tray) {
+    win.webContents.send('logout-requested');
+    // In case the page could not do it itself: forget that sign-in here too (not a newer one).
+    const was = authToken;
+    setTimeout(() => {
+      if (!was || authToken !== was) return;
+      authToken = null;
+      delete config.authToken;
+      saveConfig();
+      if (win && !win.isDestroyed()) win.webContents.send('logout-requested');
+    }, 3000);
+    if (!config.trayHintSignOut && tray) {
       tray.displayBalloon({
         title: 'FC Manager',
         content: config.language === 'hy'
-          ? 'Ծրագիրը շարունակում է աշխատել։ Բացելու կամ փակելու համար օգտագործեք ժամացույցի մոտի նշանը։'
-          : 'FC Manager keeps running. Use the icon near the clock to open or quit it.',
+          ? 'Դուք դուրս եկաք համակարգից։ Ծրագիրը շարունակում է աշխատել․ բացելու կամ փակելու համար օգտագործեք ժամացույցի մոտի նշանը։'
+          : 'You are signed out. FC Manager keeps running — use the icon near the clock to open or quit it.',
         iconType: 'info',
       });
-      config.trayHintShown = true;
+      config.trayHintSignOut = true;
       saveConfig();
     }
   });
@@ -288,6 +326,7 @@ function appState() {
             dbPath: dbFile(),
             backupDir: backupDir(),
             cloud: { ...config.cloud, folder: cloudFolder(), oneDrive: !!oneDriveRoot() },
+            gdrive: gdrive.status(),
           }
         : null,
   };
@@ -434,7 +473,7 @@ function registerIpc() {
     app.quit();
   });
   ipcMain.handle('rpc', async (_e, method, params) => {
-    if (config.mode === 'host' && service) return service.call(method, params, { user: config.operator || 'host', token: authToken });
+    if (config.mode === 'host' && service) return service.call(method, params, { user: config.operator || 'host', pc: config.operator || 'host', owner: INSTANCE_ID, token: authToken });
     if (config.mode === 'client' && remote) return remote.call(method, params);
     return { ok: false, error: 'NOT_CONFIGURED' };
   });
@@ -545,7 +584,9 @@ function registerIpc() {
       properties: ['openFile'],
     });
     if (pick.canceled || !pick.filePaths[0]) return { ok: false, error: 'CANCELLED' };
-    const source = pick.filePaths[0];
+    return restoreFrom(pick.filePaths[0]);
+  });
+  async function restoreFrom(source) {
     createBackup('before-restore');
     stopBackend();
     for (const suffix of ['-wal', '-shm']) fs.rmSync(dbFile() + suffix, { force: true });
@@ -554,7 +595,60 @@ function registerIpc() {
     dataVersion++;
     notifyChanged();
     return { ok: true };
-  });
+  }
+
+  // Google Drive (main computer only).
+  const gdriveCall = async (fn) => {
+    if (config.mode !== 'host') return { ok: false, error: 'HOST_ONLY' };
+    try {
+      return { ok: true, result: await fn() };
+    } catch (err) {
+      return { ok: false, error: err.code || 'GDRIVE_API', detail: err.message };
+    }
+  };
+  ipcMain.handle('gdrive:status', () => gdrive.status());
+  ipcMain.handle('gdrive:set', (_e, patch) =>
+    gdriveCall(async () => {
+      const keys = ['clientId', 'clientSecret', 'enabled'];
+      const next = Object.fromEntries(Object.entries(patch || {}).filter(([k]) => keys.includes(k)));
+      if ('clientId' in next) next.clientId = String(next.clientId || '').trim();
+      if ('clientSecret' in next) next.clientSecret = String(next.clientSecret || '').trim();
+      const was = !!config.gdrive?.enabled;
+      config.gdrive = { ...(config.gdrive || {}), ...next };
+      saveConfig();
+      // Turning it on: send the newest backup right away (or make one).
+      if (!was && config.gdrive.enabled && db) {
+        const latest = listBackups()[0];
+        if (latest) gdrive.upload(latest.path);
+        else createBackup('manual');
+      }
+      notifyGdrive();
+      return gdrive.status();
+    })
+  );
+  ipcMain.handle('gdrive:connect', () => gdriveCall(() => gdrive.connect()));
+  ipcMain.handle('gdrive:disconnect', () => gdriveCall(() => gdrive.disconnect().then(() => gdrive.status())));
+  // A fresh backup, sent now (also when automatic sending is off).
+  ipcMain.handle('gdrive:uploadNow', () =>
+    gdriveCall(async () => {
+      const file = createBackup('manual', { drive: false });
+      await gdrive.upload(file, { force: true });
+      if (config.gdrive?.lastError) throw Object.assign(new Error(config.gdrive.lastError), { code: /^GDRIVE_/.test(config.gdrive.lastError) ? config.gdrive.lastError : 'GDRIVE_API' });
+      return gdrive.status();
+    })
+  );
+  ipcMain.handle('gdrive:list', () => gdriveCall(() => gdrive.list()));
+  // Puts a backup from Drive back: downloaded next to the local backups, then restored like one of them.
+  ipcMain.handle('gdrive:restore', (_e, { id, name }) =>
+    gdriveCall(async () => {
+      if (!/^fcmanager-[\w.-]+\.db$/.test(String(name))) throw Object.assign(new Error('bad name'), { code: 'GDRIVE_API' });
+      fs.mkdirSync(backupDir(), { recursive: true });
+      const file = await gdrive.download(id, path.join(backupDir(), `drive-${name}`));
+      const r = await restoreFrom(file);
+      if (!r.ok) throw Object.assign(new Error(r.error), { code: r.error });
+      return true;
+    })
+  );
 
   ipcMain.handle('file:save', async (_e, { defaultName, content, filters }) => {
     const r = await dialog.showSaveDialog(win, { defaultPath: defaultName, filters });

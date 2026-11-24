@@ -3,6 +3,7 @@ import { FilePlus2, Printer, ExternalLink, CheckCircle2, Paperclip, Trash2 } fro
 import { useT } from '../i18n';
 import { rpc, todayIso, readFileBase64 } from '../lib';
 import { Button, Field, Modal, useAction } from './ui';
+import { useEditLock } from './Locks';
 
 const REASONS = ['agreed', 'illness', 'other'];
 
@@ -22,6 +23,7 @@ export async function openStoredFile(id) {
 export function AbsenceModal({ student, onClose }) {
   const t = useT();
   const act = useAction();
+  const lock = useEditLock(`student:${student.id}`);
   const [f, setF] = useState({
     from: todayIso(),
     to: todayIso(),
@@ -104,6 +106,7 @@ export function AbsenceModal({ student, onClose }) {
   return (
     <Modal
       title={`${t('absence.title')} — ${student.first_name} ${student.last_name}`}
+      lock={lock}
       onClose={onClose}
       width={640}
       footer={

@@ -25,6 +25,17 @@ export function AuthGate({ children }) {
     }
   }, []);
 
+  // × on the window: sign out (the app keeps running in the tray; opening it again asks for the sign-in).
+  useEffect(
+    () =>
+      window.fc.onLogoutRequested?.(async () => {
+        await rpc('auth.logout').catch(() => {});
+        await window.fc.setAuthToken(null, false);
+        await refresh();
+      }),
+    [refresh]
+  );
+
   useEffect(() => {
     refresh();
     const lost = () => refresh();

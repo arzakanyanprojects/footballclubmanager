@@ -24,7 +24,8 @@ export function Field({ label, hint, children, className = '' }) {
   );
 }
 
-export function Modal({ title, onClose, children, footer, width = 560 }) {
+// lock: from useEditLock — shows who is editing, and makes the form read-only while someone else is.
+export function Modal({ title, onClose, children, footer, width = 560, lock }) {
   useEffect(() => {
     const onKey = (e) => e.key === 'Escape' && onClose?.();
     window.addEventListener('keydown', onKey);
@@ -37,8 +38,17 @@ export function Modal({ title, onClose, children, footer, width = 560 }) {
           <h3>{title}</h3>
           <Button variant="ghost" size="sm" icon={X} onClick={onClose} aria-label="Close" />
         </div>
-        <div className="modal-body">{children}</div>
-        {footer && <div className="modal-foot">{footer}</div>}
+        <div className="modal-body">
+          {lock?.banner}
+          {lock?.readOnly ? (
+            <fieldset disabled className="lock-fieldset">
+              {children}
+            </fieldset>
+          ) : (
+            children
+          )}
+        </div>
+        {footer && <div className={`modal-foot ${lock?.readOnly ? 'locked' : ''}`}>{footer}</div>}
       </div>
     </div>
   );
@@ -342,7 +352,8 @@ export function useAction() {
       } catch (err) {
         if (err?.code === 'CANCELLED') return false;
         const key = `error.${err?.code || 'INTERNAL'}`;
-        const msg = t(key);
+        // Errors with details (e.g. «LOCKED»: who is editing) fill them into the message.
+        const msg = t(key, err?.detail && typeof err.detail === 'object' ? err.detail : undefined);
         toast.error(msg === key ? err?.detail || err?.message || t('error.INTERNAL') : err?.showDetail && err?.detail ? `${msg} ${err.detail}` : msg);
         return false;
       }

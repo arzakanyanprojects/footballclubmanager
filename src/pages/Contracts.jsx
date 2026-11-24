@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useRef, useState } from 'react';
-import { Plus, FileSignature, FileText, Printer, FileDown, Trash2, Save, Download, Upload, Pencil, AlertTriangle } from 'lucide-react';
+import { Plus, FileSignature, FileText, Printer, FileDown, Trash2, Save, Download, Upload, Pencil, AlertTriangle, ExternalLink, CheckCircle2 } from 'lucide-react';
 import { useT } from '../i18n';
 import { useCan } from '../components/Auth';
 import { useColumns } from '../components/Columns';
@@ -53,6 +53,50 @@ async function saveBase64(defaultName, data) {
 export async function downloadContract(id) {
   const doc = await rpc('contracts.document', { id });
   return saveBase64(doc.fileName, doc.data);
+}
+// The same filled Word file, sent straight to the printer / opened in Word.
+export async function printContract(id) {
+  const doc = await rpc('contracts.document', { id });
+  const r = await window.fc.printFile({ name: doc.fileName, data: doc.data });
+  if (!r.ok) throw Object.assign(new Error(r.error), { code: r.error, detail: r.detail, showDetail: true });
+}
+export async function openContract(id) {
+  const doc = await rpc('contracts.document', { id });
+  const r = await window.fc.openTemp({ name: doc.fileName, data: doc.data });
+  if (!r.ok) throw Object.assign(new Error(r.error), { code: r.error, detail: r.detail, showDetail: true });
+}
+
+// After a new student is created with their contract: print it, open it in Word or save it.
+export function ContractReadyModal({ contractId, studentName, number, onClose }) {
+  const t = useT();
+  const act = useAction();
+  return (
+    <Modal
+      title={t('contracts.readyTitle')}
+      onClose={onClose}
+      width={560}
+      footer={
+        <>
+          <Button icon={FileDown} onClick={() => act(() => downloadContract(contractId))}>
+            {t('contracts.downloadWord')}
+          </Button>
+          <Button icon={ExternalLink} onClick={() => act(() => openContract(contractId))}>
+            {t('contracts.openWord')}
+          </Button>
+          <Button variant="primary" icon={Printer} onClick={() => act(() => printContract(contractId), t('contracts.printing'))}>
+            {t('contracts.print')}
+          </Button>
+        </>
+      }
+    >
+      <div className="stack">
+        <div className="row strong" style={{ color: 'var(--good)' }}>
+          <CheckCircle2 size={18} /> {t('contracts.readyText', { name: studentName, number: number || '—' })}
+        </div>
+        <div className="small muted">{t('contracts.readyHint')}</div>
+      </div>
+    </Modal>
+  );
 }
 
 export default function Contracts({ route }) {
@@ -338,9 +382,17 @@ export function ContractModal({ id, onClose }) {
             </Button>
           )}
           {isWord ? (
-            <Button icon={FileDown} onClick={() => act(() => downloadContract(id))}>
-              {t('contracts.downloadWord')}
-            </Button>
+            <>
+              <Button icon={FileDown} onClick={() => act(() => downloadContract(id))}>
+                {t('contracts.downloadWord')}
+              </Button>
+              <Button icon={ExternalLink} onClick={() => act(() => openContract(id))}>
+                {t('contracts.openWord')}
+              </Button>
+              <Button icon={Printer} onClick={() => act(() => printContract(id), t('contracts.printing'))}>
+                {t('contracts.print')}
+              </Button>
+            </>
           ) : (
             <>
               <Button icon={Printer} onClick={() => act(() => window.fc.print({ html: html() }))}>

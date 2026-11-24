@@ -5,7 +5,13 @@ const { feeShares: holidayShares, freeHalves, parseHolidays } = require('./holid
 const word = require('./word');
 const { createAuth } = require('./auth');
 
-class AppError extends Error {}
+class AppError extends Error {
+  constructor(code, detail) {
+    super(code);
+    this.detail = detail;
+  }
+}
+const { createLocks, mondayOf } = require('./locks');
 
 // Email texts parents get (editable in Settings → Notifications). {placeholders} are filled in.
 const DEFAULT_TEMPLATES = {
@@ -150,11 +156,12 @@ function createService(db, { onWrite, getNotify } = {}) {
     return Math.round((Number(fee) * (100 - 50 * free.size)) / 100);
   };
   // The joining month of late joiners gets its half price (unpaid system fees only).
-  function priceJoinMonths() {
+  function priceJoinMonths(studentId = null) {
     for (const c of all(
       `SELECT c.id, c.amount, c.period, s.monthly_fee, s.join_date FROM charges c JOIN students s ON s.id = c.student_id
        WHERE c.kind = 'monthly' AND c.status = 'unpaid' AND c.excused_by IS NULL AND c.period = substr(s.join_date, 1, 7)
-         AND CAST(substr(s.join_date, 9, 2) AS INTEGER) >= 16`
+         AND CAST(substr(s.join_date, 9, 2) AS INTEGER) >= 16 ${studentId ? 'AND s.id = :sid AND c.student_id = :sid' : ''}`,
+      studentId ? { sid: studentId } : {}
     )) {
       const want = studentFee(c.monthly_fee, c.period, c.join_date);
       if (want <= 0) run('DELETE FROM charges WHERE id = :id', { id: c.id });
@@ -167,7 +174,8 @@ function createService(db, { onWrite, getNotify } = {}) {
     return cases.length ? `CAST(ROUND(${feeCol} * (CASE ${periodCol} ${cases.join(' ')} ELSE 1 END)) AS INTEGER)` : feeCol;
   };
 
-  function ensureMonthlyCharges() {
+  // studentId: only that student's fees (after saving one student); otherwise everyone's.
+  function ensureMonthlyCharges(studentId = null) {
     const s = settings();
     const dueDay = Math.min(Math.max(int(s.due_day, 10), 1), 28);
     const r = run(
@@ -181,14 +189,14 @@ function createService(db, { onWrite, getNotify } = {}) {
        FROM students st
        JOIN months m ON m.p >= substr(st.join_date, 1, 7)
                     AND m.p >= IFNULL(st.billing_from, '0000-00')
-       WHERE st.status = 'active' AND st.monthly_fee > 0
+       WHERE st.status = 'active' AND st.monthly_fee > 0 ${studentId ? 'AND st.id = :sid' : ''}
          ${(() => {
            const free = Object.entries(feeShares()).filter(([, v]) => v === 0).map(([p]) => `'${p}'`);
            return free.length ? `AND m.p NOT IN (${free.join(', ')})` : ''; // months with no fee at all
          })()}`,
-      { start: s.billing_start || currentPeriod(), current: currentPeriod(), dueDay: pad(dueDay) }
+      { start: s.billing_start || currentPeriod(), current: currentPeriod(), dueDay: pad(dueDay), ...(studentId ? { sid: studentId } : {}) }
     );
-    priceJoinMonths();
+    priceJoinMonths(studentId);
     return r.changes;
   }
 
@@ -503,6 +511,76 @@ function createService(db, { onWrite, getNotify } = {}) {
     return n;
   }
 
+  // ---------------------------------------------------------------- edit locks + versions
+  const locks = createLocks();
+  // The record a write changes, as lock keys: refused while another window holds one of them.
+  function lockKeysFor(method, p = {}) {
+    const studentOfCharge = (id) => one('SELECT student_id FROM charges WHERE id = :id', { id: Number(id) || 0 })?.student_id;
+    const st = (...ids) => ids.filter(Boolean).map((id) => `student:${id}`);
+    const month = (d) => String(d || '').slice(0, 7);
+    switch (method) {
+      case 'students.save':
+        return p.id ? st(p.id) : [];
+      case 'students.terminate':
+      case 'students.delete':
+        return st(p.id);
+      case 'students.link':
+      case 'students.unlink':
+        return st(p.id, p.otherId);
+      case 'charges.payMonths':
+      case 'charges.create':
+      case 'applications.create':
+        return st(p.studentId);
+      case 'charges.update':
+      case 'charges.markUnpaid':
+      case 'charges.waive':
+      case 'charges.delete':
+        return st(studentOfCharge(p.id));
+      case 'charges.markPaid':
+        return st(...new Set((p.ids || []).map(studentOfCharge)));
+      case 'groups.save':
+      case 'groups.delete':
+        return p.id ? [`group:${p.id}`] : [];
+      case 'schedule.setCoaches':
+        return [`group:${p.groupId}`];
+      case 'attendance.save':
+      case 'attendance.mark':
+        return p.groupId ? [`attendance:${p.groupId}:${month(p.date)}`] : [];
+      case 'training.submit':
+      case 'training.addDay':
+      case 'training.clearMonth':
+        return [`attendance:${p.groupId}:${p.month || month(p.date)}`];
+      case 'training.moveDay':
+      case 'training.removeDay': {
+        const d = one('SELECT group_id, date FROM training_days WHERE id = :id', { id: Number(p.id) || 0 });
+        return d ? [`attendance:${d.group_id}:${month(d.date)}`] : [];
+      }
+      case 'schedule.setDay':
+      case 'schedule.resetDay':
+        return [`schedule:week:${mondayOf(p.date)}`];
+      case 'schedule.copyWeek':
+        return [...new Set((p.dates || []).map((d) => `schedule:week:${mondayOf(d)}`))];
+      case 'schedule.saveBase':
+        return ['schedule:base'];
+      case 'schedule.savePitches':
+        return ['schedule:pitches'];
+      case 'settings.update':
+        return ['settings:club'];
+      default:
+        return [];
+    }
+  }
+  // Saving a form opened at `version` when the record has changed since: refused, with who changed it.
+  function checkVersion(table, id, version, studentId) {
+    if (version == null || version === '') return;
+    const cur = one(`SELECT version FROM ${table} WHERE id = :id`, { id });
+    if (!cur || Number(cur.version) === Number(version)) return;
+    const last = studentId
+      ? one('SELECT user, at FROM activity_log WHERE student_id = :sid ORDER BY id DESC LIMIT 1', { sid: studentId })
+      : null;
+    throw new AppError('CONFLICT', { who: last?.user || '—', at: last?.at || '' });
+  }
+
   const methods = {
     'settings.get': () => settings(),
 
@@ -636,6 +714,7 @@ function createService(db, { onWrite, getNotify } = {}) {
         archived: p.archived ? 1 : 0,
       };
       if (p.id) {
+        checkVersion('groups', p.id, p.version, null);
         run(
           `UPDATE groups SET name = :name, coach = :coach, coach_phone = :coach_phone, assistant = :assistant,
                   assistant_phone = :assistant_phone, color = :color, archived = :archived WHERE id = :id`,
@@ -786,6 +865,7 @@ function createService(db, { onWrite, getNotify } = {}) {
         const prev = one('SELECT status, monthly_fee, leave_date, billing_from FROM students WHERE id = :id', { id: p.id });
         const before = one('SELECT * FROM students WHERE id = :id', { id: p.id });
         if (!prev) throw new AppError('NOT_FOUND');
+        checkVersion('students', p.id, p.version, p.id);
         row.leave_date = prev.leave_date;
         row.billing_from = prev.billing_from;
         if (prev.status === 'active' && row.status === 'inactive') row.leave_date = today();
@@ -815,7 +895,7 @@ function createService(db, { onWrite, getNotify } = {}) {
         }
         const changes = diffStudent(before, one('SELECT * FROM students WHERE id = :id', { id: p.id }));
         if (changes.length) log(ctx, 'student.updated', `${row.first_name} ${row.last_name}`, p.id, { changes });
-        ensureMonthlyCharges();
+        ensureMonthlyCharges(p.id);
         return { id: p.id };
       }
 
@@ -829,7 +909,7 @@ function createService(db, { onWrite, getNotify } = {}) {
         row
       );
       log(ctx, 'student.created', `${row.first_name} ${row.last_name}`, Number(r.lastInsertRowid));
-      ensureMonthlyCharges();
+      ensureMonthlyCharges(Number(r.lastInsertRowid));
       return { id: Number(r.lastInsertRowid) };
     },
 
@@ -1410,7 +1490,7 @@ function createService(db, { onWrite, getNotify } = {}) {
          JOIN students s ON s.id = c.student_id
          LEFT JOIN groups g ON g.id = s.group_id
          LEFT JOIN products pr ON pr.id = c.product_id
-         WHERE (:status IS NULL OR c.status = :status)
+         WHERE ${p.studentId ? 'c.student_id = :studentId AND' : ''} (:status IS NULL OR c.status = :status)
            AND (:overdue = 0 OR (c.status = 'unpaid' AND c.due_date < :t))
            AND (:kind IS NULL OR c.kind = :kind)
            AND (:period IS NULL OR (CASE WHEN c.status = 'paid' AND :byPaid = 1
@@ -1490,6 +1570,7 @@ function createService(db, { onWrite, getNotify } = {}) {
     'charges.update': (p, ctx) => {
       const c = one('SELECT * FROM charges WHERE id = :id', { id: p.id });
       if (!c) throw new AppError('NOT_FOUND');
+      checkVersion('charges', p.id, p.version, c.student_id);
       const amount = int(p.amount, c.amount);
       if (amount <= 0) throw new AppError('AMOUNT_REQUIRED');
       let dueDate = str(p.dueDate) || c.due_date;
@@ -2071,17 +2152,51 @@ function createService(db, { onWrite, getNotify } = {}) {
 
   // Single entry point used by both the local IPC bridge and the LAN server.
   // ctx: { user (name from the calling PC), token (sign-in session) }
+  // Writes after which no student can be missing a monthly fee (so the next read needn't check everyone
+  // again): those that never touch fees, and those that bring the one student's fees up to date themselves.
+  const NO_FEE_EFFECT =
+    /^((attendance|training|schedule|files|notify|auth|users|activity|contracts|products)\.|students\.(save|link|unlink)$|charges\.(payMonths|markPaid|setReceipt|receiptReturned)$)/;
+  let feesChecked = null; // { period, at } of the last full check
+  const feesDue = () => !feesChecked || feesChecked.period !== currentPeriod() || Date.now() - feesChecked.at > 10 * 60 * 1000;
+
   function call(method, params, ctx = {}) {
     const fn = methods[method];
-    if (!fn) return { ok: false, error: 'UNKNOWN_METHOD' };
+    if (!fn && !method.startsWith('locks.')) return { ok: false, error: 'UNKNOWN_METHOD' };
     const write = !READ_ONLY.test(method);
     try {
+      const pc = ctx.pc || ctx.user || null;
       const gate = auth.check(method, write, ctx);
       if (gate.error) return { ok: false, error: gate.error };
       ctx = gate.ctx;
+      // Edit locks: kept in memory only (no transaction, other computers don't need a data refresh).
+      if (method.startsWith('locks.')) {
+        const owner = ctx.owner || pc || 'local';
+        const p = params || {};
+        const who = { owner, user: ctx.account ? ctx.account.full_name || ctx.account.username : ctx.user || pc, pc };
+        if (method === 'locks.acquire') {
+          // Taking a lock over from someone else: admins only (everyone, when sign-in is off).
+          const admin = ctx.account ? !!ctx.account.is_admin : true;
+          if (p.force && !admin) return { ok: false, error: 'FORBIDDEN' };
+          return { ok: true, result: locks.acquire(p.keys, who, !!p.force) };
+        }
+        if (method === 'locks.heartbeat') return { ok: true, result: locks.heartbeat(p.keys, owner) };
+        if (method === 'locks.release') return { ok: true, result: locks.release(p.keys, owner) };
+        if (method === 'locks.list') return { ok: true, result: locks.list(owner) };
+        return { ok: false, error: 'UNKNOWN_METHOD' };
+      }
+      if (write) {
+        const keys = lockKeysFor(method, params || {});
+        const holder = keys.length ? locks.heldByOther(keys, ctx.owner || pc || 'local') : null;
+        if (holder) return { ok: false, error: 'LOCKED', detail: { who: holder.user, pc: holder.pc } };
+      }
       if (!write) {
-        // Reads that show dues make sure this month's fees exist first.
-        if (/^(dashboard|students|charges)\./.test(method) && ensureMonthlyCharges() > 0) onWrite?.();
+        // Reads that show dues make sure this month's fees exist first — only when something that
+        // changes fees happened since the last check (or a new month began, or 10 minutes passed).
+        if (/^(dashboard|students|charges)\./.test(method) && feesDue()) {
+          const made = ensureMonthlyCharges();
+          feesChecked = { period: currentPeriod(), at: Date.now() };
+          if (made > 0) onWrite?.();
+        }
         return { ok: true, result: auth.filter(method, fn(params || {}, ctx), ctx) };
       }
       db.exec('BEGIN IMMEDIATE');
@@ -2093,11 +2208,12 @@ function createService(db, { onWrite, getNotify } = {}) {
         db.exec('ROLLBACK');
         throw err;
       }
+      if (!NO_FEE_EFFECT.test(method)) feesChecked = null;
       // Signing in/out changes no club data, so other PCs don't need to refresh.
       if (!method.startsWith('auth.')) onWrite?.();
       return { ok: true, result };
     } catch (err) {
-      if (err instanceof AppError) return { ok: false, error: err.message };
+      if (err instanceof AppError) return { ok: false, error: err.message, ...(err.detail ? { detail: err.detail } : {}) };
       console.error(`[service] ${method} failed:`, err);
       return { ok: false, error: 'INTERNAL', detail: err.message };
     }

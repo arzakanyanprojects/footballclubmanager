@@ -6,6 +6,7 @@ import { useT } from '../i18n';
 import { useCan } from '../components/Auth';
 import { useRpc, rpc, todayIso, weekday, fmtDate } from '../lib';
 import { Button, Empty, Field, Loading, Modal, Segmented, useAction, useClub, useConfirm, useToast } from '../components/ui';
+import { useEditLock } from '../components/Locks';
 
 // Monday-first week; weekday numbers are JS ones (0 = Sunday).
 const WEEK = [1, 2, 3, 4, 5, 6, 0];
@@ -320,6 +321,7 @@ function CellModal({ edit, mode, pitches, people, onClose }) {
   const t = useT();
   const act = useAction();
   const { group, date, weekday: wd, session, base } = edit;
+  const lock = useEditLock(mode === 'base' ? 'schedule:base' : date ? `schedule:week:${mondayOf(date)}` : null);
   const src = session && !session.cancelled ? session : base || {};
   const [f, setF] = useState({
     start: src.start || '',
@@ -354,6 +356,7 @@ function CellModal({ edit, mode, pitches, people, onClose }) {
   return (
     <Modal
       title={`${group.name} — ${t(`weekday.${wd}`)}${date ? ` ${fmtDate(date)}` : ''}`}
+      lock={lock}
       onClose={onClose}
       width={520}
       footer={
@@ -445,6 +448,7 @@ function CellModal({ edit, mode, pitches, people, onClose }) {
 function CoachesModal({ group, people, onClose }) {
   const t = useT();
   const act = useAction();
+  const lock = useEditLock(`group:${group.id}`);
   const [f, setF] = useState({
     coach: group.coach || '',
     coach_phone: group.coach_phone || '',
@@ -458,6 +462,7 @@ function CoachesModal({ group, people, onClose }) {
   return (
     <Modal
       title={`${t('schedule.editCoaches')} — ${group.name}`}
+      lock={lock}
       onClose={onClose}
       width={560}
       footer={
@@ -498,6 +503,7 @@ function CoachesModal({ group, people, onClose }) {
 function PitchesModal({ pitches, onClose }) {
   const t = useT();
   const act = useAction();
+  const lock = useEditLock('schedule:pitches');
   const [text, setText] = useState(pitches.join('\n'));
   const save = async () => {
     if (await act(() => rpc('schedule.savePitches', { names: text.split('\n') }), t('common.saved'))) onClose();
@@ -505,6 +511,7 @@ function PitchesModal({ pitches, onClose }) {
   return (
     <Modal
       title={t('schedule.pitches')}
+      lock={lock}
       onClose={onClose}
       width={420}
       footer={

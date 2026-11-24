@@ -12,6 +12,7 @@ import {
   Badge, Button, Empty, Field, Loading, Modal, Money, RowMenu, SearchBox, Segmented, StudentPicker, Tabs,
   useAction, useClub, useConfirm,
 } from '../components/ui';
+import { useEditLock } from '../components/Locks';
 
 // Payment methods the club accepts, in the order shown; the first is the default.
 export const PAYMENT_METHODS = ['card', 'easypay', 'transfer'];
@@ -457,6 +458,7 @@ function MethodPicker({ value, onChange }) {
 export function PayModal({ charges, student, onClose, onDone }) {
   const t = useT();
   const act = useAction();
+  const lock = useEditLock((student ? [student.id] : [...new Set(charges.map((c) => c.student_id))]).filter(Boolean).map((id) => `student:${id}`));
   const hdm = useHdm();
   const customer = useCustomerReceipt();
   const [method, setMethod] = useState(PAYMENT_METHODS[0]);
@@ -520,6 +522,7 @@ export function PayModal({ charges, student, onClose, onDone }) {
   return (
     <Modal
       title={t('payments.markPaid')}
+      lock={lock}
       onClose={onClose}
       width={480}
       footer={
@@ -582,6 +585,7 @@ export function ChargeModal({ studentId: fixedStudent, onClose }) {
   const t = useT();
   const act = useAction();
   const [studentId, setStudentId] = useState(fixedStudent || null);
+  const lock = useEditLock(studentId ? `student:${studentId}` : null);
   const [student, setStudent] = useState(null);
   const [kind, setKind] = useState('other');
   const [amount, setAmount] = useState('');
@@ -638,6 +642,7 @@ export function ChargeModal({ studentId: fixedStudent, onClose }) {
   return (
     <Modal
       title={t('payments.newCharge')}
+      lock={lock}
       onClose={onClose}
       width={600}
       footer={
@@ -735,6 +740,7 @@ function EditChargeModal({ charge, onClose, onPrint }) {
   const receipt = useCustomerReceipt();
   const confirm = useConfirm();
   const monthly = charge.kind === 'monthly';
+  const lock = useEditLock(`student:${charge.student_id}`);
   const [f, setF] = useState({
     amount: charge.amount,
     description: charge.description || '',
@@ -759,7 +765,7 @@ function EditChargeModal({ charge, onClose, onPrint }) {
 
   const save = async () => {
     const { absence, ...rest } = f;
-    if (await act(() => rpc('charges.update', { id: charge.id, ...rest, absenceFrom: absence?.from ?? null, absenceTo: absence?.to ?? null }), t('common.saved'))) onClose();
+    if (await act(() => rpc('charges.update', { id: charge.id, version: charge.version, ...rest, absenceFrom: absence?.from ?? null, absenceTo: absence?.to ?? null }), t('common.saved'))) onClose();
   };
   const run = async (fn, text) => {
     if (await act(fn, text)) onClose();
@@ -768,6 +774,7 @@ function EditChargeModal({ charge, onClose, onPrint }) {
   return (
     <Modal
       title={chargeLabel(t, charge)}
+      lock={lock}
       onClose={onClose}
       width={monthly ? 620 : 520}
       footer={
@@ -946,6 +953,7 @@ function receiptHtml(t, club, c, studentName) {
 export function MonthlyPaymentModal({ student, charges, onClose }) {
   const t = useT();
   const act = useAction();
+  const lock = useEditLock(`student:${student.id}`);
   const hdm = useHdm();
   const customer = useCustomerReceipt();
   const year = todayIso().slice(0, 4);
@@ -1007,6 +1015,7 @@ export function MonthlyPaymentModal({ student, charges, onClose }) {
   return (
     <Modal
       title={`${t('charge.monthly')} — ${student.first_name} ${student.last_name}`}
+      lock={lock}
       onClose={onClose}
       width={620}
       footer={

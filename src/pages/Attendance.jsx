@@ -4,6 +4,7 @@ import { useT, monthName } from '../i18n';
 import { useCan } from '../components/Auth';
 import { useRpc, rpc, todayIso, currentPeriod, addMonths, daysInMonth, weekday, fmtDate, fmtDateTime, money } from '../lib';
 import { Badge, Button, Empty, Field, Loading, Modal, Money, useAction, useClub, useConfirm } from '../components/ui';
+import { EditingMark, useEditLock, useLocks } from '../components/Locks';
 
 // Marks that count as attended; anything else recorded counts as absent.
 const PRESENT = ['present', 'late'];
@@ -26,6 +27,7 @@ function GroupCards({ nav }) {
   const t = useT();
   const { data, loading } = useRpc('groups.list');
   const groups = (data || []).filter((g) => !g.archived);
+  const locks = useLocks();
 
   // Set up this month's training days for every group, so each card can show its count.
   const ids = groups.map((g) => g.id).join(',');
@@ -57,7 +59,10 @@ function GroupCards({ nav }) {
               onClick={() => nav('attendance', { groupId: g.id })}
             >
               <div className="row">
-                <h3 className="grow">{g.name}</h3>
+                <h3 className="grow">
+                  {g.name}
+                  <EditingMark holder={locks[`attendance:${g.id}:${currentPeriod()}`]} />
+                </h3>
                 <SubmittedBadge filled={g.days_filled} total={g.days_total} />
               </div>
               <div className="row small muted">
@@ -108,6 +113,14 @@ function GroupSheet({ groupId, nav }) {
   }, [groupId, month]);
 
   const { data } = useRpc('training.month', { groupId, month }, { skip: readyMonth !== month });
+  // One person marks a group's month at a time: taken at the first mark, kept while there are unsaved
+  // marks, given back after 5 minutes without changes.
+  const draftRef = useRef(0);
+  const lock = useEditLock(canEdit ? `attendance:${groupId}:${month}` : null, {
+    lazy: true,
+    idleMs: 5 * 60 * 1000,
+    keepWhile: () => draftRef.current > 0,
+  });
 
   const saved = useMemo(() => {
     const map = {};
@@ -122,12 +135,16 @@ function GroupSheet({ groupId, nav }) {
   };
   const current = (key) => draft[key] || saved[key] || (excusedDay(key) ? 'excused' : null);
   const changes = Object.keys(draft).filter((k) => draft[k] !== saved[k]).length;
+  draftRef.current = changes;
 
   const today = todayIso();
   const days = data?.days || [];
   const students = data?.students || [];
 
-  const toggle = (key) => canEdit && setDraft((d) => ({ ...d, [key]: current(key) === 'present' ? 'absent' : 'present' }));
+  const toggle = async (key) => {
+    if (!canEdit || !(await lock.ensure())) return;
+    setDraft((d) => ({ ...d, [key]: current(key) === 'present' ? 'absent' : 'present' }));
+  };
 
   // Leaving or switching month drops unsaved marks, so ask first.
   const leave = async (go) => {
@@ -137,6 +154,7 @@ function GroupSheet({ groupId, nav }) {
   };
 
   const save = async () => {
+    if (!(await lock.ensure())) return;
     setSaving(true);
     // A blank cell is saved as absent when the training has been held or anyone is marked on that day;
     // a future training nobody has been marked on yet stays blank.
@@ -150,6 +168,7 @@ function GroupSheet({ groupId, nav }) {
   };
 
   const clearDays = async () => {
+    if (!(await lock.ensure())) return;
     const ok = await confirm({
       title: t('sheet.clearDays'),
       text: t('sheet.clearDaysConfirm', { month: monthName(t, month), n: days.length }),
@@ -158,9 +177,10 @@ function GroupSheet({ groupId, nav }) {
     if (ok && (await act(() => rpc('training.clearMonth', { groupId, month }), t('sheet.cleared')))) setDraft({});
   };
 
-  const openMenu = (e, payload) => {
+  const openMenu = async (e, payload) => {
     if (!canEdit) return;
     const r = e.currentTarget.getBoundingClientRect();
+    if (!(await lock.ensure())) return;
     setMenu({ ...payload, x: Math.min(r.left, window.innerWidth - 250), y: r.bottom + 6 });
   };
 
@@ -184,6 +204,7 @@ function GroupSheet({ groupId, nav }) {
           </div>
         </div>
         <div className="spacer" />
+        {lock.banner && <div style={{ flexBasis: '100%', order: 10 }}>{lock.banner}</div>}
         <Button icon={Printer} onClick={() => setExporting(true)} disabled={!days.length || !students.length}>
           {t('sheet.export')}
         </Button>

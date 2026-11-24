@@ -7,6 +7,7 @@ import { useCan } from './Auth';
 import { useRpc, rpc, fmtDate, fmtDateTime, money } from '../lib';
 import { Avatar, Badge, Button, Empty, Field, Loading, Modal, Money, SearchBox, useAction, useClub, useConfirm } from './ui';
 import { StudentForm } from '../pages/Students';
+import { useEditLock } from './Locks';
 
 const RELATIONS = ['sibling', 'cousin', 'other'];
 
@@ -127,6 +128,7 @@ export function RelatedTab({ student, related, nav }) {
 function LinkModal({ student, exclude, onClose }) {
   const t = useT();
   const act = useAction();
+  const lock = useEditLock(`student:${student.id}`);
   const [search, setSearch] = useState(student.last_name || '');
   const [picked, setPicked] = useState(null);
   const [relation, setRelation] = useState('sibling');
@@ -140,6 +142,7 @@ function LinkModal({ student, exclude, onClose }) {
   return (
     <Modal
       title={t('related.linkTitle', { name: `${student.first_name} ${student.last_name}` })}
+      lock={lock}
       onClose={onClose}
       width={560}
       footer={

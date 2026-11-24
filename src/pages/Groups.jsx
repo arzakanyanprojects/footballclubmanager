@@ -5,12 +5,14 @@ import { useT } from '../i18n';
 import { useCan } from '../components/Auth';
 import { useRpc, rpc } from '../lib';
 import { Badge, Button, Empty, Field, Loading, Modal, Money, RowMenu, SearchBox, useAction, useConfirm, useToast } from '../components/ui';
+import { EditingMark, useEditLock, useLocks } from '../components/Locks';
 
 const COLORS = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#6250d6', '#e34948'];
 
 export default function Groups({ nav }) {
   const canEdit = useCan('groups');
   const t = useT();
+  const locks = useLocks();
   const act = useAction();
   const confirm = useConfirm();
   const toast = useToast();
@@ -146,6 +148,7 @@ export default function Groups({ nav }) {
                         <span className="strong">{age}</span>
                         {year && <span className="group-year">{year}</span>}
                         {!!g.archived && <Badge>{t('groups.archived')}</Badge>}
+                        <EditingMark holder={locks[`group:${g.id}`]} />
                       </span>
                     </td>
                     <td>
@@ -191,6 +194,7 @@ export default function Groups({ nav }) {
                     <span className="group-age">{age}</span>
                     {year && <span className="group-year">{year}</span>}
                     {!!g.archived && <Badge>{t('groups.archived')}</Badge>}
+                    <EditingMark holder={locks[`group:${g.id}`]} />
                   </div>
                   {menu(g)}
                 </div>
@@ -298,6 +302,7 @@ function Progress({ done, total }) {
 function GroupModal({ group, onClose }) {
   const t = useT();
   const act = useAction();
+  const lock = useEditLock(group.id ? `group:${group.id}` : null);
   const [f, setF] = useState({ name: '', coach: '', coach_phone: '', assistant: '', assistant_phone: '', color: COLORS[0], archived: 0, ...group });
   const set = (k) => (e) => setF({ ...f, [k]: e?.target ? e.target.value : e });
   const save = async () => {
@@ -306,6 +311,7 @@ function GroupModal({ group, onClose }) {
   return (
     <Modal
       title={group.id ? t('groups.edit') : t('groups.add')}
+      lock={lock}
       onClose={onClose}
       width={520}
       footer={

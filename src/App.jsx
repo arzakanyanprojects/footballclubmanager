@@ -27,6 +27,7 @@ import Settings from './pages/Settings';
 import Schedule from './pages/Schedule';
 import { HdmProvider } from './components/Hdm';
 import { ThermalProvider } from './components/Thermal';
+import { LocksProvider } from './components/Locks';
 import { UpdateNotice } from './components/Updates';
 import { AuthGate, useAuth } from './components/Auth';
 
@@ -136,9 +137,11 @@ function SignedIn({ appState, setAppState, route, nav, online }) {
   return (
     <HdmProvider settings={appState.config.hdm} operator={operator}>
       <ThermalProvider settings={appState.config.thermal} operator={operator}>
-        <Layout route={shown} nav={nav} navItems={allowed} appState={appState} online={online}>
-          <Page route={shown} nav={nav} appState={appState} setAppState={setAppState} />
-        </Layout>
+        <LocksProvider>
+          <Layout route={shown} nav={nav} navItems={allowed} appState={appState} online={online}>
+            <Page route={shown} nav={nav} appState={appState} setAppState={setAppState} />
+          </Layout>
+        </LocksProvider>
       </ThermalProvider>
     </HdmProvider>
   );

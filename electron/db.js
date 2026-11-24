@@ -377,6 +377,24 @@ const MIGRATIONS = [
   `
   ALTER TABLE absences ADD COLUMN reduced_charges TEXT;
   `,
+  // v28: faster students list / profile (each student's fees by kind and period, and unpaid ones).
+  `CREATE INDEX IF NOT EXISTS ix_charges_student_kind ON charges(student_id, kind, period);
+   CREATE INDEX IF NOT EXISTS ix_charges_student_status ON charges(student_id, status, due_date);
+   CREATE INDEX IF NOT EXISTS ix_charges_status_paid ON charges(status, paid_at, amount);
+   CREATE INDEX IF NOT EXISTS ix_charges_status_kind ON charges(status, kind, period, amount);
+   CREATE INDEX IF NOT EXISTS ix_charges_kind_period ON charges(kind, period, status, amount);
+   ANALYZE;`,
+  // v29: a version on students, groups and payments, raised by every change — a form saved after someone
+  // else changed the record is refused instead of silently overwriting their change.
+  `ALTER TABLE students ADD COLUMN version INTEGER NOT NULL DEFAULT 0;
+   ALTER TABLE groups ADD COLUMN version INTEGER NOT NULL DEFAULT 0;
+   ALTER TABLE charges ADD COLUMN version INTEGER NOT NULL DEFAULT 0;
+   CREATE TRIGGER students_version AFTER UPDATE ON students FOR EACH ROW WHEN NEW.version = OLD.version
+     BEGIN UPDATE students SET version = OLD.version + 1 WHERE id = OLD.id; END;
+   CREATE TRIGGER groups_version AFTER UPDATE ON groups FOR EACH ROW WHEN NEW.version = OLD.version
+     BEGIN UPDATE groups SET version = OLD.version + 1 WHERE id = OLD.id; END;
+   CREATE TRIGGER charges_version AFTER UPDATE ON charges FOR EACH ROW WHEN NEW.version = OLD.version
+     BEGIN UPDATE charges SET version = OLD.version + 1 WHERE id = OLD.id; END;`,
 ];
 
 function seed(db) {

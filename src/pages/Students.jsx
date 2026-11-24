@@ -1,11 +1,14 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
-import { Plus, Download, Users, Paperclip, Camera, Trash2, UserRound, FileText, Wallet, StickyNote, FilterX } from 'lucide-react';
+import { Plus, Download, Users, Paperclip, Camera, Trash2, UserRound, FileText, Wallet, StickyNote, FilterX, FileSignature } from 'lucide-react';
 import { useT, monthName } from '../i18n';
 import { useCan } from '../components/Auth';
 import { useColumns } from '../components/Columns';
+import { FilterButton, FilterMenu, applyColumnFilters, columnValues } from '../components/ColumnFilter';
+import { ConflictBanner, EditingMark, useEditLock, useLocks } from '../components/Locks';
 import { useRpc, rpc, fmtDate, saveCsv, todayIso, resizeImage, seasonMonths, money, readFileBase64 } from '../lib';
 import { Avatar, Badge, Button, Empty, Field, Loading, Modal, Money, SearchBox, Segmented, useAction, useClub } from '../components/ui';
 import { PayModal } from './Payments';
+import { ContractReadyModal } from './Contracts';
 
 export const CATEGORIES = ['siblings', 'half', 'war', 'staff', 'orphan'];
 
@@ -55,6 +58,7 @@ export default function Students({ nav, route }) {
   const { currency } = useClub();
   const months = useMemo(() => seasonMonths(), []);
   const { data: groups } = useRpc('groups.list');
+  const locks = useLocks(); // who else is editing which student (✎ markers)
   const { data, loading } = useRpc('students.list', {
     search,
     status: status || null,
@@ -63,7 +67,7 @@ export default function Students({ nav, route }) {
     monthsTo: months[months.length - 1],
   });
 
-  const rows = useMemo(
+  const baseRows = useMemo(
     () =>
       (data || [])
         .filter((s) => !debtOnly || s.overdue > 0)
@@ -72,6 +76,73 @@ export default function Students({ nav, route }) {
     [data, debtOnly, category]
   );
 
+  // Excel-style filters in the column headers: { columnId: values shown }, and one sorted column.
+  const [colFilters, setColFilters] = useState({});
+  const [sort, setSort] = useState(null); // { id, dir: 1 | -1 }
+  const [menu, setMenu] = useState(null); // { id, rect }
+  const fdefs = useMemo(() => {
+    const plainDef = (get, sortBy) => ({ value: (s) => String(get(s) ?? ''), ...(sortBy ? { sort: sortBy } : {}) });
+    const STATUS_ORDER = ['paid', 'excused', 'overdue', 'unpaid', 'waived', 'notyet', 'none'];
+    const defs = {
+      name: plainDef((s) => [s.first_name, s.last_name, s.patronymic].filter(Boolean).join(' ')),
+      group: plainDef((s) => s.group_name),
+      parent: plainDef((s) => s.parent_name),
+      medical: plainDef((s) => t(s.medical_doc ? 'medicalDoc.provided' : 'medicalDoc.missing')),
+      fee: plainDef((s) => (s.monthly_fee ? money(s.monthly_fee, currency) : ''), (s) => Number(s.monthly_fee) || ''),
+      debt: plainDef((s) => (s.overdue > 0 ? money(s.overdue, currency) : ''), (s) => Number(s.overdue) || ''),
+      status: plainDef((s) => t(`status.${s.status}`)),
+      birthDate: plainDef((s) => fmtDate(s.birth_date), (s) => s.birth_date || ''),
+      joinDate: plainDef((s) => fmtDate(s.join_date), (s) => s.join_date || ''),
+      category: plainDef((s) => (s.category ? t(`category.${s.category}`) : '')),
+      service: plainDef((s) => s.service),
+      contractNo: plainDef((s) => s.contract_no),
+      parentPhone: plainDef((s) => s.parent_phone),
+      parentMessenger: plainDef((s) => s.parent_messenger),
+      parentEmail: plainDef((s) => s.parent_email),
+      parentSsn: plainDef((s) => s.parent_ssn),
+      parentDoc: plainDef((s) => s.parent_doc_no),
+      parentAddress: plainDef((s) => s.parent_address),
+      inactiveReason: plainDef((s) => s.inactive_reason),
+    };
+    for (const p of months) {
+      const st = (s) => monthStatus(s.byMonth[p], p, s.join_date);
+      defs[`m:${p}`] = {
+        value: (s) => (st(s) === 'none' ? '' : t(`chargeStatus.${st(s)}`)),
+        sort: (s) => (st(s) === 'none' ? '' : STATUS_ORDER.indexOf(st(s))),
+      };
+    }
+    return defs;
+  }, [months, t, currency]);
+  const rows = useMemo(() => applyColumnFilters(baseRows, fdefs, colFilters, sort), [baseRows, fdefs, colFilters, sort]);
+  // The header button of a column.
+  const fb = (id, label) => (
+    <FilterButton
+      active={!!colFilters[id]}
+      sorted={sort?.id === id ? sort.dir : 0}
+      title={t('colFilter.title', { column: label })}
+      onOpen={(rect) => setMenu({ id, rect })}
+    />
+  );
+  const headLabel = (id, label) => (
+    <span className="th-in">
+      {label}
+      {fb(id, label)}
+    </span>
+  );
+
+
+  // Big lists draw in steps: the first rows right away, more as the list is scrolled to its end.
+  const STEP = 150;
+  const [limit, setLimit] = useState(STEP);
+  useEffect(() => setLimit(STEP), [rows]);
+  const moreRef = useRef(null);
+  useEffect(() => {
+    const el = moreRef.current;
+    if (!el || limit >= rows.length) return;
+    const io = new IntersectionObserver((e) => e[0].isIntersecting && setLimit((l) => l + STEP * 2), { rootMargin: '600px' });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [limit, rows.length]);
 
   // «Ցուցադրված է 2 սան 97-ից»: the students shown with the filters, of all students in this tab (active / inactive / all).
   const { data: counts } = useRpc('students.summary');
@@ -82,8 +153,10 @@ export default function Students({ nav, route }) {
       : t('students.count', { n: rows.length });
 
   // Any filter differing from the default (active students, everything else off) → «Մաքրել ֆիլտրերը».
-  const filtered = !!(search.trim() || groupId || category || debtOnly || status !== 'active');
+  const filtered = !!(search.trim() || groupId || category || debtOnly || status !== 'active' || Object.keys(colFilters).length || sort);
   const clearFilters = () => {
+    setColFilters({});
+    setSort(null);
     setSearch('');
     setGroupId('');
     setCategory('');
@@ -95,7 +168,7 @@ export default function Students({ nav, route }) {
   const plain = (id, label, get, opts = {}) => ({
     id,
     label,
-    head: () => <th className={opts.num ? 'num' : ''}>{label}</th>,
+    head: () => <th className={opts.num ? 'num' : ''}>{headLabel(id, label)}</th>,
     cell: (s) => <td className={opts.num ? 'num' : opts.nowrap ? 'nowrap' : ''}>{text(get(s))}</td>,
     ...opts,
   });
@@ -104,7 +177,7 @@ export default function Students({ nav, route }) {
       id: 'name',
       label: t('students.name'),
       fixed: true,
-      head: () => <th className="sticky-col">{t('students.name')}</th>,
+      head: () => <th className="sticky-col">{headLabel('name', t('students.name'))}</th>,
       cell: (s) => (
         <td className="sticky-col">
           <div className="cell-person">
@@ -113,6 +186,7 @@ export default function Students({ nav, route }) {
               <div className="name nowrap">
                 {s.first_name} {s.last_name}
                 {s.patronymic ? ` ${s.patronymic}` : ''}
+                <EditingMark holder={locks[`student:${s.id}`]} />
               </div>
             </div>
           </div>
@@ -122,7 +196,7 @@ export default function Students({ nav, route }) {
     {
       id: 'group',
       label: t('students.group'),
-      head: () => <th>{t('students.group')}</th>,
+      head: () => <th>{headLabel('group', t('students.group'))}</th>,
       cell: (s) => (
         <td>
           {s.group_name ? (
@@ -142,7 +216,7 @@ export default function Students({ nav, route }) {
     {
       id: 'parent',
       label: t('students.parent'),
-      head: () => <th>{t('students.parent')}</th>,
+      head: () => <th>{headLabel('parent', t('students.parent'))}</th>,
       cell: (s) => (
         <td>
           <div className="parent-name" title={s.parent_name || ''}>{s.parent_name || '—'}</div>
@@ -153,7 +227,7 @@ export default function Students({ nav, route }) {
     {
       id: 'medical',
       label: t('students.medicalDoc'),
-      head: () => <th title={t('students.medicalDoc')}>{t('students.medicalShort')}</th>,
+      head: () => <th title={t('students.medicalDoc')}>{headLabel('medical', t('students.medicalShort'))}</th>,
       cell: (s) => (
         <td title={`${t('students.medicalDoc')}: ${t(s.medical_doc ? 'medicalDoc.provided' : 'medicalDoc.missing')}`}>
           <Badge tone={s.medical_doc ? 'good' : 'warn'}>{s.medical_doc ? '✓' : '✕'}</Badge>
@@ -164,7 +238,7 @@ export default function Students({ nav, route }) {
       id: 'fee',
       label: t('students.monthlyFee'),
       available: canPay,
-      head: () => <th className="num">{t('students.monthlyFee')}</th>,
+      head: () => <th className="num">{headLabel('fee', t('students.monthlyFee'))}</th>,
       cell: (s) => (
         <td className="num">
           <Money value={s.monthly_fee} />
@@ -177,9 +251,10 @@ export default function Students({ nav, route }) {
       available: canPay,
       head: () =>
         months.map((p) => (
-          <th key={p} className="mcol" title={monthName(t, p)}>
+          <th key={p} className={`mcol ${colFilters[`m:${p}`] || sort?.id === `m:${p}` ? 'filtered' : ''}`} title={monthName(t, p)}>
             {t(`month.s${Number(p.slice(5))}`)}
             <div style={{ fontWeight: 400 }}>{p.slice(2, 4)}</div>
+            {fb(`m:${p}`, monthName(t, p))}
           </th>
         )),
       cell: (s) =>
@@ -196,7 +271,7 @@ export default function Students({ nav, route }) {
                 onClick={(e) => {
                   if (!payable) return;
                   e.stopPropagation();
-                  setPaying([{ ...m, kind: 'monthly', first_name: s.first_name, last_name: s.last_name }]);
+                  setPaying([{ ...m, kind: 'monthly', student_id: s.id, first_name: s.first_name, last_name: s.last_name }]);
                 }}
               >
                 {MONTH_MARK[st] ?? '·'}
@@ -210,7 +285,7 @@ export default function Students({ nav, route }) {
       label: t('columns.debt'),
       available: canPay,
       defaultHidden: true,
-      head: () => <th className="num">{t('columns.debt')}</th>,
+      head: () => <th className="num">{headLabel('debt', t('columns.debt'))}</th>,
       cell: (s) => (
         <td className="num">{s.overdue > 0 ? <Money value={s.overdue} className="strong" /> : <span className="muted">—</span>}</td>
       ),
@@ -220,7 +295,7 @@ export default function Students({ nav, route }) {
       label: t('students.status'),
       // Only with «Բոլորը»: when the list shows active (or inactive) students only, the column says the same on every row.
       available: status === '',
-      head: () => <th>{t('students.status')}</th>,
+      head: () => <th>{headLabel('status', t('students.status'))}</th>,
       cell: (s) => (
         <td>
           <Badge tone={s.status === 'active' ? 'accent' : ''}>{t(`status.${s.status}`)}</Badge>
@@ -331,8 +406,16 @@ export default function Students({ nav, route }) {
           <Empty
             icon={Users}
             title={t('students.empty')}
-            text={search || groupId || debtOnly ? t('common.tryFilters') : t('students.emptyText')}
-            action={!search && canEdit && <Button variant="primary" icon={Plus} onClick={() => setEditing({})}>{t('students.add')}</Button>}
+            text={filtered ? t('common.tryFilters') : t('students.emptyText')}
+            action={
+              filtered ? (
+                <Button icon={FilterX} onClick={clearFilters}>
+                  {t('students.clearFilters')}
+                </Button>
+              ) : (
+                canEdit && <Button variant="primary" icon={Plus} onClick={() => setEditing({})}>{t('students.add')}</Button>
+              )
+            }
           />
         </div>
       ) : (
@@ -342,15 +425,41 @@ export default function Students({ nav, route }) {
               <tr>{columns.map((c) => <Fragment key={c.id}>{c.head()}</Fragment>)}</tr>
             </thead>
             <tbody>
-              {rows.map((s) => (
+              {rows.slice(0, limit).map((s) => (
                 <tr key={s.id} className="click" onClick={() => nav('students', { id: s.id })}>
                   {columns.map((c) => <Fragment key={c.id}>{c.cell(s)}</Fragment>)}
                 </tr>
               ))}
             </tbody>
           </table>
+          {limit < rows.length && <div ref={moreRef} className="table-foot small muted">…</div>}
           <div className="table-foot small muted">{shownText}</div>
         </div>
+      )}
+
+      {menu && fdefs[menu.id] && (
+        <FilterMenu
+          key={menu.id}
+          rect={menu.rect}
+          // Like Excel: the values left by the other columns' filters.
+          values={columnValues(applyColumnFilters(baseRows, fdefs, Object.fromEntries(Object.entries(colFilters).filter(([k]) => k !== menu.id)), null), fdefs[menu.id])}
+          selected={colFilters[menu.id]}
+          sortDir={sort?.id === menu.id ? sort.dir : 0}
+          onSort={(dir) => {
+            setSort(dir ? { id: menu.id, dir } : null);
+            setMenu(null);
+          }}
+          onApply={(vals) => {
+            setColFilters((f) => {
+              const next = { ...f };
+              if (vals) next[menu.id] = vals;
+              else delete next[menu.id];
+              return next;
+            });
+            setMenu(null);
+          }}
+          onClose={() => setMenu(null)}
+        />
       )}
 
       {paying && <PayModal charges={paying} onClose={() => setPaying(null)} onDone={() => setPaying(null)} />}
@@ -376,7 +485,7 @@ export function StudentForm({ student, onClose, onSaved }) {
   const fileRef = useRef(null);
   const docRef = useRef(null);
   const [medicalFile, setMedicalFile] = useState(null); // picked, uploaded on save
-  const [f, setF] = useState(() => ({
+  const init = (student) => ({
     first_name: '',
     last_name: '',
     patronymic: '',
@@ -408,7 +517,18 @@ export function StudentForm({ student, onClose, onSaved }) {
     notes: '',
     photo: null,
     ...Object.fromEntries(Object.entries(student).map(([k, v]) => [k, v ?? ''])),
-  }));
+  });
+  const [f, setF] = useState(() => init(student));
+  // The latest saved data (after someone else's change), replacing what is in the form.
+  const [conflict, setConflict] = useState(null);
+  const reload = async () => {
+    if (!student.id) return;
+    const fresh = await rpc('students.get', { id: student.id }).catch(() => null);
+    if (fresh?.student) setF(init(fresh.student));
+    setConflict(null);
+  };
+  // One person edits a student at a time (the form, payments, applications…).
+  const lock = useEditLock(student.id ? `student:${student.id}` : null, { onGranted: reload });
   const set = (k) => (e) => setF((s) => ({ ...s, [k]: e?.target ? e.target.value : e }));
 
   const pickPhoto = async (e) => {
@@ -421,29 +541,86 @@ export function StudentForm({ student, onClose, onSaved }) {
     e.target.value = '';
   };
 
+  // A new student is saved together with their contract (filled from the Word template, ready to print).
+  const canContracts = useCan('contracts');
+  const { data: templates } = useRpc('docTemplates.list', {}, { skip: !!student.id || !canContracts });
+  const withContract = !student.id && canContracts && templates?.length > 0;
+  const [templateId, setTemplateId] = useState(() => {
+    try {
+      return localStorage.getItem('fc.newStudent.template') || '';
+    } catch {
+      return '';
+    }
+  });
+  const tplId = (templates || []).some((tp) => String(tp.id) === templateId) ? templateId : String(templates?.[0]?.id || '');
+  const [ready, setReady] = useState(null); // { contractId, studentId, number }
+
   const save = async () => {
+    setConflict(null);
     const r = await act(async () => {
-      const res = await rpc('students.save', f);
+      const res = await rpc('students.save', f).catch((err) => {
+        if (err.code !== 'CONFLICT') throw err;
+        setConflict(err.detail || {});
+        throw Object.assign(new Error('CANCELLED'), { code: 'CANCELLED' });
+      });
       if (medicalFile && f.medical_doc) await rpc('files.upload', { studentId: res.id, kind: 'medical', ...medicalFile });
       return res;
-    }, t('common.saved'));
-    if (r) onSaved(r.id);
+    }, withContract ? null : t('common.saved'));
+    if (!r) return;
+    if (!withContract) return onSaved(r.id);
+    // The student is saved; now the contract, kept under the student (its documents).
+    const c = await act(() =>
+      rpc('contracts.create', { studentId: r.id, docTemplateId: Number(tplId), contractDate: todayIso(), startDate: f.join_date || todayIso() })
+    );
+    if (!c) return onSaved(r.id); // the student stays saved; the contract can be made from their page
+    try {
+      localStorage.setItem('fc.newStudent.template', tplId);
+    } catch {
+      /* per-PC convenience only */
+    }
+    setReady({ contractId: c.id, studentId: r.id, number: f.contract_no });
   };
+
+  if (ready)
+    return (
+      <ContractReadyModal
+        contractId={ready.contractId}
+        number={ready.number}
+        studentName={[f.first_name, f.last_name, f.patronymic].filter(Boolean).join(' ')}
+        onClose={() => onSaved(ready.studentId)}
+      />
+    );
 
   return (
     <Modal
       title={student.id ? t('students.edit') : t('students.add')}
       onClose={onClose}
       width={760}
+      lock={lock}
       footer={
         <>
+          {withContract && templates.length > 1 && (
+            <select className="select left" style={{ width: 'auto', maxWidth: 260 }} value={tplId} onChange={(e) => setTemplateId(e.target.value)} title={t('contracts.template')}>
+              {templates.map((tp) => (
+                <option key={tp.id} value={tp.id}>
+                  {tp.name}
+                </option>
+              ))}
+            </select>
+          )}
           <Button onClick={onClose}>{t('common.cancel')}</Button>
-          <Button variant="primary" onClick={save} disabled={!f.first_name.trim() || !f.last_name.trim()}>
-            {t('common.save')}
+          <Button
+            variant="primary"
+            icon={withContract ? FileSignature : undefined}
+            onClick={save}
+            disabled={!f.first_name.trim() || !f.last_name.trim() || (withContract && !tplId)}
+          >
+            {withContract ? t('students.createContract') : t('common.save')}
           </Button>
         </>
       }
     >
+      <ConflictBanner conflict={conflict} onReload={reload} />
       <div className="stack" style={{ gap: 0 }}>
         <FormSection icon={UserRound} title={t('form.student')}>
           <div className="row" style={{ gap: 18, alignItems: 'flex-start' }}>

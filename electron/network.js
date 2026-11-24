@@ -54,7 +54,7 @@ function startHost({ service, port, getKey, getVersion, getInfo }) {
         return send(400, { ok: false, error: 'BAD_REQUEST' });
       }
       const user = msg.user ? `${msg.user}` : `${req.socket.remoteAddress}`;
-      send(200, service.call(msg.method, msg.params, { user, token: msg.token || null }));
+      send(200, service.call(msg.method, msg.params, { user, pc: user, owner: msg.owner ? `${msg.owner}` : `${req.socket.remoteAddress}`, token: msg.token || null }));
     });
   });
 
@@ -109,7 +109,7 @@ function discoverHosts(timeoutMs = 1500) {
 }
 
 // Client side: forwards calls to the host and watches it for changes made by other PCs.
-function createRemote({ host, port, key, getUser, getToken, onChange, onStatus }) {
+function createRemote({ host, port, key, getUser, getToken, onChange, onStatus, owner }) {
   const base = `http://${host}:${port}`;
   let online = null;
   let lastVersion = null;
@@ -135,7 +135,7 @@ function createRemote({ host, port, key, getUser, getToken, onChange, onStatus }
 
   async function call(method, params) {
     try {
-      const r = await request('/rpc', { method: 'POST', body: JSON.stringify({ method, params, user: getUser(), token: getToken?.() || null }) });
+      const r = await request('/rpc', { method: 'POST', body: JSON.stringify({ method, params, user: getUser(), owner, token: getToken?.() || null }) });
       setOnline(true);
       return r;
     } catch {

@@ -23,6 +23,18 @@ contextBridge.exposeInMainWorld('fc', {
     cloudSet: (patch) => ipcRenderer.invoke('backup:cloudSet', patch),
     cloudPick: () => ipcRenderer.invoke('backup:cloudPick'),
     cloudOpen: () => ipcRenderer.invoke('backup:cloudOpen'),
+    gdriveStatus: () => ipcRenderer.invoke('gdrive:status'),
+    gdriveSet: (patch) => ipcRenderer.invoke('gdrive:set', patch),
+    gdriveConnect: () => ipcRenderer.invoke('gdrive:connect'),
+    gdriveDisconnect: () => ipcRenderer.invoke('gdrive:disconnect'),
+    gdriveUploadNow: () => ipcRenderer.invoke('gdrive:uploadNow'),
+    gdriveList: () => ipcRenderer.invoke('gdrive:list'),
+    gdriveRestore: (file) => ipcRenderer.invoke('gdrive:restore', file),
+    onGdrive: (cb) => {
+      const h = (_e, st) => cb(st);
+      ipcRenderer.on('gdrive:changed', h);
+      return () => ipcRenderer.removeListener('gdrive:changed', h);
+    },
   },
   saveFile: (opts) => ipcRenderer.invoke('file:save', opts),
   saveXlsx: (report) => ipcRenderer.invoke('xlsx:save', report),
@@ -33,6 +45,7 @@ contextBridge.exposeInMainWorld('fc', {
   onDataChanged: on('data-changed'),
   onConnection: on('connection-status'),
   onCloseRequested: on('close-requested'),
+  onLogoutRequested: on('logout-requested'),
   confirmClose: () => ipcRenderer.invoke('app:confirmClose'),
   importRead: () => ipcRenderer.invoke('import:read'),
   saveTransfer: (job) => ipcRenderer.invoke('transfer:save', job),

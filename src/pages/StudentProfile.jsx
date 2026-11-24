@@ -11,6 +11,7 @@ import { AbsenceModal, printStoredFile, openStoredFile } from '../components/Abs
 import { ChargesTable, MonthlyPaymentModal, chargeStatus } from './Payments';
 import { NewContractModal, ContractModal, CONTRACT_TONE } from './Contracts';
 import { RelatedTab, HistoryTab } from '../components/StudentExtras';
+import { useEditLock } from '../components/Locks';
 
 export default function StudentProfile({ id, nav }) {
   const canEdit = useCan('students');
@@ -330,6 +331,7 @@ export default function StudentProfile({ id, nav }) {
 function TerminateModal({ student, onClose }) {
   const t = useT();
   const act = useAction();
+  const lock = useEditLock(`student:${student.id}`);
   const [date, setDate] = useState(todayIso());
   const [reason, setReason] = useState('');
   const save = async () => {
@@ -338,6 +340,7 @@ function TerminateModal({ student, onClose }) {
   return (
     <Modal
       title={t('terminate.title', { name: `${student.first_name} ${student.last_name}` })}
+      lock={lock}
       onClose={onClose}
       width={460}
       footer={

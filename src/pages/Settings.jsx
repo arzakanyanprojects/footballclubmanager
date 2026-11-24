@@ -9,6 +9,7 @@ import { UpdateSettings } from '../components/Updates';
 import { NotifySettings } from '../components/Notify';
 import { MyAccount, UsersSettings, useAuth } from '../components/Auth';
 import DataManagement from '../components/DataManagement';
+import { useEditLock } from '../components/Locks';
 import { Badge, BrandLogo, Button, Field, Loading, Segmented, Tabs, useAction, useConfirm, useToast } from '../components/ui';
 
 export default function Settings({ route, appState, setAppState }) {
@@ -56,11 +57,16 @@ function ClubSettings() {
   const { data } = useRpc('settings.get');
   const [f, setF] = useState(null);
   const logoRef = useRef(null);
+  // One person changes the club settings at a time: the lock is taken at the first change.
+  const lock = useEditLock('settings:club', { lazy: true, idleMs: 5 * 60 * 1000 });
   useEffect(() => {
     if (data && !f) setF(data);
   }, [data]);
   if (!f) return <Loading />;
-  const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+  const set = (k) => (e) => {
+    lock.ensure();
+    setF({ ...f, [k]: e.target.value });
+  };
   const demoLoaded = data?.demo_loaded === '1';
   const toggleDemo = async () => {
     const ok = await confirm(
@@ -76,12 +82,14 @@ function ClubSettings() {
     <>
     <div className="card settings-section">
       <div className="card-pad">
+        {lock.banner}
         <Field label={t('logo.title')} hint={t('logo.hint')}>
           <div className="row" style={{ gap: 14 }}>
             <BrandLogo size={64} logo={f.club_logo || null} />
             <Button
               icon={ImagePlus}
-              onClick={() => logoRef.current.click()}
+              disabled={lock.readOnly}
+              onClick={async () => (await lock.ensure()) && logoRef.current.click()}
             >
               {f.club_logo ? t('logo.change') : t('logo.upload')}
             </Button>
@@ -129,10 +137,16 @@ function ClubSettings() {
           <Field label={t('settings.billingStart')} hint={t('settings.billingStartHint')}>
             <input className="input" type="month" value={f.billing_start || currentPeriod()} onChange={set('billing_start')} />
           </Field>
-          <Holidays value={f.holidays} onChange={(v) => setF({ ...f, holidays: v })} />
+          <Holidays
+            value={f.holidays}
+            onChange={(v) => {
+              lock.ensure();
+              setF({ ...f, holidays: v });
+            }}
+          />
         </div>
         <div className="row" style={{ justifyContent: 'flex-end' }}>
-          <Button variant="primary" icon={Save} onClick={() => act(() => rpc('settings.update', f), t('common.saved'))}>
+          <Button variant="primary" icon={Save} disabled={lock.readOnly} onClick={() => act(() => rpc('settings.update', f), t('common.saved'))}>
             {t('common.save')}
           </Button>
         </div>

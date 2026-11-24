@@ -55,7 +55,7 @@ const VIEW_WRITES = new Set(['training.ensure']);
 // Open to anyone (the sign-in screen needs them).
 const PUBLIC = new Set(['auth.status', 'auth.login', 'settings.get']);
 // Open to anyone signed in.
-const SELF = new Set(['auth.logout', 'auth.changePassword']);
+const SELF = new Set(['auth.logout', 'auth.changePassword', 'locks.acquire', 'locks.heartbeat', 'locks.release', 'locks.list']);
 
 const hashPassword = (password) => {
   const salt = crypto.randomBytes(16).toString('hex');
