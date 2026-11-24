@@ -91,6 +91,7 @@ function createAuth({ all, one, run, AppError, log }) {
       full_name: u.full_name,
       is_admin: !!u.is_admin,
       active: !!u.active,
+      notify_actions: !!u.notify_actions,
       rights: u.is_admin ? Object.fromEntries(SECTIONS.map((s) => [s, 'edit'])) : normalizeRights(u.rights),
       last_login_at: u.last_login_at,
       created_at: u.created_at,
@@ -212,6 +213,7 @@ function createAuth({ all, one, run, AppError, log }) {
         isAdmin: first ? 1 : p.is_admin ? 1 : 0, // the first user is always an admin
         rights: JSON.stringify(normalizeRights(p.rights)),
         active: first ? 1 : p.active === false ? 0 : 1,
+        notifyActions: p.notify_actions ? 1 : 0,
       };
       if (p.id) {
         // Never leave the club without an active admin.
@@ -220,7 +222,8 @@ function createAuth({ all, one, run, AppError, log }) {
           if (others === 0) throw new AppError('LAST_ADMIN');
         }
         run(
-          `UPDATE users SET username = :username, full_name = :fullName, is_admin = :isAdmin, rights = :rights, active = :active WHERE id = :id`,
+          `UPDATE users SET username = :username, full_name = :fullName, is_admin = :isAdmin, rights = :rights, active = :active,
+                  notify_actions = :notifyActions WHERE id = :id`,
           row
         );
         if (p.password) {
@@ -234,8 +237,8 @@ function createAuth({ all, one, run, AppError, log }) {
       }
       if (String(p.password || '').length < 4) throw new AppError('PASSWORD_SHORT');
       const r = run(
-        `INSERT INTO users (username, full_name, password_hash, is_admin, rights, active)
-         VALUES (:username, :fullName, :hash, :isAdmin, :rights, :active)`,
+        `INSERT INTO users (username, full_name, password_hash, is_admin, rights, active, notify_actions)
+         VALUES (:username, :fullName, :hash, :isAdmin, :rights, :active, :notifyActions)`,
         { ...row, hash: hashPassword(p.password) }
       );
       const id = Number(r.lastInsertRowid);

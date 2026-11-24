@@ -273,6 +273,7 @@ export function NotifySettings() {
             <input type="checkbox" checked={!!f.paymentAlerts} onChange={(ev) => set('paymentAlerts', ev.target.checked)} />
             {t('notify.paymentAlerts')}
           </label>
+          <div className="small muted">{t('notify.watchMoved')}</div>
           <div className="row wrap" style={{ gap: 8 }}>
             <label className="check">
               <input type="checkbox" checked={!!f.daily.enabled} onChange={(ev) => set('daily.enabled', ev.target.checked)} />
@@ -395,3 +396,4 @@ function Outbox() {
     </div>
   );
 }
+

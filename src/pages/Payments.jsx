@@ -188,7 +188,7 @@ export function ChargesTable({ rows, showStudent, selectable, onOpenStudent, stu
   });
 
   const dash = <span className="muted">—</span>;
-  const { columns, button: columnsButton } = useColumns(showStudent ? 'payments' : 'studentPayments', [
+  const { columns, button: columnsButton } = useColumns(showStudent ? 'payments2' : 'studentPayments2', [
     {
       id: 'select',
       label: '',
@@ -207,6 +207,13 @@ export function ChargesTable({ rows, showStudent, selectable, onOpenStudent, stu
       cell: (c) => <td>{c.status === 'unpaid' && <input type="checkbox" checked={selected.has(c.id)} onChange={() => toggle(c.id)} />}</td>,
     },
     {
+      id: 'index',
+      label: '#',
+      fixed: true,
+      head: () => <th className="num" style={{ width: 44 }}>#</th>,
+      cell: (c, i) => <td className="num muted">{i + 1}</td>,
+    },
+    {
       id: 'student',
       label: t('payments.student'),
       available: !!showStudent,
@@ -217,6 +224,27 @@ export function ChargesTable({ rows, showStudent, selectable, onOpenStudent, stu
             {c.first_name} {c.last_name}
           </a>
           <div className="small muted">{c.group_name || ''}</div>
+        </td>
+      ),
+    },
+    {
+      id: 'paidAt',
+      label: t('payments.paidAt'),
+      head: () => <th>{t('payments.paidAt')}</th>,
+      cell: (c) => (
+        <td className="small">
+          {c.status === 'paid' ? (
+            <>
+              {fmtDate(c.paid_at)}
+              <div className="muted">
+                <MethodTag method={c.method} />
+                {c.paid_by && c.paid_by !== 'system' ? ` · ${c.paid_by}` : ''}
+              </div>
+              {c.hdm_receipt && <div className="hdm-no">{t('hdm.short')} № {c.hdm_receipt}</div>}
+            </>
+          ) : (
+            dash
+          )}
         </td>
       ),
     },
@@ -235,6 +263,7 @@ export function ChargesTable({ rows, showStudent, selectable, onOpenStudent, stu
     {
       id: 'dueDate',
       label: t('payments.dueDate'),
+      defaultHidden: true,
       head: () => <th>{t('payments.dueDate')}</th>,
       cell: (c) => <td className="nowrap">{fmtDate(c.due_date)}</td>,
     },
@@ -260,27 +289,6 @@ export function ChargesTable({ rows, showStudent, selectable, onOpenStudent, stu
           </td>
         );
       },
-    },
-    {
-      id: 'paidAt',
-      label: t('payments.paidAt'),
-      head: () => <th>{t('payments.paidAt')}</th>,
-      cell: (c) => (
-        <td className="small">
-          {c.status === 'paid' ? (
-            <>
-              {fmtDate(c.paid_at)}
-              <div className="muted">
-                <MethodTag method={c.method} />
-                {c.paid_by && c.paid_by !== 'system' ? ` · ${c.paid_by}` : ''}
-              </div>
-              {c.hdm_receipt && <div className="hdm-no">{t('hdm.short')} № {c.hdm_receipt}</div>}
-            </>
-          ) : (
-            dash
-          )}
-        </td>
-      ),
     },
     {
       id: 'method',
@@ -370,10 +378,10 @@ export function ChargesTable({ rows, showStudent, selectable, onOpenStudent, stu
             </tr>
           </thead>
           <tbody>
-            {rows.map((c) => (
+            {rows.map((c, i) => (
               <tr key={c.id} className={selected.has(c.id) ? 'selected' : ''}>
                 {columns.map((col) => (
-                  <Fragment key={col.id}>{col.cell(c)}</Fragment>
+                  <Fragment key={col.id}>{col.cell(c, i)}</Fragment>
                 ))}
               </tr>
             ))}

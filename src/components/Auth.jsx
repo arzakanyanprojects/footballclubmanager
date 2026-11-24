@@ -241,6 +241,7 @@ function UserModal({ user, onClose, onSaved }) {
     password: '',
     is_admin: user.first ? true : !!user.is_admin,
     active: user.active !== false,
+    notify_actions: !!user.notify_actions,
     rights: { ...NO_RIGHTS, ...(user.is_admin ? {} : user.rights || {}) },
   });
   const set = (k) => (e) => setF({ ...f, [k]: e?.target ? (e.target.type === 'checkbox' ? e.target.checked : e.target.value) : e });
@@ -290,6 +291,10 @@ function UserModal({ user, onClose, onSaved }) {
                 {t('users.active')}
               </label>
             )}
+            <label className="check" title={t('users.notifyActionsHint')}>
+              <input type="checkbox" checked={f.notify_actions} onChange={set('notify_actions')} />
+              {t('users.notifyActions')}
+            </label>
           </div>
         )}
         {f.is_admin ? (

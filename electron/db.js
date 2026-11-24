@@ -405,6 +405,8 @@ const MIGRATIONS = [
       .run(file, `${name}.docx`, name);
     if (!r.changes) db.prepare('INSERT INTO doc_templates (name, file, file_name) VALUES (?, ?, ?)').run(name, file, `${name}.docx`);
   },
+  // v31: «Գործողությունները՝ Telegram-ով» — this user's every action goes to the staff's Telegram chats.
+  `ALTER TABLE users ADD COLUMN notify_actions INTEGER NOT NULL DEFAULT 0;`,
 ];
 
 function seed(db) {

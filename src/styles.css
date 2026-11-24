@@ -782,3 +782,7 @@ table.table { width: 100%; border-collapse: collapse; }
 }
 .form-chip .grow { color: var(--text); min-width: 0; }
 .form-chip .small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* # column before the name (both stay when scrolling sideways) */
+.students-table .idx-col { width: 46px; min-width: 46px; max-width: 46px; padding-left: 10px; padding-right: 6px; text-align: right; }
+.students-table .sticky-name { left: 46px; }

@@ -77,7 +77,7 @@ function createService(db, { onWrite, getNotify } = {}) {
 
   const settings = () => Object.fromEntries(all('SELECT key, value FROM settings').map((r) => [r.key, r.value]));
   // studentId / meta: the student the action is about and its details (for the student's history).
-  const log = (ctx, action, details, studentId = null, meta = null) =>
+  const log = (ctx, action, details, studentId = null, meta = null) => {
     run('INSERT INTO activity_log (user, action, details, student_id, meta) VALUES (:user, :action, :details, :studentId, :meta)', {
       user: ctx.user || null,
       action,
@@ -85,6 +85,56 @@ function createService(db, { onWrite, getNotify } = {}) {
       studentId: studentId || null,
       meta: meta ? JSON.stringify(meta) : null,
     });
+    noteAction(ctx, action, details, meta);
+  };
+
+  // ---------------------------------------------------------------- users' actions → Telegram
+  // The actions of the users chosen in Settings → Notifications are collected during one save and sent
+  // together when it is saved (one message for a payment of three months, one for an attendance sheet).
+  const LABELS = require('./activityLabels');
+  let actionNotes = []; // lines of the save in progress
+  let actionUser = null;
+  // Ticked in the user's own settings (Settings → Users → «Գործողությունները՝ Telegram-ով»).
+  const watched = (ctx) => !ctx.quiet && !!ctx.account?.notify_actions;
+  const showValue = (k, v) => {
+    if (v === '' || v == null) return '—';
+    if (k === 'category') return LABELS.categories[v] || v;
+    if (k === 'status') return LABELS.statuses[v] || v;
+    if (k === 'medical_doc') return Number(v) ? '✓' : '✕';
+    if (/date$/.test(k)) return String(v).slice(0, 10).split('-').reverse().join('.');
+    if (k === 'monthly_fee') return amd(v);
+    return String(v);
+  };
+  function noteAction(ctx, action, details, meta) {
+    if (action === 'attendance.changed' || !watched(ctx)) return; // the sheet's summary line says it
+    actionUser = ctx.account.full_name || ctx.account.username;
+    let line = `• ${LABELS.actions[action] || action}${details ? ` — ${details}` : ''}`;
+    // A payment / fee: the student, then that month and its amount (one line per month).
+    if (meta?.amount != null && /^charge\./.test(action)) {
+      const who = String(details || '').split(' — ')[0];
+      const month = /^\d{4}-\d{2}$/.test(meta.period || '') ? `${LABELS.months[Number(meta.period.slice(5)) - 1]} ${meta.period.slice(0, 4)}` : meta.description || '';
+      line = `• ${LABELS.actions[action] || action} — ${who}${month ? ` · ${month}` : ''} · ${amd(meta.amount)}${meta.method ? ` (${LABELS.methods[meta.method] || meta.method})` : ''}`;
+    }
+    if (Array.isArray(meta?.changes))
+      for (const [k, a, b] of meta.changes.slice(0, 8)) line += `\n   ${LABELS.fields[k] || k}: ${showValue(k, a)} → ${showValue(k, b)}`;
+    if (!actionNotes.includes(line)) actionNotes.push(line);
+  }
+  function sendActionNotes() {
+    const lines = actionNotes;
+    const who = actionUser;
+    actionNotes = [];
+    actionUser = null;
+    if (!lines.length) return;
+    const chats = telegramChats();
+    if (!chats.length) return;
+    const d = new Date();
+    const p2 = (n) => String(n).padStart(2, '0');
+    const when = `${p2(d.getDate())}.${p2(d.getMonth() + 1)}.${d.getFullYear()} ${p2(d.getHours())}:${p2(d.getMinutes())}`;
+    const shown = lines.slice(0, 20);
+    const more = lines.length > shown.length ? `\n… ևս ${lines.length - shown.length}` : '';
+    const text = `👤 ${who} · ${when}\n${shown.join('\n')}${more}`;
+    for (const chat of chats) enqueue({ channel: 'telegram', recipient: chat, body: text, kind: 'action' }, { user: who });
+  }
   // A charge as the history shows it.
   const chargeMeta = (id) => {
     const c = one('SELECT id, kind, period, description, amount, status, method, paid_at, hdm_receipt FROM charges WHERE id = :id', { id });
@@ -760,7 +810,8 @@ function createService(db, { onWrite, getNotify } = {}) {
                         WHERE c.student_id = s.id AND c.status = 'unpaid'), 0) AS unpaid,
                 -- Monthly fee per month in the requested range (the season shown in the students list).
                 (SELECT json_group_array(json_object('id', c.id, 'period', c.period, 'status', c.status,
-                                                     'due_date', c.due_date, 'amount', c.amount, 'excused_by', c.excused_by))
+                                                     'due_date', c.due_date, 'amount', c.amount, 'excused_by', c.excused_by,
+                                                     'paid_at', c.paid_at))
                  FROM charges c WHERE c.student_id = s.id AND c.kind = 'monthly'
                    AND c.period BETWEEN :monthsFrom AND :monthsTo) AS months
          FROM students s LEFT JOIN groups g ON g.id = s.group_id
@@ -770,7 +821,7 @@ function createService(db, { onWrite, getNotify } = {}) {
                 IFNULL(s.phone, '') || ' ' || IFNULL(s.parent_name, '') || ' ' || IFNULL(s.parent_phone, '') || ' ' ||
                 IFNULL(s.contract_no, ''))
                 LIKE '%' || ulower(:search) || '%')
-         ORDER BY s.last_name COLLATE NOCASE, s.first_name COLLATE NOCASE`,
+         ORDER BY s.created_at DESC, s.id DESC`, // the newest students first
         {
           t: today(),
           status: str(p.status),
@@ -942,6 +993,7 @@ function createService(db, { onWrite, getNotify } = {}) {
     // mode 'skip' leaves existing students as they are; 'update' fills in the imported fields.
     'students.import': ({ rows, mode = 'skip', createGroups = true }, ctx) => {
       const result = { created: 0, updated: 0, skipped: 0, groupsCreated: 0, payments: 0, errors: [] };
+      const quiet = { ...ctx, quiet: true }; // one Telegram line for the whole import, not one per student
       const groupIds = new Map(all('SELECT id, name FROM groups').map((g) => [g.name.trim().toLowerCase(), g.id]));
       const save = methods['students.save'];
       (rows || []).forEach((raw, i) => {
@@ -986,15 +1038,15 @@ function createService(db, { onWrite, getNotify } = {}) {
               result.skipped++;
               return;
             }
-            save({ ...existing, ...p, id: existing.id }, ctx);
+            save({ ...existing, ...p, id: existing.id }, quiet);
             result.updated++;
-            result.payments += addImportedPayments(existing.id, payments, carried, ctx);
+            result.payments += addImportedPayments(existing.id, payments, carried, quiet);
             specialFees(existing.id);
             return;
           }
-          const created = save({ join_date: today(), status: 'active', ...p }, ctx);
+          const created = save({ join_date: today(), status: 'active', ...p }, quiet);
           result.created++;
-          result.payments += addImportedPayments(created.id, payments, carried, ctx);
+          result.payments += addImportedPayments(created.id, payments, carried, quiet);
           specialFees(created.id);
         } catch (err) {
           if (!(err instanceof AppError)) throw err;
@@ -1163,11 +1215,11 @@ function createService(db, { onWrite, getNotify } = {}) {
           const keys = Object.keys(s).filter((k) => tcols.students.has(k) && !['id', 'created_at'].includes(k));
           run(`UPDATE students SET ${keys.map((k) => `${k} = :${k}`).join(', ')}, group_id = :__gid WHERE id = :__id`, { ...s, __gid: gid, __id: sid });
           res.updated++;
-          log(ctx, 'student.transferUpdated', `${s.first_name} ${s.last_name}`, sid, { file: str(data.fileName) });
+          log({ ...ctx, quiet: true }, 'student.transferUpdated', `${s.first_name} ${s.last_name}`, sid, { file: str(data.fileName) });
         } else {
           sid = insert('students', { ...s, group_id: gid });
           res.created++;
-          log(ctx, 'student.transferred', `${s.first_name} ${s.last_name}`, sid, { file: str(data.fileName), exportedAt: data.exportedAt });
+          log({ ...ctx, quiet: true }, 'student.transferred', `${s.first_name} ${s.last_name}`, sid, { file: str(data.fileName), exportedAt: data.exportedAt });
         }
 
         // Uploaded documents (skipped when the same file is already there).
@@ -1267,12 +1319,17 @@ function createService(db, { onWrite, getNotify } = {}) {
       return { fileName: f.file_name, mime: f.mime, data: Buffer.from(f.data).toString('base64') };
     },
 
-    'files.upload': ({ studentId, kind, name, type, data }, ctx) => {
+    'files.upload': ({ studentId, kind, name, type, data, skipSame }, ctx) => {
       if (!one('SELECT id FROM students WHERE id = :id', { id: studentId })) throw new AppError('NOT_FOUND');
+      // Uploading many files at once (signed contracts): the same file name twice for a student is skipped.
+      if (skipSame) {
+        const same = one('SELECT id FROM student_files WHERE student_id = :studentId AND file_name = :name', { studentId, name: str(name) });
+        if (same) return { id: same.id, skipped: true };
+      }
       const buf = Buffer.from(String(data || ''), 'base64');
       if (!buf.length) throw new AppError('FILE_EMPTY');
       if (buf.length > 15 * 1024 * 1024) throw new AppError('FILE_TOO_BIG');
-      const k = kind === 'medical' ? 'medical' : 'other';
+      const k = ['medical', 'contract'].includes(kind) ? kind : 'other';
       const r = run(
         `INSERT INTO student_files (student_id, kind, file_name, mime, size, data, created_by)
          VALUES (:studentId, :kind, :name, :type, :size, :data, :user)`,
@@ -2338,12 +2395,19 @@ function createService(db, { onWrite, getNotify } = {}) {
       }
       db.exec('BEGIN IMMEDIATE');
       let result;
+      actionNotes = [];
       try {
         result = fn(params || {}, ctx);
         db.exec('COMMIT');
       } catch (err) {
         db.exec('ROLLBACK');
+        actionNotes = [];
         throw err;
+      }
+      try {
+        sendActionNotes();
+      } catch (err) {
+        console.error('[notify] action message failed:', err.message);
       }
       if (!NO_FEE_EFFECT.test(method)) feesChecked = null;
       // Signing in/out changes no club data, so other PCs don't need to refresh.

@@ -20,12 +20,13 @@ export default function StudentProfile({ id, nav }) {
   const canEdit = useCan('students');
   const canPay = useCan('payments');
   const canContracts = useCan('contracts');
+  const seesPayments = useCan('payments', 'view');
   const t = useT();
   const act = useAction();
   const confirm = useConfirm();
   const { currency } = useClub();
   const { data, error } = useRpc('students.get', { id });
-  const [tab, setTab] = useState('info');
+  const [tab, setTab] = useState(() => (seesPayments ? 'payments' : 'info')); // a student opens on their payments
   const [modal, setModal] = useState(null);
 
   const totals = useMemo(() => {
@@ -151,8 +152,8 @@ export default function StudentProfile({ id, nav }) {
         value={tab}
         onChange={setTab}
         tabs={[
-          { id: 'info', label: t('students.details'), icon: IdCard },
           { id: 'payments', label: t('nav.payments'), icon: Wallet, count: data.charges.filter((c) => c.status === 'unpaid').length || null },
+          { id: 'info', label: t('students.details'), icon: IdCard },
           { id: 'attendance', label: t('nav.attendance'), icon: CalendarCheck },
           { id: 'contracts', label: t('files.tab'), icon: FolderOpen, count: data.contracts.length + (data.files || []).length || null },
           { id: 'related', label: t('related.tab'), icon: Link2, count: (data.related || []).length || null },

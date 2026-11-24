@@ -3,6 +3,7 @@ import { Plus, FileSignature, FileText, Printer, FileDown, Trash2, Save, Downloa
 import { useT } from '../i18n';
 import { useCan } from '../components/Auth';
 import { useColumns } from '../components/Columns';
+import { ContractsUploadModal } from '../components/ContractsUpload';
 import { useRpc, rpc, fmtDate, fmtDateTime, todayIso, contractBodyHtml, contractDocument } from '../lib';
 import {
   Badge, Button, Empty, Field, Loading, Modal, RowMenu, SearchBox, Segmented, StudentPicker, Tabs, useAction, useConfirm,
@@ -101,7 +102,9 @@ export function ContractReadyModal({ contractId, studentName, number, onClose })
 
 export default function Contracts({ route }) {
   const t = useT();
+  const canUpload = useCan('students');
   const [tab, setTab] = useState('contracts');
+  const [uploading, setUploading] = useState(false); // «Ներբեռնել պայմանագրեր»
   return (
     <>
       <div className="page-head">
@@ -109,7 +112,14 @@ export default function Contracts({ route }) {
           <h1>{t('nav.contracts')}</h1>
           <div className="sub">{t('contracts.subtitle')}</div>
         </div>
+        <div className="spacer" />
+        {canUpload && (
+          <Button icon={Upload} onClick={() => setUploading(true)}>
+            {t('cupload.button')}
+          </Button>
+        )}
       </div>
+      {uploading && <ContractsUploadModal onClose={() => setUploading(false)} />}
       <Tabs
         value={tab}
         onChange={setTab}

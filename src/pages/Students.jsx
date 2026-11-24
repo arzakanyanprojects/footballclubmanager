@@ -185,12 +185,19 @@ export default function Students({ nav, route }) {
   });
   const { columns, button: columnsButton } = useColumns('students', [
     {
+      id: 'index',
+      label: '#',
+      fixed: true,
+      head: () => <th className="sticky-col idx-col">#</th>,
+      cell: (s, i) => <td className="sticky-col idx-col num muted">{i + 1}</td>,
+    },
+    {
       id: 'name',
       label: t('students.name'),
       fixed: true,
-      head: () => <th className="sticky-col">{headLabel('name', t('students.name'))}</th>,
+      head: () => <th className="sticky-col sticky-name">{headLabel('name', t('students.name'))}</th>,
       cell: (s) => (
-        <td className="sticky-col">
+        <td className="sticky-col sticky-name">
           <div className="cell-person">
             <Avatar first={s.first_name} last={s.last_name} seed={s.id} size={28} />
             <div>
@@ -272,7 +279,13 @@ export default function Students({ nav, route }) {
         months.map((p) => {
           const m = s.byMonth[p];
           const st = monthStatus(m, p, s.join_date);
-          const tip = m ? `${monthName(t, p)} · ${money(m.amount, currency)} · ${t(`chargeStatus.${st}`)}` : monthName(t, p);
+          // Paid: «09/11/2026 - 30,000 ֏» (the day it was paid); otherwise the month, amount and state.
+          const tip =
+            st === 'paid' && m?.paid_at
+              ? `${m.paid_at.slice(0, 10).split('-').reverse().join('/')} - ${money(m.amount, currency)}`
+              : m
+                ? `${monthName(t, p)} · ${money(m.amount, currency)} · ${t(`chargeStatus.${st}`)}`
+                : monthName(t, p);
           const payable = canPay && (st === 'overdue' || st === 'unpaid');
           return (
             <td key={p} className="mcol">
@@ -421,9 +434,9 @@ export default function Students({ nav, route }) {
               <tr>{columns.map((c) => <Fragment key={c.id}>{c.head()}</Fragment>)}</tr>
             </thead>
             <tbody>
-              {rows.slice(0, limit).map((s) => (
+              {rows.slice(0, limit).map((s, i) => (
                 <tr key={s.id} className="click" onClick={() => nav('students', { id: s.id })}>
-                  {columns.map((c) => <Fragment key={c.id}>{c.cell(s)}</Fragment>)}
+                  {columns.map((c) => <Fragment key={c.id}>{c.cell(s, i)}</Fragment>)}
                 </tr>
               ))}
             </tbody>
