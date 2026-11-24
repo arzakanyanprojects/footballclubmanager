@@ -29,6 +29,7 @@ import { HdmProvider } from './components/Hdm';
 import { ThermalProvider } from './components/Thermal';
 import { LocksProvider } from './components/Locks';
 import { MessengerProvider } from './components/Messenger';
+import { StudentFormHost } from './components/StudentFormHost';
 import { UpdateNotice } from './components/Updates';
 import { AuthGate, useAuth } from './components/Auth';
 
@@ -140,9 +141,11 @@ function SignedIn({ appState, setAppState, route, nav, online }) {
       <ThermalProvider settings={appState.config.thermal} operator={operator}>
         <LocksProvider>
           <MessengerProvider>
-            <Layout route={shown} nav={nav} navItems={allowed} appState={appState} online={online}>
-              <Page route={shown} nav={nav} appState={appState} setAppState={setAppState} />
-            </Layout>
+            <StudentFormHost>
+              <Layout route={shown} nav={nav} navItems={allowed} appState={appState} online={online}>
+                <Page route={shown} nav={nav} appState={appState} setAppState={setAppState} />
+              </Layout>
+            </StudentFormHost>
           </MessengerProvider>
         </LocksProvider>
       </ThermalProvider>

@@ -763,3 +763,22 @@ table.table { width: 100%; border-collapse: collapse; }
 .fill-page > .page-head, .fill-page > .toolbar { flex-shrink: 0; }
 .fill-page > .table-wrap { flex: 1; min-height: 180px; }
 .fill-page > .table-wrap .table-foot { position: sticky; left: 0; }
+
+/* ---------------------------------------------------------------- «Հաշվետվություններ» */
+.reports-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.reports-item {
+  display: flex; align-items: flex-start; gap: 12px; text-align: left; padding: 12px 14px; border-radius: 10px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--surface-2); color: var(--text); font: inherit;
+}
+.reports-item > svg { color: var(--accent-text); flex-shrink: 0; margin-top: 1px; }
+.reports-item > span { display: flex; flex-direction: column; gap: 3px; }
+.reports-item:hover { border-color: var(--accent); background: var(--surface-hover); }
+
+/* ---------------------------------------------------------------- minimized student form */
+.form-chip {
+  position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); z-index: 950; min-width: 360px; max-width: 520px;
+  display: flex; align-items: center; gap: 10px; padding: 10px 10px 10px 14px; border-radius: 12px;
+  background: var(--surface); border: 1px solid var(--accent); box-shadow: 0 12px 32px rgba(0, 0, 0, 0.3); color: var(--accent);
+}
+.form-chip .grow { color: var(--text); min-width: 0; }
+.form-chip .small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

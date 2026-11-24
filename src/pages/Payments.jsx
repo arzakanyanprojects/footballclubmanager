@@ -983,8 +983,12 @@ export function MonthlyPaymentModal({ student, charges, onClose }) {
   const club = useClub();
   const shares = feeShares(club);
   // A holiday month costs its share of the fee; a month halved by an application costs what that fee says.
+  // A month already billed costs its billed amount (application halves, special prices such as the championship
+  // groups' August), unless another fee is typed in; other months: the fee, with holidays and late joining.
   const amountOf = (p) =>
-    byPeriod[p]?.status === 'unpaid' && byPeriod[p]?.excused_by ? Number(byPeriod[p].amount) : studentMonthFee(amount, p, club, student.join_date);
+    byPeriod[p]?.status === 'unpaid' && (byPeriod[p]?.excused_by || Number(amount) === Number(student.monthly_fee))
+      ? Number(byPeriod[p].amount)
+      : studentMonthFee(amount, p, club, student.join_date);
   const lateJoin = selected.find((p) => p === student.join_date?.slice(0, 7) && Number(student.join_date.slice(8, 10)) >= 16);
   const total = selected.reduce((n, p) => n + amountOf(p), 0);
   const holidays = selected.filter((p) => shares[p] != null);

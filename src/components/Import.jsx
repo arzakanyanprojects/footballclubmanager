@@ -355,6 +355,9 @@ const SKIP_SHEET = /խզված/iu;
 const CHAMPIONSHIP = /առաջնություն/iu;
 const FEE_REGULAR = 30000;
 const FEE_CHAMPIONSHIP = 35000;
+// Months the championship groups paid a different price: August 2026 — 27 000 for everyone (discount or not,
+// whole or half month); from September 35 000 again. Students who pay nothing stay free.
+const CHAMPIONSHIP_MONTHS = { '2026-08': 27000 };
 const titleCode = (s) => {
   const m = clean(s).match(/^(\d{4})\s*-\s*(\d+)/);
   return m ? `${m[1]}-${m[2]}` : null;
@@ -430,7 +433,7 @@ function monthText(v, period) {
 
 // One student row of the workbook → paid months: whole month = the fee; one half of a month = half of it,
 // except for 50% students, whose one half is their whole (discounted) month.
-function workbookPayments(cells, fills, monthCols, fee, half, t) {
+function workbookPayments(cells, fills, monthCols, fee, half, t, special = {}) {
   const warn = [];
   const notes = [];
   const payments = [];
@@ -459,7 +462,7 @@ function workbookPayments(cells, fills, monthCols, fee, half, t) {
     const explicit = parts.find((p) => p.amount)?.amount;
     const paidHalves = new Set(parts.map((p) => p.half || 'I+II'));
     const whole = paidHalves.has('I+II') || (paidHalves.has('I') && paidHalves.has('II')) || cols.length < 2;
-    const amount = explicit || (half || whole ? fee : Math.round(fee / 2));
+    const amount = explicit || special[period] || (half || whole ? fee : Math.round(fee / 2));
     let method = last.method;
     if (!method) {
       method = 'transfer';
@@ -471,7 +474,7 @@ function workbookPayments(cells, fills, monthCols, fee, half, t) {
       warn.push(t('import.warnNoDate', { month }));
     }
     let note = null;
-    if (!whole && !half && !explicit) note = t('import.halfOnly', { half: [...paidHalves][0] });
+    if (!whole && !half && !explicit && !special[period]) note = t('import.halfOnly', { half: [...paidHalves][0] });
     else if (new Set(parts.map((p) => p.date)).size > 1) note = parts.map((p) => `${p.half ? `${p.half}՝ ` : ''}${p.date ? fmt(p.date) : '?'}`).join(', ');
     payments.push({ period, paid_at: date, method, amount, note });
   }
@@ -500,7 +503,9 @@ function workbookRows(file, existingGroups, opts, t) {
       c.data.monthly_fee = rule.fee;
       if (rule.category) c.data.category = rule.category;
       if (rule.check) c.warn.push(t('import.warnNote', { note }));
-      const p = workbookPayments(cells, fills, monthCols, rule.fee, !!rule.half, t);
+      const special = b.championship && rule.fee > 0 ? CHAMPIONSHIP_MONTHS : {};
+      const p = workbookPayments(cells, fills, monthCols, rule.fee, !!rule.half, t, special);
+      if (Object.keys(special).length) c.data.month_fees = special;
       const start = paymentsOf(cells, fills, monthCols, t).start;
       if (start && !c.data.join_date) c.data.join_date = start;
       c.data.payments = p.payments;

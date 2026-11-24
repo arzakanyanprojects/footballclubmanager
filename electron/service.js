@@ -163,6 +163,8 @@ function createService(db, { onWrite, getNotify } = {}) {
          AND CAST(substr(s.join_date, 9, 2) AS INTEGER) >= 16 ${studentId ? 'AND s.id = :sid AND c.student_id = :sid' : ''}`,
       studentId ? { sid: studentId } : {}
     )) {
+      // Only a month still at the usual price (a special price, e.g. set by an import, stays).
+      if (c.amount !== feeFor(c.monthly_fee, c.period) && c.amount !== studentFee(c.monthly_fee, c.period, c.join_date)) continue;
       const want = studentFee(c.monthly_fee, c.period, c.join_date);
       if (want <= 0) run('DELETE FROM charges WHERE id = :id', { id: c.id });
       else if (want !== c.amount) run('UPDATE charges SET amount = :want WHERE id = :id', { id: c.id, want });
@@ -957,8 +959,18 @@ function createService(db, { onWrite, getNotify } = {}) {
           delete p.group_name;
           const payments = Array.isArray(p.payments) ? p.payments : [];
           const carried = Array.isArray(p.charges) ? p.charges : [];
+          const monthFees = p.month_fees && typeof p.month_fees === 'object' ? p.month_fees : {};
           delete p.payments;
           delete p.charges;
+          delete p.month_fees;
+          // A month billed at a special price (e.g. the championship groups' August): its unpaid fee too.
+          const specialFees = (sid) => {
+            for (const [period, amount] of Object.entries(monthFees))
+              if (/^\d{4}-\d{2}$/.test(period) && int(amount) > 0)
+                run(`UPDATE charges SET amount = :amount WHERE student_id = :sid AND kind = 'monthly' AND period = :period AND status = 'unpaid' AND excused_by IS NULL`, {
+                  sid, period, amount: int(amount),
+                });
+          };
           // The same contract № is the same student only with the same first name (brothers can share
           // one contract, and a typo can give two families one number).
           const existing =
@@ -977,11 +989,13 @@ function createService(db, { onWrite, getNotify } = {}) {
             save({ ...existing, ...p, id: existing.id }, ctx);
             result.updated++;
             result.payments += addImportedPayments(existing.id, payments, carried, ctx);
+            specialFees(existing.id);
             return;
           }
           const created = save({ join_date: today(), status: 'active', ...p }, ctx);
           result.created++;
           result.payments += addImportedPayments(created.id, payments, carried, ctx);
+          specialFees(created.id);
         } catch (err) {
           if (!(err instanceof AppError)) throw err;
           result.errors.push({ row: i + 1, error: err.message });
@@ -1703,9 +1717,10 @@ function createService(db, { onWrite, getNotify } = {}) {
         );
         if (existing?.status === 'paid') continue;
         paid.amount = joinsLate(st.join_date) && st.join_date.slice(0, 7) === period ? studentFee(fee, period, st.join_date) : feeFor(fee, period, shares); // holidays / joining after the 15th
-        // A month halved by an application costs what that fee says.
-        const halved = existing?.status === 'unpaid' ? one('SELECT amount, excused_by FROM charges WHERE id = :id', { id: existing.id }) : null;
-        if (halved?.excused_by) paid.amount = halved.amount;
+        // A month already billed costs what it is billed at (a month halved by an application, or a special
+        // price such as the championship groups' August 2026 at 27 000) — unless another fee was typed in.
+        const billed = existing?.status === 'unpaid' ? one('SELECT amount, excused_by FROM charges WHERE id = :id', { id: existing.id }) : null;
+        if (billed && (billed.excused_by || fee === Number(st.monthly_fee))) paid.amount = billed.amount;
         if (existing) {
           run(
             `UPDATE charges SET status = 'paid', amount = :amount, paid_at = :paidAt, method = :method, paid_by = :user,
@@ -2110,6 +2125,116 @@ function createService(db, { onWrite, getNotify } = {}) {
          ORDER BY c.paid_at, s.last_name COLLATE NOCASE, s.first_name COLLATE NOCASE`,
         { method: str(method), from: str(from) || '0000-00-00', to: str(to) || '9999-12-31' }
       ),
+
+    // ---------------------------------------------------------------- reports («Հաշվետվություններ»)
+    // The rows of one report; the app turns them into an Excel sheet. kind: debts · feesByGroup · discounts ·
+    // attendance · joinsLeaves · hdmReceipts · groupsSummary · missingDocs. period = 'YYYY-MM'; from / to = dates.
+    'reports.sheet': ({ kind, period, from, to, groupId } = {}) => {
+      const t = today();
+      const month = /^\d{4}-\d{2}$/.test(period || '') ? period : currentPeriod();
+      const f = str(from) || '0000-00-00';
+      const tt = str(to) || '9999-12-31';
+      const gid = Number(groupId) || null;
+      const student = `s.first_name || ' ' || s.last_name || IFNULL(' ' || s.patronymic, '')`;
+      const byGroup = `ORDER BY g.name IS NULL, g.name COLLATE NOCASE, s.last_name COLLATE NOCASE, s.first_name COLLATE NOCASE`;
+      const groupFilter = gid ? 'AND s.group_id = :gid' : '';
+      switch (kind) {
+        case 'debts':
+          return all(
+            `SELECT ${student} AS student, g.name AS group_name, s.contract_no, s.parent_name, s.parent_phone,
+                    GROUP_CONCAT(IFNULL(c.period, substr(c.due_date, 1, 7)), ',') AS periods, COUNT(c.id) AS months,
+                    MIN(c.due_date) AS oldest, SUM(c.amount) AS debt
+             FROM students s JOIN charges c ON c.student_id = s.id LEFT JOIN groups g ON g.id = s.group_id
+             WHERE c.status = 'unpaid' AND c.due_date < :t ${groupFilter}
+             GROUP BY s.id ${byGroup}`,
+            { t, gid }
+          );
+        case 'feesByGroup':
+          return all(
+            `SELECT IFNULL(g.name, '—') AS group_name, g.coach,
+                    COUNT(DISTINCT s.id) AS students,
+                    SUM(c.amount) AS expected,
+                    SUM(CASE WHEN c.status = 'paid' THEN c.amount ELSE 0 END) AS paid,
+                    SUM(CASE WHEN c.status = 'unpaid' THEN c.amount ELSE 0 END) AS unpaid,
+                    SUM(c.status = 'paid') AS paid_count, COUNT(c.id) AS charge_count
+             FROM charges c JOIN students s ON s.id = c.student_id LEFT JOIN groups g ON g.id = s.group_id
+             WHERE c.kind = 'monthly' AND c.period = :month AND c.status != 'waived' ${groupFilter}
+             GROUP BY g.id ORDER BY g.name IS NULL, g.name COLLATE NOCASE`,
+            { month, gid }
+          );
+        case 'discounts':
+          return all(
+            `SELECT ${student} AS student, g.name AS group_name, s.category, s.monthly_fee, s.status, s.notes,
+                    (SELECT IFNULL(SUM(amount), 0) FROM charges c WHERE c.student_id = s.id AND c.status = 'paid') AS paid_total
+             FROM students s LEFT JOIN groups g ON g.id = s.group_id
+             WHERE (s.category IS NOT NULL OR s.monthly_fee = 0) ${groupFilter} ${byGroup}`,
+            { gid }
+          );
+        case 'attendance':
+          return all(
+            `SELECT ${student} AS student, g.name AS group_name,
+                    (SELECT COUNT(*) FROM training_days td WHERE td.group_id = s.group_id AND substr(td.date, 1, 7) = :month) AS days,
+                    SUM(a.status IN ('present', 'late')) AS present, SUM(a.status = 'absent') AS absent, SUM(a.status = 'excused') AS excused
+             FROM students s LEFT JOIN groups g ON g.id = s.group_id
+             LEFT JOIN attendance a ON a.student_id = s.id AND substr(a.date, 1, 7) = :month
+             WHERE s.status = 'active' AND s.join_date <= :monthEnd ${groupFilter}
+             GROUP BY s.id ${byGroup}`,
+            { month, monthEnd: `${month}-31`, gid }
+          );
+        case 'joinsLeaves':
+          return all(
+            `SELECT * FROM (
+               SELECT 'joined' AS change, s.join_date AS date, ${student} AS student, g.name AS group_name, s.monthly_fee, s.contract_no, s.parent_phone, NULL AS reason,
+                      g.name AS gname, s.last_name AS lname
+               FROM students s LEFT JOIN groups g ON g.id = s.group_id WHERE s.join_date BETWEEN :f AND :tt ${groupFilter}
+               UNION ALL
+               SELECT 'left', s.leave_date, ${student}, g.name, s.monthly_fee, s.contract_no, s.parent_phone, s.inactive_reason, g.name, s.last_name
+               FROM students s LEFT JOIN groups g ON g.id = s.group_id WHERE s.status = 'inactive' AND s.leave_date BETWEEN :f AND :tt ${groupFilter}
+             ) ORDER BY date, gname COLLATE NOCASE, lname COLLATE NOCASE`,
+            { f, tt, gid }
+          );
+        case 'hdmReceipts':
+          return all(
+            `SELECT c.paid_at, ${student} AS student, g.name AS group_name, c.kind, c.period, c.description, c.amount, c.method,
+                    c.hdm_receipt, c.hdm_fiscal, c.hdm_crn
+             FROM charges c JOIN students s ON s.id = c.student_id LEFT JOIN groups g ON g.id = s.group_id
+             WHERE c.status = 'paid' AND c.paid_at BETWEEN :f AND :tt ${groupFilter}
+             ORDER BY c.paid_at, s.last_name COLLATE NOCASE`,
+            { f, tt, gid }
+          );
+        case 'groupsSummary':
+          return all(
+            `SELECT g.name AS group_name, g.coach, g.assistant,
+                    (SELECT COUNT(*) FROM students s WHERE s.group_id = g.id AND s.status = 'active') AS students,
+                    (SELECT COUNT(*) FROM students s WHERE s.group_id = g.id AND substr(s.join_date, 1, 7) = :month) AS joined,
+                    (SELECT COUNT(*) FROM students s WHERE s.group_id = g.id AND s.status = 'inactive' AND substr(s.leave_date, 1, 7) = :month) AS left_count,
+                    (SELECT COUNT(*) FROM training_days td WHERE td.group_id = g.id AND substr(td.date, 1, 7) = :month) AS days,
+                    (SELECT COUNT(*) FROM attendance a JOIN students s ON s.id = a.student_id
+                      WHERE s.group_id = g.id AND substr(a.date, 1, 7) = :month AND a.status IN ('present', 'late')) AS present_marks,
+                    (SELECT COUNT(*) FROM attendance a JOIN students s ON s.id = a.student_id
+                      WHERE s.group_id = g.id AND substr(a.date, 1, 7) = :month) AS all_marks,
+                    (SELECT IFNULL(SUM(c.amount), 0) FROM charges c JOIN students s ON s.id = c.student_id
+                      WHERE s.group_id = g.id AND c.kind = 'monthly' AND c.period = :month AND c.status = 'paid') AS paid,
+                    (SELECT IFNULL(SUM(c.amount), 0) FROM charges c JOIN students s ON s.id = c.student_id
+                      WHERE s.group_id = g.id AND c.status = 'unpaid' AND c.due_date < :t) AS debt
+             FROM groups g WHERE g.archived = 0 ${gid ? 'AND g.id = :gid' : ''} ORDER BY g.name COLLATE NOCASE`,
+            { month, t, gid }
+          );
+        case 'missingDocs':
+          return all(
+            `SELECT ${student} AS student, g.name AS group_name, s.parent_name, s.parent_phone,
+                    s.medical_doc, s.contract_no, s.document_no, s.birth_date, s.parent_doc_no, s.parent_ssn
+             FROM students s LEFT JOIN groups g ON g.id = s.group_id
+             WHERE s.status = 'active' ${groupFilter}
+               AND (s.medical_doc = 0 OR IFNULL(s.contract_no, '') = '' OR IFNULL(s.document_no, '') = '' OR IFNULL(s.birth_date, '') = ''
+                    OR IFNULL(s.parent_doc_no, '') = '' OR IFNULL(s.parent_ssn, '') = '' OR IFNULL(s.parent_phone, '') = '')
+             ${byGroup}`,
+            { gid }
+          );
+        default:
+          throw new AppError('NOT_FOUND');
+      }
+    },
 
     // ---------------------------------------------------------------- demo data
     'demo.load': (p, ctx) => {

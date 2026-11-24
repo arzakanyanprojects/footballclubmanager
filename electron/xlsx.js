@@ -536,4 +536,90 @@ async function buildGroups({ columns, sheets, emptyText = '', currencySymbol = '
   return wb.xlsx.writeBuffer();
 }
 
-module.exports = { buildReport, buildForm, buildSchedule, buildStudentsTransfer, buildGroups };
+// A report as one table: title, subtitle, a frozen header with filters, striped rows, and a totals row
+// that adds up every column marked `sum` (money or numbers). Column types: index, text, date, money, number, percent.
+async function buildTable({ sheetName, title, subtitle, columns, rows, totalLabel = 'Total', currencySymbol = '֏' }) {
+  const wb = new ExcelJS.Workbook();
+  wb.creator = 'FC Manager';
+  wb.created = new Date();
+  const ws = wb.addWorksheet(String(sheetName || 'Report').slice(0, 31), {
+    views: [{ state: 'frozen', ySplit: 4, topLeftCell: 'A5', activeCell: 'A5', showGridLines: false }],
+    pageSetup: {
+      paperSize: 9,
+      orientation: columns.length > 7 ? 'landscape' : 'portrait',
+      fitToPage: true,
+      fitToWidth: 1,
+      fitToHeight: 0,
+      margins: { left: 0.4, right: 0.4, top: 0.5, bottom: 0.5, header: 0.2, footer: 0.2 },
+      printTitlesRow: '4:4',
+    },
+    headerFooter: { oddFooter: '&L&8FC Manager&R&8&P / &N' },
+  });
+  ws.columns = columns.map((c) => ({ key: c.key, width: c.width || 14 }));
+  const last = columns.length;
+  const moneyFmt = `#,##0 "${currencySymbol}"`;
+  ws.mergeCells(1, 1, 1, last);
+  Object.assign(ws.getCell(1, 1), { value: title, font: { name: FONT, size: 16, bold: true, color: { argb: INK } }, alignment: { vertical: 'middle' } });
+  ws.getRow(1).height = 28;
+  ws.mergeCells(2, 1, 2, last);
+  Object.assign(ws.getCell(2, 1), { value: subtitle || '', font: { name: FONT, size: 10.5, color: { argb: MUTED } }, alignment: { vertical: 'middle' } });
+  ws.getRow(2).height = 20;
+  ws.getRow(3).height = 8;
+  const align = (c) => (c.type === 'money' || c.type === 'number' || c.type === 'percent' ? 'right' : c.type === 'index' || c.type === 'date' ? 'center' : 'left');
+  const fmtOf = (c) => (c.type === 'money' ? moneyFmt : c.type === 'percent' ? '0%' : c.type === 'number' ? '#,##0' : c.type === 'date' ? 'dd.mm.yyyy' : undefined);
+  const header = ws.getRow(4);
+  columns.forEach((c, i) => {
+    Object.assign(header.getCell(i + 1), {
+      value: c.header,
+      font: { name: FONT, size: 10.5, bold: true, color: { argb: 'FFFFFFFF' } },
+      fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: GREEN } },
+      alignment: { vertical: 'middle', horizontal: c.type === 'index' ? 'center' : 'left', wrapText: true },
+      border,
+    });
+  });
+  header.height = 32;
+  const first = 5;
+  rows.forEach((r, idx) => {
+    const row = ws.getRow(first + idx);
+    columns.forEach((c, i) => {
+      const cell = row.getCell(i + 1);
+      let v = c.type === 'index' ? idx + 1 : r[c.key];
+      if (c.type === 'date') v = toDate(v);
+      else if (c.type === 'money' || c.type === 'number') v = v === '' || v == null ? null : Number(v);
+      else if (c.type === 'percent') v = v == null || v === '' ? null : Number(v);
+      cell.value = v ?? '';
+      cell.font = { name: FONT, size: 10.5, color: { argb: INK } };
+      cell.border = border;
+      cell.alignment = { vertical: 'middle', horizontal: align(c), wrapText: c.wrap || false };
+      if (fmtOf(c)) cell.numFmt = fmtOf(c);
+      if (idx % 2 === 1) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: STRIPE } };
+    });
+    row.height = 20;
+  });
+  // Totals (after one empty row, so sorting and filtering never move it).
+  const sums = columns.map((c, i) => (c.sum ? i + 1 : 0)).filter(Boolean);
+  const lastData = first + rows.length - 1;
+  if (sums.length && rows.length) {
+    const r = lastData + 2;
+    const row = ws.getRow(r);
+    for (let i = 1; i <= last; i++) {
+      const c = columns[i - 1];
+      const cell = row.getCell(i);
+      if (i === 1) cell.value = `${totalLabel} (${rows.length})`;
+      if (sums.includes(i)) {
+        const col = columnLetter(i);
+        cell.value = { formula: `SUM(${col}${first}:${col}${lastData})`, result: rows.reduce((n, x) => n + (Number(x[c.key]) || 0), 0) };
+        cell.numFmt = fmtOf(c);
+      }
+      cell.font = { name: FONT, size: 11.5, bold: true, color: { argb: INK } };
+      cell.border = { ...border, top: { style: 'medium', color: { argb: GREEN } } };
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: GREEN_SOFT } };
+      cell.alignment = { vertical: 'middle', horizontal: i === 1 ? 'left' : align(c) };
+    }
+    row.height = 26;
+  }
+  if (rows.length) ws.autoFilter = { from: { row: 4, column: 1 }, to: { row: lastData, column: last } };
+  return wb.xlsx.writeBuffer();
+}
+
+module.exports = { buildReport, buildForm, buildSchedule, buildStudentsTransfer, buildGroups, buildTable };

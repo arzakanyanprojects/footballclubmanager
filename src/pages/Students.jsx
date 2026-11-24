@@ -1,15 +1,16 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
-import { Plus, Download, Users, Paperclip, Camera, Trash2, UserRound, FileText, Wallet, StickyNote, FilterX, FileSignature, FileSpreadsheet } from 'lucide-react';
+import { Plus, Users, Paperclip, Camera, Trash2, UserRound, FileText, Wallet, StickyNote, FilterX, FileSignature, FileSpreadsheet } from 'lucide-react';
 import { useT, monthName } from '../i18n';
 import { useCan } from '../components/Auth';
 import { useColumns } from '../components/Columns';
 import { FilterButton, FilterMenu, applyColumnFilters, columnValues } from '../components/ColumnFilter';
 import { ConflictBanner, EditingMark, useEditLock, useLocks } from '../components/Locks';
-import { useRpc, rpc, fmtDate, saveCsv, todayIso, resizeImage, seasonMonths, money, readFileBase64 } from '../lib';
+import { useRpc, rpc, fmtDate, todayIso, resizeImage, seasonMonths, money, readFileBase64 } from '../lib';
 import { Avatar, Badge, Button, Empty, Field, Loading, Modal, Money, SearchBox, Segmented, useAction, useClub } from '../components/ui';
 import { PayModal } from './Payments';
 import { ContractReadyModal } from './Contracts';
 import { GroupsExportModal } from '../components/GroupsExport';
+import { useStudentForm } from '../components/StudentFormHost';
 
 export const CATEGORIES = ['siblings', 'half', 'war', 'staff', 'orphan'];
 
@@ -54,7 +55,12 @@ export default function Students({ nav, route }) {
   const [groupId, setGroupId] = useState(route.groupId ? String(route.groupId) : '');
   const [debtOnly, setDebtOnly] = useState(!!route.debtOnly);
   const [category, setCategory] = useState(''); // '' all · 'none' without a category · a category key
-  const [editing, setEditing] = useState(route.create ? {} : null);
+  // New / edited students open in the app-wide form (it can be minimized to look at another page).
+  const studentForm = useStudentForm();
+  const addStudent = () => studentForm.open({}, { onSaved: (id) => nav('students', { id }) });
+  useEffect(() => {
+    if (route.create) addStudent();
+  }, [route.create]);
   const [paying, setPaying] = useState(null);
   const [exportAll, setExportAll] = useState(false); // «Բոլոր սաները Excel»
   const { currency } = useClub();
@@ -321,22 +327,6 @@ export default function Students({ nav, route }) {
     plain('inactiveReason', t('students.inactiveReason'), (s) => s.inactive_reason, { defaultHidden: true }),
   ]);
 
-  const exportCsv = () =>
-    saveCsv(`students-${todayIso()}.csv`, [
-      [t('students.firstName'), t('students.lastName'), t('students.patronymic'), t('students.birthDate'), t('students.group'), t('students.coach'),
-        t('parent.firstName'), t('parent.lastName'), t('parent.ssn'), t('parent.docNo'), t('parent.docIssuer'), t('parent.docDate'),
-        t('parent.phone'), t('parent.messenger'), t('parent.email'), t('parent.address'), t('students.medicalDoc'), t('students.category'), t('students.service'), t('students.contractNo'), t('students.monthlyFee'), t('students.joinDate'), t('students.status'), t('students.inactiveReason'),
-        ...months.map((p) => monthName(t, p))],
-      ...rows.map((s) => [s.first_name, s.last_name, s.patronymic, fmtDate(s.birth_date), s.group_name, s.group_coach,
-        s.parent_first_name, s.parent_last_name, s.parent_ssn, s.parent_doc_no, s.parent_doc_issuer, fmtDate(s.parent_doc_date),
-        s.parent_phone, s.parent_messenger, s.parent_email, s.parent_address,
-        t(s.medical_doc ? 'medicalDoc.provided' : 'medicalDoc.missing'), s.category ? t(`category.${s.category}`) : '', s.service, s.contract_no, s.monthly_fee, fmtDate(s.join_date), t(`status.${s.status}`), s.inactive_reason,
-        ...months.map((p) => {
-          const st = monthStatus(s.byMonth[p], p, s.join_date);
-          return st === 'none' ? '' : t(`chargeStatus.${st}`);
-        })]),
-    ]);
-
   return (
     // The page fills the window: title, filters and column headers stay; only the rows scroll.
     <div className="fill-page">
@@ -347,14 +337,11 @@ export default function Students({ nav, route }) {
         </div>
         <div className="spacer" />
         {columnsButton}
-        <Button icon={Download} onClick={exportCsv} disabled={!rows.length}>
-          {t('common.exportCsv')}
-        </Button>
-        <Button icon={FileSpreadsheet} onClick={() => setExportAll(true)} title={t('groupsExport.allHint')}>
-          {t('groupsExport.allButton')}
-        </Button>
+        {/* Excel: every student with all details (the window lets you pick the columns). */}
+        <Button icon={FileSpreadsheet} onClick={() => setExportAll(true)} title={t('groupsExport.allButton')} aria-label={t('groupsExport.allButton')} />
+
         {canEdit && (
-          <Button variant="primary" icon={Plus} onClick={() => setEditing({})}>
+          <Button variant="primary" icon={Plus} onClick={addStudent}>
             {t('students.add')}
           </Button>
         )}
@@ -422,7 +409,7 @@ export default function Students({ nav, route }) {
                   {t('students.clearFilters')}
                 </Button>
               ) : (
-                canEdit && <Button variant="primary" icon={Plus} onClick={() => setEditing({})}>{t('students.add')}</Button>
+                canEdit && <Button variant="primary" icon={Plus} onClick={addStudent}>{t('students.add')}</Button>
               )
             }
           />
@@ -475,21 +462,11 @@ export default function Students({ nav, route }) {
 
       {paying && <PayModal charges={paying} onClose={() => setPaying(null)} onDone={() => setPaying(null)} />}
 
-      {editing && (
-        <StudentForm
-          student={editing}
-          onClose={() => setEditing(null)}
-          onSaved={(id) => {
-            setEditing(null);
-            if (!editing.id) nav('students', { id });
-          }}
-        />
-      )}
     </div>
   );
 }
 
-export function StudentForm({ student, onClose, onSaved }) {
+export function StudentForm({ student, onClose, onSaved, minimized, onMinimize, onDraft }) {
   const t = useT();
   const act = useAction();
   const { data: groups } = useRpc('groups.list');
@@ -530,6 +507,8 @@ export function StudentForm({ student, onClose, onSaved }) {
     ...Object.fromEntries(Object.entries(student).map(([k, v]) => [k, v ?? ''])),
   });
   const [f, setF] = useState(() => init(student));
+  // The name for the minimized form's bar.
+  useEffect(() => onDraft?.([f.first_name, f.last_name, f.patronymic].filter(Boolean).join(' ')), [f.first_name, f.last_name, f.patronymic]);
   // The latest saved data (after someone else's change), replacing what is in the form.
   const [conflict, setConflict] = useState(null);
   const reload = async () => {
@@ -608,6 +587,8 @@ export function StudentForm({ student, onClose, onSaved }) {
       onClose={onClose}
       width={760}
       lock={lock}
+      hidden={minimized}
+      onMinimize={onMinimize}
       footer={
         <>
           {withContract && templates.length > 1 && (

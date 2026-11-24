@@ -6,7 +6,7 @@ import { useT, monthName } from '../i18n';
 import { useCan } from './Auth';
 import { useRpc, rpc, fmtDate, fmtDateTime, money } from '../lib';
 import { Avatar, Badge, Button, Empty, Field, Loading, Modal, Money, SearchBox, useAction, useClub, useConfirm } from './ui';
-import { StudentForm } from '../pages/Students';
+import { useStudentForm } from './StudentFormHost';
 import { useEditLock } from './Locks';
 
 const RELATIONS = ['sibling', 'cousin', 'other'];
@@ -18,7 +18,8 @@ export function RelatedTab({ student, related, nav }) {
   const confirm = useConfirm();
   const canEdit = useCan('students');
   const canPay = useCan('payments');
-  const [modal, setModal] = useState(null); // 'new' | 'link'
+  const [modal, setModal] = useState(null); // 'link'
+  const studentForm = useStudentForm();
 
   // A brother / sister: the family details come from this student, the category is «2 և ավել երեխա».
   const sibling = {
@@ -45,7 +46,11 @@ export function RelatedTab({ student, related, nav }) {
           <Button icon={Link2} onClick={() => setModal('link')}>
             {t('related.linkExisting')}
           </Button>
-          <Button variant="primary" icon={UserPlus} onClick={() => setModal('new')}>
+          <Button variant="primary" icon={UserPlus} onClick={() =>
+              studentForm.open(sibling, {
+                onSaved: (id) => act(() => rpc('students.link', { id: student.id, otherId: id, relation: 'sibling' }), t('related.linked')),
+              })
+            }>
             {t('related.addSibling')}
           </Button>
         </div>
@@ -109,16 +114,6 @@ export function RelatedTab({ student, related, nav }) {
             </tbody>
           </table>
         </div>
-      )}
-      {modal === 'new' && (
-        <StudentForm
-          student={sibling}
-          onClose={() => setModal(null)}
-          onSaved={async (id) => {
-            setModal(null);
-            await act(() => rpc('students.link', { id: student.id, otherId: id, relation: 'sibling' }), t('related.linked'));
-          }}
-        />
       )}
       {modal === 'link' && <LinkModal student={student} exclude={[student.id, ...related.map((r) => r.id)]} onClose={() => setModal(null)} />}
     </div>

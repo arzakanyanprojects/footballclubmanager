@@ -7,7 +7,7 @@ const { createService, DEFAULT_TEMPLATES } = require('./service');
 const notify = require('./notify');
 const network = require('./network');
 const PizZip = require('pizzip');
-const { buildReport, buildForm, buildSchedule, buildStudentsTransfer, buildGroups } = require('./xlsx');
+const { buildReport, buildForm, buildSchedule, buildStudentsTransfer, buildGroups, buildTable } = require('./xlsx');
 const hdm = require('./hdm');
 const updater = require('./updater');
 const importer = require('./importer');
@@ -823,7 +823,7 @@ function registerIpc() {
       : await dialog.showSaveDialog(win, { defaultPath: report.defaultName, filters: [{ name: 'Excel', extensions: ['xlsx'] }] });
     if (r.canceled || !r.filePath) return { ok: false, error: 'CANCELLED' };
     try {
-      const build = { form: buildForm, schedule: buildSchedule, students: buildStudentsTransfer, groups: buildGroups }[report.kind] || buildReport;
+      const build = { form: buildForm, schedule: buildSchedule, students: buildStudentsTransfer, groups: buildGroups, table: buildTable }[report.kind] || buildReport;
       fs.writeFileSync(r.filePath, Buffer.from(await build(report)));
     } catch (err) {
       // Most often the file is open in Excel and locked.

@@ -7,7 +7,8 @@ import { useCan } from '../components/Auth';
 import { MessageButton } from '../components/Messenger';
 import { useRpc, rpc, age, fmtDate, fmtDateTime, money, readFileBase64, fileSize, todayIso } from '../lib';
 import { Avatar, Badge, Button, Empty, Field, Loading, Modal, Money, Tabs, useAction, useClub, useConfirm } from '../components/ui';
-import { StudentForm, FormSection } from './Students';
+import { FormSection } from './Students';
+import { useStudentForm } from '../components/StudentFormHost';
 import { AbsenceModal, printStoredFile, openStoredFile } from '../components/Absence';
 import { ChargesTable, MonthlyPaymentModal, chargeStatus } from './Payments';
 import { NewContractModal, ContractModal, CONTRACT_TONE } from './Contracts';
@@ -15,6 +16,7 @@ import { RelatedTab, HistoryTab } from '../components/StudentExtras';
 import { useEditLock } from '../components/Locks';
 
 export default function StudentProfile({ id, nav }) {
+  const studentForm = useStudentForm();
   const canEdit = useCan('students');
   const canPay = useCan('payments');
   const canContracts = useCan('contracts');
@@ -62,7 +64,7 @@ export default function StudentProfile({ id, nav }) {
             <Button icon={Trash2} variant="danger" onClick={remove}>
               {t('common.delete')}
             </Button>
-            <Button icon={Pencil} onClick={() => setModal('edit')}>
+            <Button icon={Pencil} onClick={() => studentForm.open(s)}>
               {t('common.edit')}
             </Button>
           </>
@@ -259,7 +261,7 @@ export default function StudentProfile({ id, nav }) {
         <div className="card card-pad details-form">
           {canEdit && (
             <div className="details-edit">
-              <Button size="sm" icon={Pencil} onClick={() => setModal('edit')}>
+              <Button size="sm" icon={Pencil} onClick={() => studentForm.open(s)}>
                 {t('common.edit')}
               </Button>
             </div>
@@ -317,7 +319,6 @@ export default function StudentProfile({ id, nav }) {
         </div>
       )}
 
-      {modal === 'edit' && <StudentForm student={s} onClose={() => setModal(null)} onSaved={() => setModal(null)} />}
       {modal === 'charge' && <MonthlyPaymentModal student={s} charges={data.charges} onClose={() => setModal(null)} />}
       {modal === 'absence' && <AbsenceModal student={s} onClose={() => setModal(null)} />}
       {modal === 'terminate' && <TerminateModal student={s} onClose={() => setModal(null)} />}

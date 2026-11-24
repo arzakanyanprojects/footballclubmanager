@@ -6,10 +6,9 @@ import { MessageButton, useMessenger } from '../components/Messenger';
 import { useRpc, rpc, compactMoney, fmtDate, fmtDateTime, money, todayIso } from '../lib';
 import { Avatar, Button, Empty, Loading, Money, useClub } from '../components/ui';
 import { chargeLabel, MethodTag } from './Payments';
-import ReportExport from '../components/ReportExport';
+import { ReportsModal } from '../components/Reports';
 
 export default function Dashboard({ nav }) {
-  const canAttendance = useCan('attendance', 'view');
   const t = useT();
   const { currency } = useClub();
   const { data } = useRpc('dashboard.summary');
@@ -29,16 +28,11 @@ export default function Dashboard({ nav }) {
           <div className="sub">{t('dash.subtitle', { date: fmtDate(todayIso()) })}</div>
         </div>
         <div className="spacer" />
-        {canAttendance && (
-          <Button icon={CalendarCheck} onClick={() => nav('attendance')}>
-            {t('dash.takeAttendance')}
-          </Button>
-        )}
         <Button variant="primary" icon={FileSpreadsheet} onClick={() => setExporting(true)}>
-          {t('reports.export')}
+          {t('reportsx.title')}
         </Button>
       </div>
-      {exporting && <ReportExport onClose={() => setExporting(false)} />}
+      {exporting && <ReportsModal onClose={() => setExporting(false)} />}
 
       <div className="stats">
         <div className="card stat">

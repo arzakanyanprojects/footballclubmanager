@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { X, CheckCircle2, AlertCircle, Search, Inbox, MoreHorizontal, Shield } from 'lucide-react';
+import { X, CheckCircle2, AlertCircle, Search, Inbox, MoreHorizontal, Shield, Minus } from 'lucide-react';
 import { avatarColor, money, rpc } from '../lib';
 import { useT } from '../i18n';
 
@@ -25,17 +25,21 @@ export function Field({ label, hint, children, className = '' }) {
 }
 
 // lock: from useEditLock — shows who is editing, and makes the form read-only while someone else is.
-export function Modal({ title, onClose, children, footer, width = 560, lock }) {
+const minimizeLabel = () => (document.documentElement.lang === 'en' ? 'Minimize' : 'Փոքրացնել');
+// onMinimize: a «minimize» button; hidden: minimized — not shown, but everything in it is kept.
+export function Modal({ title, onClose, children, footer, width = 560, lock, onMinimize, hidden }) {
   useEffect(() => {
+    if (hidden) return undefined;
     const onKey = (e) => e.key === 'Escape' && onClose?.();
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  }, [onClose, hidden]);
   return (
-    <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose?.()}>
+    <div className="overlay" style={hidden ? { display: 'none' } : undefined} onMouseDown={(e) => e.target === e.currentTarget && !onMinimize && onClose?.()}>
       <div className="modal" style={{ maxWidth: width }} role="dialog" aria-modal="true">
         <div className="modal-head">
           <h3>{title}</h3>
+          {onMinimize && <Button variant="ghost" size="sm" icon={Minus} onClick={onMinimize} aria-label="Minimize" title={minimizeLabel()} />}
           <Button variant="ghost" size="sm" icon={X} onClick={onClose} aria-label="Close" />
         </div>
         <div className="modal-body">
