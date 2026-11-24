@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
-import { Plus, Download, Users, Paperclip, Camera, Trash2, UserRound, FileText, Wallet, StickyNote, FilterX, FileSignature } from 'lucide-react';
+import { Plus, Download, Users, Paperclip, Camera, Trash2, UserRound, FileText, Wallet, StickyNote, FilterX, FileSignature, FileSpreadsheet } from 'lucide-react';
 import { useT, monthName } from '../i18n';
 import { useCan } from '../components/Auth';
 import { useColumns } from '../components/Columns';
@@ -9,6 +9,7 @@ import { useRpc, rpc, fmtDate, saveCsv, todayIso, resizeImage, seasonMonths, mon
 import { Avatar, Badge, Button, Empty, Field, Loading, Modal, Money, SearchBox, Segmented, useAction, useClub } from '../components/ui';
 import { PayModal } from './Payments';
 import { ContractReadyModal } from './Contracts';
+import { GroupsExportModal } from '../components/GroupsExport';
 
 export const CATEGORIES = ['siblings', 'half', 'war', 'staff', 'orphan'];
 
@@ -55,6 +56,7 @@ export default function Students({ nav, route }) {
   const [category, setCategory] = useState(''); // '' all · 'none' without a category · a category key
   const [editing, setEditing] = useState(route.create ? {} : null);
   const [paying, setPaying] = useState(null);
+  const [exportAll, setExportAll] = useState(false); // «Բոլոր սաները Excel»
   const { currency } = useClub();
   const months = useMemo(() => seasonMonths(), []);
   const { data: groups } = useRpc('groups.list');
@@ -348,6 +350,9 @@ export default function Students({ nav, route }) {
         <Button icon={Download} onClick={exportCsv} disabled={!rows.length}>
           {t('common.exportCsv')}
         </Button>
+        <Button icon={FileSpreadsheet} onClick={() => setExportAll(true)} title={t('groupsExport.allHint')}>
+          {t('groupsExport.allButton')}
+        </Button>
         {canEdit && (
           <Button variant="primary" icon={Plus} onClick={() => setEditing({})}>
             {t('students.add')}
@@ -465,6 +470,8 @@ export default function Students({ nav, route }) {
           onClose={() => setMenu(null)}
         />
       )}
+
+      {exportAll && <GroupsExportModal flat onClose={() => setExportAll(false)} />}
 
       {paying && <PayModal charges={paying} onClose={() => setPaying(null)} onDone={() => setPaying(null)} />}
 

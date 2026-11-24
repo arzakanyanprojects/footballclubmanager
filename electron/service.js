@@ -959,8 +959,11 @@ function createService(db, { onWrite, getNotify } = {}) {
           const carried = Array.isArray(p.charges) ? p.charges : [];
           delete p.payments;
           delete p.charges;
+          // The same contract № is the same student only with the same first name (brothers can share
+          // one contract, and a typo can give two families one number).
           const existing =
-            (p.contract_no && one('SELECT * FROM students WHERE contract_no = :c', { c: str(p.contract_no) })) ||
+            (p.contract_no &&
+              one('SELECT * FROM students WHERE contract_no = :c AND ulower(first_name) = ulower(:f)', { c: str(p.contract_no), f: str(p.first_name) })) ||
             one(
               `SELECT * FROM students WHERE ulower(first_name) = ulower(:f) AND ulower(last_name) = ulower(:l)
                  AND IFNULL(birth_date, '') = IFNULL(:b, '')`,

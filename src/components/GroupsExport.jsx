@@ -9,17 +9,20 @@ import { useCan } from './Auth';
 import { Button, Modal, useAction, useClub } from './ui';
 import { MONTH_MARK, monthStatus } from '../pages/Students';
 
-const PREF_KEY = 'fc.groupsExport.columns';
+const GROUPS_PREF_KEY = 'fc.groupsExport.columns';
 // Sheet colours (Excel ARGB), one per year in turn.
 const SHEET_COLORS = ['FF1BAF7A', 'FF2A78D6', 'FFEB6834', 'FF6250D6', 'FFEDA100', 'FFE34948', 'FF008300', 'FFE87BA4', 'FF0E7490', 'FF8B5CF6'];
 
-function useColumnDefs() {
+function useColumnDefs(flat) {
   const t = useT();
   const canPay = useCan('payments');
   const parent = (k) => `${t('students.parent')} · ${t(k)}`;
   return [
     { id: 'index', label: '№', type: 'index', width: 5, on: true },
     { id: 'fullName', label: t('groupsExport.fullName'), width: 34, on: true, get: (s) => [s.first_name, s.last_name, s.patronymic].filter(Boolean).join(' ') },
+    // One list of everyone (no group titles): the group is a column.
+    flat && { id: 'group', label: t('students.group'), width: 14, on: true, get: (s) => s.group_name || '' },
+    flat && { id: 'coach', label: t('students.coach'), width: 22, get: (s) => s.group_coach || '' },
     { id: 'firstName', label: t('students.firstName'), width: 16, get: (s) => s.first_name },
     { id: 'lastName', label: t('students.lastName'), width: 18, get: (s) => s.last_name },
     { id: 'patronymic', label: t('students.patronymic'), width: 16, get: (s) => s.patronymic },
@@ -45,23 +48,28 @@ function useColumnDefs() {
   ].filter(Boolean);
 }
 
-function loadPref() {
+function loadPref(key) {
   try {
-    return JSON.parse(localStorage.getItem(PREF_KEY) || 'null');
+    return JSON.parse(localStorage.getItem(key) || 'null');
   } catch {
     return null;
   }
 }
 
-export function GroupsExportModal({ groups, onClose }) {
+// flat: «Բոլոր սաները» — everyone on one sheet, sorted by group and name (instead of a sheet per year).
+export function GroupsExportModal({ groups, onClose, flat = false }) {
   const t = useT();
   const act = useAction();
   const { currency } = useClub();
-  const defs = useColumnDefs();
+  // All students: every detail by default (the full name covers first / last name / patronymic).
+  const defs = useColumnDefs(flat)
+    .filter(Boolean)
+    .map((d) => (flat ? { ...d, on: !['firstName', 'lastName', 'patronymic', 'coach'].includes(d.id) } : d));
+  const PREF_KEY = flat ? 'fc.studentsExport.columns' : GROUPS_PREF_KEY;
   const byId = Object.fromEntries(defs.map((d) => [d.id, d]));
   const ids = defs.map((d) => d.id);
   const [pref, setPref] = useState(() => {
-    const p = loadPref();
+    const p = loadPref(PREF_KEY);
     if (!p) return { order: ids, on: defs.filter((d) => d.on).map((d) => d.id) };
     // Columns added later go at the end, off.
     return { order: [...p.order.filter((id) => ids.includes(id)), ...ids.filter((id) => !p.order.includes(id))], on: p.on.filter((id) => ids.includes(id)) };
@@ -140,9 +148,16 @@ export function GroupsExportModal({ groups, onClose }) {
         bySheet.get(other).push(block(t('students.noGroup'), loose));
       }
       const names = [...bySheet.keys()].sort((a, b) => (a === other) - (b === other) || a.localeCompare(b, 'hy', { numeric: true }));
+      const cmp = (a, b) => String(a || '').localeCompare(String(b || ''), 'hy', { numeric: true, sensitivity: 'base' });
+      const everyone = [...students].sort(
+        (a, b) => !a.group_name - !b.group_name || cmp(a.group_name, b.group_name) || cmp(a.last_name, b.last_name) || cmp(a.first_name, b.first_name)
+      );
+      const sheets = flat
+        ? [{ name: t('nav.students'), color: SHEET_COLORS[0], groups: [block(t('groupsExport.allTitle', { n: everyone.length, date: todayIso().split('-').reverse().join('.') }), everyone)] }]
+        : names.map((name, i) => ({ name, color: SHEET_COLORS[i % SHEET_COLORS.length], groups: bySheet.get(name) }));
       const r = await window.fc.saveXlsx({
         kind: 'groups',
-        defaultName: `groups-${todayIso()}.xlsx`,
+        defaultName: `${flat ? 'students' : 'groups'}-${todayIso()}.xlsx`,
         currencySymbol: money(0, currency).replace(/[\d,.\s]/g, '') || currency,
         emptyText: t('groupsExport.noStudents'),
         labels: {
@@ -152,9 +167,10 @@ export function GroupsExportModal({ groups, onClose }) {
           grandTitle: t('groupsExport.grandTitle'),
           grandTotal: t('groupsExport.grandTotal'),
           group: t('students.group'),
+          noGrand: flat, // one list: its totals are under it, no summary sheet
         },
         columns,
-        sheets: names.map((name, i) => ({ name, color: SHEET_COLORS[i % SHEET_COLORS.length], groups: bySheet.get(name) })),
+        sheets,
       });
       if (!r.ok) throw Object.assign(new Error(r.error), { code: r.error, detail: r.detail });
       onClose();
@@ -162,20 +178,20 @@ export function GroupsExportModal({ groups, onClose }) {
 
   return (
     <Modal
-      title={t('groupsExport.title')}
+      title={t(flat ? 'groupsExport.allButton' : 'groupsExport.title')}
       onClose={onClose}
       width={520}
       footer={
         <>
           <Button onClick={onClose}>{t('common.cancel')}</Button>
-          <Button variant="primary" icon={Download} onClick={run} disabled={!chosen.length || !list.length}>
+          <Button variant="primary" icon={Download} onClick={run} disabled={!chosen.length || (!flat && !list.length)}>
             {t('groupsExport.run')}
           </Button>
         </>
       }
     >
       <div className="stack" style={{ gap: 10 }}>
-        <div className="muted small">{t('groupsExport.hint')}</div>
+        <div className="muted small">{t(flat ? 'groupsExport.allHint' : 'groupsExport.hint')}</div>
         <div className="row">
           <span className="strong grow">{t('groupsExport.columns', { n: chosen.length })}</span>
           <button className="link-btn small" onClick={reset}>

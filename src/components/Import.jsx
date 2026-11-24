@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { FileUp, Upload, CheckCircle2, AlertTriangle, Wand2, Files } from 'lucide-react';
 import { useT } from '../i18n';
-import { rpc } from '../lib';
+import { rpc, useRpc } from '../lib';
 import { Button, Field, Modal, Segmented, useAction } from './ui';
 
 const CATEGORY_KEYS = ['siblings', 'half', 'war', 'staff', 'orphan'];
@@ -14,7 +14,7 @@ const FIELDS = [
   { id: 'patronymic', label: 'students.patronymic', alias: ['patronymic', 'middle name', 'հայրանուն', 'отчество'] },
   { id: 'birth_date', label: 'students.birthDate', type: 'date', alias: ['birth date', 'birthdate', 'date of birth', 'dob', 'ծննդյան ամսաթիվ', 'ծննդյան օր', 'ծնդ օր', 'ծնդ օր ամիս տարի', 'дата рождения'] },
   { id: 'document_no', label: 'students.documentNo', alias: ['birth certificate', 'document', 'ծննդյան վկայական', 'ծնդ վկայական', 'անձնագիր', 'փաստաթուղթ'] },
-  { id: 'contract_no', label: 'students.contractNo', alias: ['contract', 'contract no', 'պայմանագրի համար', 'պայմանագիր', 'договор'] },
+  { id: 'contract_no', label: 'students.contractNo', alias: ['contract', 'contract no', 'պայմանագրի համար', 'պայմանագրի №', 'պայմանագրի', 'պայմանագիր', 'договор'] },
   { id: 'medical_doc', label: 'students.medicalDoc', type: 'bool', alias: ['medical', 'բժ. թուղթ', 'բժշկական', 'բժ թուղթ', 'справка'] },
   { id: 'parent_full_name', label: 'import.parentFullName', alias: ['parent', 'parent name', 'ծնող', 'ծնողի անուն', 'родитель'] },
   { id: 'parent_first_name', label: 'import.parentFirst', alias: ['parent first name', 'ծնողի անունը'] },
@@ -347,6 +347,186 @@ function convertRow(row, map, opts, t, fileGroup, fills) {
 
 const baseName = (n) => String(n || '').replace(/\.[^.]+$/, '').trim();
 
+// ---------------------------------------------------------------- the club's whole workbook
+// One sheet per birth year (plus «ԱՌԱՋՆՈՒԹՅՈՒՆ» for the championship teams), each with several groups:
+// a title row «2012-1 Coach, Coach», then the months row, then the column titles, then the students.
+// «խզվածներ» (students who left) is never imported.
+const SKIP_SHEET = /խզված/iu;
+const CHAMPIONSHIP = /առաջնություն/iu;
+const FEE_REGULAR = 30000;
+const FEE_CHAMPIONSHIP = 35000;
+const titleCode = (s) => {
+  const m = clean(s).match(/^(\d{4})\s*-\s*(\d+)/);
+  return m ? `${m[1]}-${m[2]}` : null;
+};
+
+// The group blocks of every sheet: [{ sheet, title, code, rows, fills, start }]
+export function workbookBlocks(file) {
+  const out = [];
+  for (const sh of dataSheets(file)) {
+    if (SKIP_SHEET.test(sh.name)) continue;
+    const starts = [];
+    sh.rows.forEach((r, i) => {
+      const a = clean(r[0]);
+      if (titleCode(a) && !/^\d+$/.test(a) && sh.rows.slice(i + 1, i + 4).some((x) => x.some((v) => /անուն/iu.test(v)))) starts.push(i);
+    });
+    starts.forEach((s, k) => {
+      const end = starts[k + 1] ?? sh.rows.length;
+      out.push({
+        sheet: sh.name,
+        championship: CHAMPIONSHIP.test(sh.name),
+        title: clean(sh.rows[s][0]),
+        code: titleCode(sh.rows[s][0]),
+        rows: sh.rows.slice(s + 1, end),
+        fills: sh.fills ? sh.fills.slice(s + 1, end) : null,
+        line: s + 2,
+      });
+    });
+  }
+  return out;
+}
+
+// The group a title belongs to in the app: «ԱՌ 2015-3» for the championship sheet; an existing group of
+// that name, or (a typo like «2019-32») the existing group without the last digit.
+function groupFor(block, existing) {
+  const name = `${block.championship ? 'ԱՌ ' : ''}${block.code}`;
+  const has = (n) => existing.find((g) => norm(g) === norm(n));
+  if (has(name)) return has(name);
+  const shorter = name.slice(0, -1);
+  if (/-\d{2,}$/.test(name) && has(shorter)) return has(shorter);
+  return name;
+}
+
+// «Ծանուցում» → the student's category and monthly fee (the note itself goes to the notes).
+function feeFromNote(note, base) {
+  const s = norm(note);
+  if (!s) return { fee: base, category: null };
+  if (/44|պատերազմ|զոհ/u.test(s)) return { fee: 0, category: 'war' };
+  if (/անվճար/u.test(s)) return { fee: 0, category: null };
+  if (/ծնողազուրկ|մահաց/u.test(s)) return { fee: base / 2, category: 'orphan', half: true };
+  if (/(երեխա|եղբայր|քույր)/u.test(s) && /(^|\s)(2|3|4|երկու|երեք|երկրորդ|երրորդ)(\s|$)/u.test(s)) return { fee: base / 2, category: 'siblings', half: true };
+  if (/50/.test(s)) return { fee: base / 2, category: 'half', half: true };
+  if (/մարզիչ|աշխատակց/u.test(s) && /երեխա|որդի|տղա|աղջիկ/u.test(s)) return { fee: base, category: 'staff', check: true };
+  return { fee: base, category: null, check: true };
+}
+
+// Text in a month cell: a date («18 ноя 26»), an amount with a date («03.11.2026 20000», «20000․ 20/11»),
+// an amount alone («15000․»), or a remark («զանգել», «դեկ 1 ին կվճարի») that is not a payment.
+function monthText(v, period) {
+  const s = clean(v);
+  const d = toDate(s);
+  if (d) return { date: d };
+  const amount = (s.match(/(?<![\d./․])(\d{4,6})(?=$|[\s,;]|[․.](?:\s|$))/u) || [])[1];
+  const dm = s.match(/(\d{1,2})[./․](\d{1,2})(?:[./․](\d{2,4}))?/u);
+  let date = null;
+  if (dm) {
+    const py = Number(period.slice(0, 4));
+    const y = dm[3] ? (dm[3].length === 2 ? `20${dm[3]}` : dm[3]) : String(Number(dm[2]) < Number(period.slice(5)) - 6 ? py + 1 : py);
+    date = `${y}-${dm[2].padStart(2, '0')}-${dm[1].padStart(2, '0')}`;
+  }
+  if (amount && Number(amount) >= 1000) return { date, amount: Number(amount) };
+  return { text: s };
+}
+
+// One student row of the workbook → paid months: whole month = the fee; one half of a month = half of it,
+// except for 50% students, whose one half is their whole (discounted) month.
+function workbookPayments(cells, fills, monthCols, fee, half, t) {
+  const warn = [];
+  const notes = [];
+  const payments = [];
+  const periods = [...new Set(monthCols.map((m) => m.period))];
+  for (const period of periods) {
+    const cols = monthCols.filter((m) => m.period === period);
+    const parts = [];
+    const texts = new Set();
+    for (const m of cols) {
+      const raw = cells[m.col];
+      const v = clean(raw);
+      if (!v) continue;
+      const method = methodOfColour(fills?.[m.col]);
+      const x = /^\d{4}-\d{2}-\d{2}$/.test(v) ? { date: v } : monthText(v, period);
+      if (x.text) texts.add(x.text);
+      else parts.push({ ...x, half: m.half, method });
+    }
+    const month = fmt(`${period}-01`).slice(3);
+    for (const x of texts) notes.push(`${month}՝ ${x}`);
+    if (!parts.length) continue;
+    if (!fee) {
+      warn.push(t('import.warnFreePaid', { month }));
+      continue;
+    }
+    const last = parts.reduce((a, b) => ((b.date || '') > (a.date || '') ? b : a));
+    const explicit = parts.find((p) => p.amount)?.amount;
+    const paidHalves = new Set(parts.map((p) => p.half || 'I+II'));
+    const whole = paidHalves.has('I+II') || (paidHalves.has('I') && paidHalves.has('II')) || cols.length < 2;
+    const amount = explicit || (half || whole ? fee : Math.round(fee / 2));
+    let method = last.method;
+    if (!method) {
+      method = 'transfer';
+      warn.push(t('import.warnNoColour', { month }));
+    }
+    let date = last.date;
+    if (!date) {
+      date = `${period}-01`;
+      warn.push(t('import.warnNoDate', { month }));
+    }
+    let note = null;
+    if (!whole && !half && !explicit) note = t('import.halfOnly', { half: [...paidHalves][0] });
+    else if (new Set(parts.map((p) => p.date)).size > 1) note = parts.map((p) => `${p.half ? `${p.half}՝ ` : ''}${p.date ? fmt(p.date) : '?'}`).join(', ');
+    payments.push({ period, paid_at: date, method, amount, note });
+  }
+  return { payments, notes, warn };
+}
+
+// Every student of the workbook, converted like a file row, with group, fee, category and payments.
+function workbookRows(file, existingGroups, opts, t) {
+  const list = [];
+  for (const b of workbookBlocks(file)) {
+    const head = detectHeader(b.rows);
+    const map = guessMapping(head.cells);
+    const noteCol = head.cells.findIndex((h) => /ծանուցում/iu.test(h));
+    delete map.category; // read from the note below, together with the fee
+    delete map.monthly_fee;
+    const monthCols = detectMonthCols(b.rows, head.index);
+    const group = groupFor(b, existingGroups);
+    const base = b.championship ? FEE_CHAMPIONSHIP : FEE_REGULAR;
+    b.rows.slice(head.index + 1).forEach((cells, i) => {
+      if (!/^\d+$/.test(clean(cells[0])) || !clean(cells[1])) return; // numbered student rows only
+      const fills = b.fills?.[head.index + 1 + i] || null;
+      const c = convertRow(cells, map, { ...opts, fileGroups: false }, t, null, fills);
+      const note = noteCol >= 0 ? clean(cells[noteCol]) : '';
+      const rule = feeFromNote(note, base);
+      c.data.group_name = group;
+      c.data.monthly_fee = rule.fee;
+      if (rule.category) c.data.category = rule.category;
+      if (rule.check) c.warn.push(t('import.warnNote', { note }));
+      const p = workbookPayments(cells, fills, monthCols, rule.fee, !!rule.half, t);
+      const start = paymentsOf(cells, fills, monthCols, t).start;
+      if (start && !c.data.join_date) c.data.join_date = start;
+      c.data.payments = p.payments;
+      c.data.notes = [note, ...p.notes].filter(Boolean).join('\n') || undefined;
+      c.warn.push(...p.warn);
+      if (!existingGroups.some((g) => norm(g) === norm(group))) c.warn.push(t('import.warnNewGroup', { group }));
+      list.push({ ...c, group: `${b.sheet} · ${group}`, line: b.line + head.index + 1 + i });
+    });
+  }
+  // The same child on two group lists (same name and birth date): imported once — from the list with
+  // more payments, or the group of the child's birth year.
+  const key = (c) => `${norm(c.data.first_name)}|${norm(c.data.last_name)}|${c.data.birth_date || ''}`;
+  const byKey = new Map();
+  list.forEach((c) => (byKey.get(key(c)) || byKey.set(key(c), []).get(key(c))).push(c));
+  const drop = new Set();
+  for (const same of byKey.values()) {
+    if (same.length < 2 || !same[0].data.first_name) continue;
+    const year = (c) => String(c.data.group_name).match(/(19|20)\d{2}/)?.[0];
+    const score = (c) => (c.data.payments?.length || 0) * 10 + (year(c) && c.data.birth_date?.startsWith(year(c)) ? 1 : 0);
+    const keep = same.reduce((a, b) => (score(b) > score(a) ? b : a));
+    for (const c of same) if (c !== keep) drop.add(c);
+    keep.warn.push(t('import.warnTwice', { groups: same.filter((c) => c !== keep).map((c) => c.data.group_name).join(', ') }));
+  }
+  return list.filter((c) => !drop.has(c));
+}
+
 export function ImportModal({ onClose }) {
   const t = useT();
   const act = useAction();
@@ -358,6 +538,11 @@ export function ImportModal({ onClose }) {
   const [result, setResult] = useState(null);
   const [busy, setBusy] = useState(false);
   const [transfer, setTransfer] = useState(null); // a full transfer zip from another FC Manager
+  // The club's whole workbook (groups under title rows on every sheet): imported all at once.
+  const { data: groupList } = useRpc('groups.list');
+  const groupNames = useMemo(() => (groupList || []).map((g) => g.name), [groupList]);
+  const blocks = useMemo(() => (files?.length === 1 ? workbookBlocks(files[0]) : []), [files]);
+  const isBook = blocks.length > 0 && opts.workbook !== false;
 
   // Rows of every chosen file (same layout), each remembering its file for the group.
   const sources = (files || []).map((f) => {
@@ -404,7 +589,9 @@ export function ImportModal({ onClose }) {
   };
 
   const converted = useMemo(() => {
-    const list = body.map((r) => {
+    const list = isBook
+      ? workbookRows(files[0], groupNames, opts, t)
+      : body.map((r) => {
       const c = { ...convertRow(r.cells, map, opts, t, r.group, r.fills), group: r.group, line: r.line };
       if (opts.payments && monthCols.length) {
         const p = paymentsOf(r.cells, r.fills, monthCols, t);
@@ -416,7 +603,26 @@ export function ImportModal({ onClose }) {
       }
       if (opts.payments && carried) c.data.charges = carried.get(studentKey(c.data)) || [];
       return c;
+        });
+    if (isBook && !opts.payments) list.forEach((c) => delete c.data.payments);
+    // One contract № on several rows: the same child twice (imported once), or different children
+    // (brothers on one contract, or a typo) — shown, not changed.
+    const byContract = new Map();
+    list.forEach((c, i) => {
+      const k = c.data.contract_no;
+      if (k) (byContract.get(k) || byContract.set(k, []).get(k)).push(i);
     });
+    for (const idx of byContract.values())
+      if (idx.length > 1)
+        for (const i of idx) {
+          const others = idx.filter((j) => j !== i).map((j) => list[j]);
+          const same = others.filter((o) => norm(o.data.first_name) === norm(list[i].data.first_name) && norm(o.data.last_name) === norm(list[i].data.last_name));
+          list[i].warn.push(
+            same.length
+              ? t('import.warnTwice', { groups: same.map((o) => o.data.group_name).join(', ') })
+              : t('import.warnSameContract', { no: list[i].data.contract_no, names: others.map((o) => `${o.data.first_name} ${o.data.last_name}`).join(', ') })
+          );
+        }
     // The same parent on several rows (siblings, or a copy-paste mistake) — shown, not changed.
     const byParent = new Map();
     list.forEach((c, i) => {
@@ -430,7 +636,7 @@ export function ImportModal({ onClose }) {
         for (const i of idx)
           list[i].warn.push(t('import.warnSameParent', { names: idx.filter((j) => j !== i).map((j) => `${list[j].data.first_name} ${list[j].data.last_name}`).join(', ') }));
     return list;
-  }, [body, map, opts, t]);
+  }, [body, map, opts, t, isBook, groupNames]);
   const valid = converted.filter((c) => c.data.first_name && c.data.last_name);
   const withWarnings = converted.filter((c) => c.warn.length);
   const mappedCount = Object.values(map).filter((v) => v != null).length;
@@ -531,7 +737,13 @@ export function ImportModal({ onClose }) {
             ) : (
               <span className="strong">{files[0].fileName}</span>
             )}
-            {files.length === 1 && dataSheets(files[0]).length > 1 && (
+            {blocks.length > 0 && (
+              <label className="check small">
+                <input type="checkbox" checked={isBook} onChange={(e) => setOpts({ ...opts, workbook: e.target.checked })} />
+                <span className="strong">{t('import.workbook')}</span>
+              </label>
+            )}
+            {!isBook && files.length === 1 && dataSheets(files[0]).length > 1 && (
               <select
                 className="select"
                 style={{ width: 'auto' }}
@@ -552,7 +764,7 @@ export function ImportModal({ onClose }) {
               <input type="checkbox" checked={header} onChange={(e) => setHeader(e.target.checked)} />
               {t('import.hasHeader')}
             </label>
-            <span className="small muted">{t('import.rowsFound', { n: body.length })}</span>
+            <span className="small muted">{t('import.rowsFound', { n: isBook ? converted.length : body.length })}</span>
             <div className="grow" />
             <Button size="sm" onClick={pick}>
               {t('import.otherFile')}
@@ -560,6 +772,31 @@ export function ImportModal({ onClose }) {
           </div>
 
           <div className="import-grid">
+            {isBook ? (
+              <div>
+                <div className="strong" style={{ marginBottom: 6 }}>{t('import.workbookGroups', { n: blocks.length })}</div>
+                <div className="small muted" style={{ marginBottom: 8 }}>{t('import.workbookHint')}</div>
+                <div className="import-map">
+                  {blocks.map((b, i) => {
+                    const g = groupFor(b, groupNames);
+                    const n = converted.filter((c) => c.data.group_name === g && c.group === `${b.sheet} · ${g}`).length;
+                    const exists = groupNames.some((x) => norm(x) === norm(g));
+                    return (
+                      <div key={i} className="import-map-row on">
+                        <span className="import-field" title={b.title}>
+                          {b.sheet} · {b.code}
+                        </span>
+                        <span className="strong">
+                          → {g}
+                          {!exists && <span className="small" style={{ color: 'var(--warn)' }}> ({t('import.newGroup')})</span>}
+                        </span>
+                        <span className="small muted">{t('students.count', { n })}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : (
             <div>
               <div className="row" style={{ marginBottom: 8 }}>
                 <span className="strong grow">{t('import.mapping')}</span>
@@ -593,8 +830,10 @@ export function ImportModal({ onClose }) {
                 })}
               </div>
             </div>
+            )}
 
             <div className="stack" style={{ gap: 14 }}>
+              {!isBook && (
               <label className="check small">
                 <input type="checkbox" checked={opts.fileGroups} onChange={(e) => setOpts({ ...opts, fileGroups: e.target.checked })} />
                 <span>
@@ -602,7 +841,8 @@ export function ImportModal({ onClose }) {
                   <div className="muted">{groups.length ? groups.join(', ') : t('import.fileGroupsHint')}</div>
                 </span>
               </label>
-              {[
+              )}
+              {!isBook && [
                 ['order', 'import.nameOrder'],
                 ['parentOrder', 'import.parentOrder'],
               ].map(([k, label]) => (
@@ -632,7 +872,7 @@ export function ImportModal({ onClose }) {
                 <input type="checkbox" checked={opts.createGroups} onChange={(e) => setOpts({ ...opts, createGroups: e.target.checked })} />
                 {t('import.createGroups')}
               </label>
-              {(monthCols.length > 0 || carried) && (
+              {(monthCols.length > 0 || carried || isBook) && (
                 <label className="check small">
                   <input type="checkbox" checked={opts.payments} onChange={(e) => setOpts({ ...opts, payments: e.target.checked })} />
                   <span>
@@ -642,7 +882,7 @@ export function ImportModal({ onClose }) {
                 </label>
               )}
               <div className="small">
-                <div className="strong">{t('import.ready', { n: valid.length, total: body.length })}</div>
+                <div className="strong">{t('import.ready', { n: valid.length, total: isBook ? converted.length : body.length })}</div>
                 {withWarnings.length > 0 && (
                   <div className="row" style={{ color: 'var(--warn)', marginTop: 6, gap: 6 }}>
                     <AlertTriangle size={14} /> {t('import.warnRows', { n: withWarnings.length })}

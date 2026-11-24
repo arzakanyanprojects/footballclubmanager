@@ -474,7 +474,7 @@ async function buildGroups({ columns, sheets, emptyText = '', currencySymbol = '
   }
   // Last sheet: every group's paid / owed amounts per month, then the grand total of all groups.
   const months = columns.filter((c) => c.type === 'month');
-  if (months.length && sheets.length) {
+  if (months.length && sheets.length && !labels.noGrand) {
     const ws = wb.addWorksheet(String(labels.grandSheet || 'Total').slice(0, 31), {
       properties: { tabColor: { argb: INK } },
       views: [{ showGridLines: false, state: 'frozen', ySplit: 2 }],
