@@ -2420,46 +2420,6 @@ function createService(db, { onWrite, getNotify } = {}) {
       }
     },
 
-    // ---------------------------------------------------------------- demo data
-    'demo.load': (p, ctx) => {
-      if (one('SELECT COUNT(*) AS n FROM students').n > 0) throw new AppError('DEMO_NOT_EMPTY');
-      return require('./demo').load({ methods, one, all, run, settings, ctx });
-    },
-
-    // Temporary: deletes all students and everything about them, and all groups (settings, users, templates and
-    // pitches stay). The screen makes a backup first.
-    'demo.wipeAll': ({ confirm }, ctx) => {
-      if (confirm !== 'WIPE') throw new AppError('NOT_CONFIRMED');
-      const tables = ['charges', 'attendance', 'absences', 'student_files', 'contracts', 'outbox', 'student_links', 'students',
-        'training_days', 'training_months', 'schedule_days', 'schedule_base', 'groups'];
-      const counts = Object.fromEntries(tables.map((t) => [t, one(`SELECT COUNT(*) AS n FROM ${t}`).n]));
-      for (const t of tables) run(`DELETE FROM ${t}`);
-      run(`UPDATE settings SET value = '0' WHERE key = 'demo_loaded'`);
-      log(ctx, 'data.wiped', `${counts.students} / ${counts.charges} / ${counts.groups}`);
-      return counts;
-    },
-
-    // Deletes all students and everything about them (payments, attendance, absences, documents, contracts,
-    // messages, sibling links). Groups, their schedule and training days, settings, users and templates stay.
-    // The screen makes a backup first.
-    'demo.wipeStudents': ({ confirm }, ctx) => {
-      if (confirm !== 'WIPE_STUDENTS') throw new AppError('NOT_CONFIRMED');
-      const counts = {
-        students: one('SELECT COUNT(*) AS n FROM students').n,
-        charges: one('SELECT COUNT(*) AS n FROM charges').n,
-      };
-      for (const t of ['charges', 'attendance', 'absences', 'student_files', 'contracts', 'student_links']) run(`DELETE FROM ${t}`);
-      run('DELETE FROM outbox WHERE student_id IS NOT NULL');
-      run('DELETE FROM students');
-      log(ctx, 'students.wiped', `${counts.students} / ${counts.charges}`);
-      return counts;
-    },
-
-    'demo.clear': (p, ctx) => {
-      if (settings().demo_loaded !== '1') throw new AppError('NO_DEMO');
-      return require('./demo').clear({ run, settings, ctx });
-    },
-
     // ---------------------------------------------------------------- activity
     // The activity log (kept for good): searched and filtered, newest first, a page at a time.
     // q: words in the details, the user, the student's name or what changed; actions: action keys whose

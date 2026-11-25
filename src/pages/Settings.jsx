@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { FileDigit, FlaskConical, Trash2, Building2, Monitor, Network, History, Save, RefreshCw, Copy, LogOut, Server, Receipt, UserCog, ImagePlus, BellRing, Database, Printer, Plus } from 'lucide-react';
+import { FileDigit, Trash2, Building2, Monitor, Network, History, Save, RefreshCw, Copy, LogOut, Server, Receipt, UserCog, ImagePlus, BellRing, Database, Printer, Plus } from 'lucide-react';
 import { useT, monthName } from '../i18n';
 import { feeShares, parseHolidays } from '../holidays';
 import { useRpc, rpc, fmtDateTime, currentPeriod, fitImage } from '../lib';
@@ -67,17 +67,6 @@ function ClubSettings() {
   const set = (k) => (e) => {
     lock.ensure();
     setF({ ...f, [k]: e.target.value });
-  };
-  const demoLoaded = data?.demo_loaded === '1';
-  const toggleDemo = async () => {
-    const ok = await confirm(
-      demoLoaded
-        ? { title: t('demo.remove'), text: t('demo.removeConfirm'), confirmLabel: t('demo.remove') }
-        : { title: t('demo.load'), text: t('demo.loadConfirm'), confirmLabel: t('demo.load'), danger: false }
-    );
-    if (!ok) return;
-    const r = await act(() => rpc(demoLoaded ? 'demo.clear' : 'demo.load'), demoLoaded ? t('demo.removed') : t('demo.loaded'));
-    if (r) setF(null);
   };
   return (
     <>
@@ -154,22 +143,6 @@ function ClubSettings() {
       </div>
     </div>
     <ContractNumbering />
-    <div className="card settings-section">
-      <div className="card-head">
-        <FlaskConical size={17} />
-        <h3>{t('demo.title')}</h3>
-        <div className="spacer" />
-        {demoLoaded && <Badge tone="warn">{t('demo.active')}</Badge>}
-      </div>
-      <div className="card-pad">
-        <div className="muted small">{demoLoaded ? t('demo.loadedText') : t('demo.text')}</div>
-        <div className="row">
-          <Button variant={demoLoaded ? 'danger' : undefined} icon={demoLoaded ? Trash2 : FlaskConical} onClick={toggleDemo}>
-            {demoLoaded ? t('demo.remove') : t('demo.load')}
-          </Button>
-        </div>
-      </div>
-    </div>
     </>
   );
 }
