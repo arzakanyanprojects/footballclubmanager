@@ -17,6 +17,7 @@ export default function DataManagement({ appState, setAppState }) {
       {auth.can('students', 'edit') && <ImportCard />}
       {auth.can('students', 'view') && <TransferCard />}
       {isHost && auth.can('settings', 'view') && <BackupsCard appState={appState} setAppState={setAppState} />}
+      {isHost && auth.can('settings', 'edit') && <WipeCard setAppState={setAppState} kind="students" />}
       {isHost && auth.can('settings', 'edit') && <WipeCard setAppState={setAppState} />}
     </>
   );
@@ -139,9 +140,11 @@ function TransferCard() {
   );
 }
 
-// Temporary: delete all students and groups (a backup is made first; it can be restored from «Պահուստային պատճեններ»).
-function WipeCard({ setAppState }) {
+// Delete all students (kind 'students': groups stay) or all students and groups. A backup is made first;
+// it can be restored from «Պահուստային պատճեններ».
+function WipeCard({ setAppState, kind = 'all' }) {
   const t = useT();
+  const k = kind === 'students' ? 'wipeStudents' : 'wipe';
   const act = useAction();
   const [open, setOpen] = useState(false);
   const [word, setWord] = useState('');
@@ -150,7 +153,7 @@ function WipeCard({ setAppState }) {
     const r = await act(async () => {
       const b = await window.fc.backup.create();
       if (!b.ok) throw Object.assign(new Error(b.error), { code: 'BACKUP_FAILED', detail: b.error });
-      return rpc('demo.wipeAll', { confirm: 'WIPE' });
+      return kind === 'students' ? rpc('demo.wipeStudents', { confirm: 'WIPE_STUDENTS' }) : rpc('demo.wipeAll', { confirm: 'WIPE' });
     });
     if (r) {
       setOpen(false);
@@ -160,37 +163,37 @@ function WipeCard({ setAppState }) {
     }
   };
   const toastApi = useToast();
-  const toast = (r) => toastApi.success(t('wipe.done', { students: r.students, payments: r.charges, groups: r.groups }));
+  const toast = (r) => toastApi.success(t(`${k}.done`, { students: r.students, payments: r.charges, groups: r.groups }));
   return (
     <div className="card settings-section" style={{ borderColor: 'var(--bad)' }}>
       <div className="card-head">
         <Trash2 size={17} style={{ color: 'var(--bad)' }} />
-        <h3 style={{ color: 'var(--bad)' }}>{t('wipe.title')}</h3>
+        <h3 style={{ color: 'var(--bad)' }}>{t(`${k}.title`)}</h3>
       </div>
       <div className="card-pad">
-        <div className="muted small">{t('wipe.text')}</div>
+        <div className="muted small">{t(`${k}.text`)}</div>
         <div className="row">
           <Button variant="danger" icon={Trash2} onClick={() => setOpen(true)}>
-            {t('wipe.button')}
+            {t(`${k}.button`)}
           </Button>
         </div>
       </div>
       {open && (
         <Modal
-          title={t('wipe.title')}
+          title={t(`${k}.title`)}
           onClose={() => setOpen(false)}
           width={460}
           footer={
             <>
               <Button onClick={() => setOpen(false)}>{t('common.cancel')}</Button>
               <Button variant="danger-solid" icon={Trash2} onClick={run} disabled={word.trim().toUpperCase() !== WORD.toUpperCase()}>
-                {t('wipe.button')}
+                {t(`${k}.button`)}
               </Button>
             </>
           }
         >
           <div className="stack" style={{ gap: 12 }}>
-            <div className="small">{t('wipe.confirmText')}</div>
+            <div className="small">{t(`${k}.confirmText`)}</div>
             <Field label={t('wipe.typeWord', { word: WORD })}>
               <input className="input" value={word} onChange={(e) => setWord(e.target.value)} autoFocus />
             </Field>

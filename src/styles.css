@@ -764,6 +764,43 @@ table.table { width: 100%; border-collapse: collapse; }
 .fill-page > .table-wrap { flex: 1; min-height: 180px; }
 .fill-page > .table-wrap .table-foot { position: sticky; left: 0; }
 
+/* «Հաշվետվություններ» fits the window: the page itself doesn't scroll, a long list scrolls inside its own card.
+   On a very small window the page scrolls after all rather than squeezing the cards to nothing. */
+.dash-page { min-height: 560px; }
+.dash-page > .stats { flex-shrink: 0; }
+.dash-page > .dash-grid { flex: 1; min-height: 0; grid-template-rows: minmax(0, 1fr); }
+.dash-col { display: flex; flex-direction: column; gap: 16px; min-height: 0; }
+.dash-col > .card { flex-shrink: 0; }
+.dash-col > .dash-fill { flex: 1 1 0; min-height: 140px; display: flex; flex-direction: column; overflow: hidden; }
+.dash-col > .dash-small { flex: 0 1 auto; max-height: 32%; }
+.dash-fill > .card-head { flex-shrink: 0; }
+.dash-fill > :not(.card-head) { flex: 1; min-height: 0; overflow-y: auto; }
+.dash-col > .dash-chart { flex: 1 1 0; min-height: 170px; max-height: 330px; display: flex; flex-direction: column; overflow: hidden; }
+.dash-chart > .card-head { flex-shrink: 0; }
+.dash-chart > .chart { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.chart-box { position: relative; }
+.dash-chart .chart-box { flex: 1; min-height: 0; }
+.dash-col .card-head h3 { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.dash-col .card-head .btn { flex-shrink: 0; }
+.dash-col .card-head h3 { flex: 0 1 auto; }
+/* A narrow card (smaller window): the title keeps its room, «Հիշեցնել բոլորին» shows just its icon. */
+.dash-col > .dash-fill { container-type: inline-size; }
+@container (max-width: 520px) {
+  .dash-remind .btn-label { display: none; }
+  .dash-remind { padding-left: 8px; padding-right: 8px; }
+}
+/* Short windows (a 1366×768 laptop): a little less air, so it still fits. */
+@media (max-height: 820px) {
+  .page:has(> .dash-page) { padding-top: 16px; padding-bottom: 16px; }
+  .dash-page > .page-head { margin-bottom: 12px; }
+  .dash-page > .stats { margin-bottom: 12px; gap: 12px; }
+  .dash-page .stat { padding-top: 12px; padding-bottom: 12px; }
+  .dash-page > .dash-grid, .dash-col { gap: 12px; }
+  .dash-col > .dash-chart { min-height: 150px; }
+  .dash-chart .chart-hint { display: none; }
+  .dash-col > .dash-fill { min-height: 110px; }
+}
+
 /* ---------------------------------------------------------------- «Հաշվետվություններ» */
 .reports-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .reports-item {

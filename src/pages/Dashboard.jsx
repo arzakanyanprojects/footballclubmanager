@@ -21,7 +21,7 @@ export default function Dashboard({ nav }) {
   const delta = data.collectedThisMonth - data.collectedLastMonth;
 
   return (
-    <>
+    <div className="fill-page dash-page">
       <div className="page-head">
         <div>
           <h1>{t('nav.dashboard')}</h1>
@@ -87,7 +87,7 @@ export default function Dashboard({ nav }) {
       </div>
 
       <div className="dash-grid">
-        <div className="stack" style={{ gap: 16 }}>
+        <div className="dash-col">
           <div className="card">
             <div className="card-head">
               <h3>{t('dash.monthlyFees', { month: monthName(t, data.collections.at(-1).period) })}</h3>
@@ -109,7 +109,7 @@ export default function Dashboard({ nav }) {
             </div>
           </div>
 
-          <div className="card">
+          <div className="card dash-chart">
             <div className="card-head">
               <h3>{t(chartMode === 'fees' ? 'dash.feesPaid' : 'dash.collections')}</h3>
               <div className="spacer" />
@@ -121,11 +121,11 @@ export default function Dashboard({ nav }) {
                 ))}
               </div>
             </div>
-            <div className="small muted" style={{ padding: '0 18px' }}>{t(chartMode === 'fees' ? 'dash.feesPaidHint' : 'dash.collectionsHint')}</div>
+            <div className="small muted chart-hint" style={{ padding: '0 18px' }}>{t(chartMode === 'fees' ? 'dash.feesPaidHint' : 'dash.collectionsHint')}</div>
             <CollectionsChart rows={chartMode === 'fees' ? data.feesPaid || data.collections : data.collections} currency={currency} />
           </div>
 
-          <div className="card">
+          <div className="card dash-fill">
             <div className="card-head">
               <h3>{t('dash.recentPayments')}</h3>
             </div>
@@ -152,8 +152,8 @@ export default function Dashboard({ nav }) {
           </div>
         </div>
 
-        <div className="stack" style={{ gap: 16 }}>
-          <div className="card">
+        <div className="dash-col">
+          <div className="card dash-fill" style={{ flexGrow: 3 }}>
             <div className="card-head">
               <h3>{t('dash.debtors')}</h3>
               <div className="spacer" />
@@ -188,7 +188,7 @@ export default function Dashboard({ nav }) {
           </div>
 
           {data.expiringContracts.length > 0 && (
-            <div className="card">
+            <div className="card dash-fill dash-small">
               <div className="card-head">
                 <FileClock size={17} />
                 <h3>{t('dash.expiringContracts')}</h3>
@@ -207,7 +207,7 @@ export default function Dashboard({ nav }) {
             </div>
           )}
 
-          <div className="card">
+          <div className="card dash-fill" style={{ flexGrow: 2 }}>
             <div className="card-head">
               <h3>{t('dash.activity')}</h3>
             </div>
@@ -234,7 +234,7 @@ export default function Dashboard({ nav }) {
           </div>
         </div>
       </div>
-    </>
+    </div>
   );
 }
 
@@ -242,15 +242,16 @@ export default function Dashboard({ nav }) {
 function CollectionsChart({ rows, currency }) {
   const t = useT();
   const [hover, setHover] = useState(null);
-  // Draw at the card's real width with a fixed height, so the chart doesn't grow taller on wide windows.
+  // Draw at the room the card has: its width, and the height the page gives it (the page fits the window).
   const box = useRef(null);
-  const [W, setW] = useState(640);
+  const [{ W, H }, setSize] = useState({ W: 640, H: 150 });
   useEffect(() => {
-    const ro = new ResizeObserver(([e]) => setW(Math.max(320, Math.round(e.contentRect.width))));
+    const ro = new ResizeObserver(([e]) =>
+      setSize({ W: Math.max(320, Math.round(e.contentRect.width)), H: Math.min(260, Math.max(70, Math.round(e.contentRect.height))) }),
+    );
     ro.observe(box.current);
     return () => ro.disconnect();
   }, []);
-  const H = 150;
   const pad = { l: 56, r: 8, t: 12, b: 26 };
   const max = Math.max(...rows.map((r) => r.total), 1);
   const step = niceStep(max / 4);
@@ -264,7 +265,7 @@ function CollectionsChart({ rows, currency }) {
 
   return (
     <div className="chart">
-      <div style={{ position: 'relative' }} ref={box}>
+      <div className="chart-box" ref={box}>
       <svg viewBox={`0 0 ${W} ${H}`} height={H} role="img" aria-label={t('dash.collections')}>
         {ticks.map((v) => (
           <g key={v}>
@@ -327,6 +328,8 @@ function DebtorsMessageButton() {
     <Button
       size="sm"
       icon={MessageCircle}
+      title={t('messenger.remindAll')}
+      className="dash-remind"
       disabled={busy}
       onClick={async () => {
         setBusy(true);
@@ -339,7 +342,7 @@ function DebtorsMessageButton() {
         }
       }}
     >
-      {t('messenger.remindAll')}
+      <span className="btn-label">{t('messenger.remindAllShort')}</span>
     </Button>
   );
 }
