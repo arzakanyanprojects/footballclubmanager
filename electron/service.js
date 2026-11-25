@@ -880,20 +880,23 @@ function createService(db, { onWrite, getNotify } = {}) {
         assistant_phone: str(p.assistant_phone),
         color: str(p.color),
         archived: p.archived ? 1 : 0,
+        monthly_fee: Math.max(int(p.monthly_fee), 0),
+        championship: p.championship ? 1 : 0,
       };
       if (p.id) {
         checkVersion('groups', p.id, p.version, null);
         run(
           `UPDATE groups SET name = :name, coach = :coach, coach_phone = :coach_phone, assistant = :assistant,
-                  assistant_phone = :assistant_phone, color = :color, archived = :archived WHERE id = :id`,
+                  assistant_phone = :assistant_phone, color = :color, archived = :archived,
+                  monthly_fee = :monthly_fee, championship = :championship WHERE id = :id`,
           row
         );
         log(ctx, 'group.updated', row.name);
         return { id: p.id };
       }
       const r = run(
-        `INSERT INTO groups (name, coach, coach_phone, assistant, assistant_phone, color, archived)
-         VALUES (:name, :coach, :coach_phone, :assistant, :assistant_phone, :color, :archived)`,
+        `INSERT INTO groups (name, coach, coach_phone, assistant, assistant_phone, color, archived, monthly_fee, championship)
+         VALUES (:name, :coach, :coach_phone, :assistant, :assistant_phone, :color, :archived, :monthly_fee, :championship)`,
         row
       );
       log(ctx, 'group.created', row.name);
@@ -1681,7 +1684,7 @@ function createService(db, { onWrite, getNotify } = {}) {
     // ---------------------------------------------------------------- charges & payments
     'charges.list': (p = {}) => {
       const rows = all(
-        `SELECT c.*, s.first_name, s.last_name, s.group_id, s.category, g.name AS group_name, pr.name AS product_name,
+        `SELECT c.*, s.first_name, s.last_name, s.group_id, s.category, s.join_date, s.monthly_fee AS student_fee, g.name AS group_name, pr.name AS product_name,
                 (SELECT a.file_id FROM absences a WHERE a.student_id = c.student_id AND a.date_from = c.absence_from AND a.date_to = c.absence_to AND a.file_id IS NOT NULL ORDER BY a.id DESC LIMIT 1) AS absence_file_id
          FROM charges c
          JOIN students s ON s.id = c.student_id

@@ -303,7 +303,7 @@ function GroupModal({ group, onClose }) {
   const t = useT();
   const act = useAction();
   const lock = useEditLock(group.id ? `group:${group.id}` : null);
-  const [f, setF] = useState({ name: '', coach: '', coach_phone: '', assistant: '', assistant_phone: '', color: COLORS[0], archived: 0, ...group });
+  const [f, setF] = useState({ name: '', coach: '', coach_phone: '', assistant: '', assistant_phone: '', color: COLORS[0], archived: 0, monthly_fee: '', championship: 0, ...group });
   const set = (k) => (e) => setF({ ...f, [k]: e?.target ? e.target.value : e });
   const save = async () => {
     if (await act(() => rpc('groups.save', f), t('common.saved'))) onClose();
@@ -339,6 +339,15 @@ function GroupModal({ group, onClose }) {
           </Field>
           <Field label={t('groups.assistantPhone')}>
             <input className="input" value={f.assistant_phone || ''} onChange={set('assistant_phone')} />
+          </Field>
+          <Field label={t('groups.fullFee')} hint={t('groups.fullFeeHint')}>
+            <input className="input" type="number" min="0" step="500" value={f.monthly_fee || ''} onChange={set('monthly_fee')} />
+          </Field>
+          <Field label=" ">
+            <label className="check" style={{ height: 38 }} title={t('groups.championshipHint')}>
+              <input type="checkbox" checked={!!f.championship} onChange={(e) => set('championship')(e.target.checked)} />
+              {t('groups.championship')}
+            </label>
           </Field>
         </div>
         <Field label={t('groups.color')}>

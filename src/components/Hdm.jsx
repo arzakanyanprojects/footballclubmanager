@@ -114,7 +114,8 @@ function ReceiptModal({ job, test, operator, onClose }) {
     setState('printing');
     setError(null);
     const r = await window.fc.hdmPrint({
-      items: job.items.map(({ label, amount, discountPct }) => ({ label, amount: Number(amount), ...(discountPct ? { discountPct: Number(discountPct) } : {}) })),
+      items: job.items.map(({ label, amount, fullPrice }) => ({ label, amount: Number(amount), ...(Number(fullPrice) > Number(amount) ? { fullPrice: Number(fullPrice) } : {}) })),
+      champ: !!job.champ,
       total,
       method: job.method,
       student: job.student,
@@ -246,7 +247,8 @@ function ReceiptSlip({ job, total, result, test, operator, faded }) {
       )}
       <div className="sep" />
       {job.items.map((i, k) => {
-        const pct = Number(i.discountPct);
+        const full = Number(i.fullPrice) || 0;
+        const pct = full > Number(i.amount) ? Math.round(((full - Number(i.amount)) / full) * 10000) / 100 : 0;
         if (!(pct > 0 && pct < 100))
           return (
             <div className="line" key={k}>
@@ -255,7 +257,6 @@ function ReceiptSlip({ job, total, result, test, operator, faded }) {
             </div>
           );
         // As the ՀԴՄ prints it: the full price, «Զեղչ», then what is paid.
-        const full = Math.round((Number(i.amount) * 100) / (100 - pct));
         return (
           <Fragment key={k}>
             <div className="line">
@@ -425,6 +426,14 @@ export function HdmSettings({ settings, onChange }) {
               ))}
             </div>
             {device && <div className="hint">{t('hdm.methodsDeviceHint')}</div>}
+          </div>
+          <div className="grid-2">
+            <Field label={t('hdm.champProductName')} hint={t('hdm.champHint')}>
+              <input className="input" value={s.champProductName ?? ''} placeholder="Ուսումնամարզական ծառայություն առաջնության թիմ" onChange={(e) => set({ champProductName: e.target.value })} />
+            </Field>
+            <Field label={t('hdm.champProductCode')}>
+              <input className="input" value={s.champProductCode ?? ''} placeholder="1.7.7" onChange={(e) => set({ champProductCode: e.target.value })} />
+            </Field>
           </div>
           <Field label={t('hdm.discountFormat')} hint={t('hdm.discountFormatHint')}>
             <select className="select" style={{ maxWidth: 320 }} value={s.discountFormat || 'percent'} onChange={(e) => set({ discountFormat: e.target.value })}>

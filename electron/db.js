@@ -437,6 +437,14 @@ const MIGRATIONS = [
   INSERT OR IGNORE INTO settings (key, value) VALUES ('contract_prefix', '26-08-');
   INSERT OR IGNORE INTO settings (key, value) VALUES ('contract_next', '1130');
   `,
+  // v35: each group's full monthly fee (what a discount on a ՀԴՄ receipt is counted from) and whether it is a
+  // championship team («Առաջնության թիմ» — its receipts have their own line). The club's ԱՌ groups are the
+  // championship teams at 35 000; the others 30 000.
+  `
+  ALTER TABLE groups ADD COLUMN championship INTEGER NOT NULL DEFAULT 0;
+  UPDATE groups SET championship = 1 WHERE name LIKE 'ԱՌ%';
+  UPDATE groups SET monthly_fee = CASE WHEN championship = 1 THEN 35000 ELSE 30000 END WHERE IFNULL(monthly_fee, 0) = 0;
+  `,
 ];
 
 function seed(db) {

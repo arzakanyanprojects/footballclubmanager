@@ -24,6 +24,9 @@ const DEFAULTS = {
   productName: 'Ուսումնամարզական ծառայություն',
   adgCode: '85.51',
   productCode: '1.7.6',
+  // Championship teams («Առաջնության թիմ» groups) have their own receipt line.
+  champProductName: 'Ուսումնամարզական ծառայություն առաջնության թիմ',
+  champProductCode: '1.7.7',
   unit: 'ամիս',
   methods: ['card'], // payment methods that need a receipt
   // «Զեղչով վճարում»: how the discount shows on the receipt — 'percent' (Զեղչ 50%) or 'amount' (Զեղչ 15,000)
@@ -205,10 +208,11 @@ const fail = (err) => ({ ok: false, error: err.code || 'HDM_DEVICE_ERROR', detai
 // ---------------------------------------------------------------- actions
 
 /**
- * receipt: { items: [{ label, amount, discountPct? }], total, method, student, cashier }
- * discountPct (a discounted student's payment): the line goes at the full price with the discount, so the
- * receipt shows «Զեղչ» (protocol v0.7.3: discount + discountType 1 = percent, 4 = an amount off the line;
+ * receipt: { items: [{ label, amount, fullPrice? }], total, method, student, cashier, champ? }
+ * fullPrice (a discounted payment, «Զեղչով վճարում»): the line goes at the full price with the discount, so
+ * the receipt shows «Զեղչ» (protocol v0.7.3: discount + discountType 1 = percent, 4 = an amount off the line;
  * the fields are left out when there is no discount). What is paid stays `amount`.
+ * champ: a championship team's payment — the receipt line is the championship one.
  * nextTestNo: returns the next simulated receipt number (test mode)
  * In device mode the receipt is an itemised fiscal receipt (mode 2): one line per payment (a month's fee)
  * with the configured service name and codes, quantity 1. Card payments go through the ՀԴՄ's own POS
@@ -242,8 +246,8 @@ async function printReceipt(settings, receipt, nextTestNo) {
         dep,
         qty: 1,
         ...discounted(i, settings.discountFormat),
-        productCode: String(settings.productCode || DEFAULTS.productCode).slice(0, 50),
-        productName: String(settings.productName || DEFAULTS.productName).slice(0, 50),
+        productCode: String((receipt.champ ? settings.champProductCode || DEFAULTS.champProductCode : settings.productCode) || DEFAULTS.productCode).slice(0, 50),
+        productName: String((receipt.champ ? settings.champProductName || DEFAULTS.champProductName : settings.productName) || DEFAULTS.productName).slice(0, 50),
         adgCode: String(settings.adgCode || DEFAULTS.adgCode),
         unit: String(settings.unit || DEFAULTS.unit).slice(0, 50),
       });
@@ -270,16 +274,19 @@ async function printReceipt(settings, receipt, nextTestNo) {
   }
 }
 
-// One receipt line's price and discount. amount: what is paid for it; pct: the student's discount (0 < pct < 100).
-// percent: price = the full price, discount = pct (type 1) — used only when the device's own sum (rounded up to
+// One receipt line's price and discount. amount: what is paid for it; fullPrice: the full price (the group's
+// full monthly fee for that month). The % is counted from them (30 000 → 15 000 = 50%, → 3 000 = 90%).
+// percent: price = the full price, discount = % (type 1) — used only when the device's own sum (rounded up to
 // 0.01) gives exactly the amount paid; otherwise (and for format 'amount') the discount is the amount off (type 4).
 const ceil2 = (v) => Math.ceil(Math.round(v * 1000) / 10) / 100;
 function discounted(i, format) {
   const amount = round2(i.amount);
-  const pct = Number(i.discountPct);
-  if (!(pct > 0 && pct < 100)) return { price: amount };
-  const full = round2((amount * 100) / (100 - pct));
-  if (format !== 'amount' && ceil2(full - (full * pct) / 100) === amount) return { price: full, discount: pct, discountType: 1 };
+  let full = Number(i.fullPrice) > 0 ? round2(i.fullPrice) : 0;
+  const given = Number(i.discountPct);
+  if (!full && given > 0 && given < 100) full = round2((amount * 100) / (100 - given));
+  if (!(full > amount) || !(amount > 0)) return { price: amount };
+  const pct = round2(((full - amount) / full) * 100);
+  if (format !== 'amount' && pct > 0 && pct < 100 && ceil2(full - (full * pct) / 100) === amount) return { price: full, discount: pct, discountType: 1 };
   return { price: full, discount: round2(full - amount), discountType: 4 };
 }
 

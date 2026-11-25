@@ -310,7 +310,7 @@ export default function Students({ nav, route }) {
                 onClick={(e) => {
                   if (!payable) return;
                   e.stopPropagation();
-                  setPaying([{ ...m, kind: 'monthly', student_id: s.id, first_name: s.first_name, last_name: s.last_name }]);
+                  setPaying([{ ...m, kind: 'monthly', student_id: s.id, first_name: s.first_name, last_name: s.last_name, group_id: s.group_id, category: s.category, join_date: s.join_date, student_fee: s.monthly_fee }]);
                 }}
               >
                 {MONTH_MARK[st] ?? '·'}
