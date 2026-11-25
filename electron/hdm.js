@@ -27,6 +27,9 @@ const DEFAULTS = {
   // Championship teams («Առաջնության թիմ» groups) have their own receipt line.
   champProductName: 'Ուսումնամարզական ծառայություն առաջնության թիմ',
   champProductCode: '1.7.7',
+  // A service of its own on the receipt (the student's «Ծառայություններ»), e.g. goalkeeper training; the other
+  // services use their group's line.
+  serviceLines: { 'Դարպասապահ 4': { name: 'Դարպասապահների ամսական 4 մարզում', code: '2005' } },
   unit: 'ամիս',
   methods: ['card'], // payment methods that need a receipt
   testCounter: 0,
@@ -211,6 +214,8 @@ const fail = (err) => ({ ok: false, error: err.code || 'HDM_DEVICE_ERROR', detai
  * the receipt shows «Զեղչ» (protocol v0.7.3: discount + discountType 1 = percent, 4 = an amount off the line;
  * the fields are left out when there is no discount). What is paid stays `amount`.
  * champ: a championship team's payment — the receipt line is the championship one.
+ * service: the student's service — a service with its own line (e.g. goalkeeper training) uses that line.
+ * The result tells the line printed (line: { code, name, unit }), saved with the payments for the reports.
  * nextTestNo: returns the next simulated receipt number (test mode)
  * In device mode the receipt is an itemised fiscal receipt (mode 2): one line per payment (a month's fee)
  * with the configured service name and codes, quantity 1. Card payments go through the ՀԴՄ's own POS
@@ -219,11 +224,13 @@ const fail = (err) => ({ ok: false, error: err.code || 'HDM_DEVICE_ERROR', detai
 async function printReceipt(settings, receipt, nextTestNo) {
   if (!settings.enabled) return { ok: false, error: 'HDM_DISABLED' };
   if (!receipt?.items?.length || !(receipt.total > 0)) return { ok: false, error: 'AMOUNT_REQUIRED' };
+  const line = lineFor(settings, receipt);
   if (settings.mode !== 'device') {
     await sleep(1300); // roughly how long a real device takes to answer
     return {
       ok: true,
       result: {
+        line,
         test: true,
         receiptNo: `T-${String(nextTestNo()).padStart(6, '0')}`,
         fiscalNo: String(Math.floor(10000000 + Math.random() * 89999999)),
@@ -244,10 +251,10 @@ async function printReceipt(settings, receipt, nextTestNo) {
         dep,
         qty: 1,
         ...discounted(i),
-        productCode: String((receipt.champ ? settings.champProductCode || DEFAULTS.champProductCode : settings.productCode) || DEFAULTS.productCode).slice(0, 50),
-        productName: String((receipt.champ ? settings.champProductName || DEFAULTS.champProductName : settings.productName) || DEFAULTS.productName).slice(0, 50),
+        productCode: line.code,
+        productName: line.name,
         adgCode: String(settings.adgCode || DEFAULTS.adgCode),
-        unit: String(settings.unit || DEFAULTS.unit).slice(0, 50),
+        unit: line.unit,
       });
       const body = {
         mode: 2,
@@ -264,12 +271,25 @@ async function printReceipt(settings, receipt, nextTestNo) {
       // A card payment waits for the customer at the terminal.
       return op(OP.receipt, body, Number(process.env.FC_HDM_WAIT_MS) || (onDevicePos ? 180000 : 60000));
     });
-    return { ok: true, result: asResult(r) };
+    return { ok: true, result: { ...asResult(r), line } };
   } catch (err) {
     // Sent, but the answer never came: the receipt may or may not have been printed.
     if (sent && err.code === 'HDM_NO_ANSWER') err.uncertain = true;
     return fail(err);
   }
+}
+
+// The receipt line of a payment: the student's service when it has a line of its own, else the group's
+// (championship teams' or the regular one).
+function lineFor(settings, { champ, service } = {}) {
+  const own = (settings.serviceLines || DEFAULTS.serviceLines || {})[service];
+  const pick =
+    own && String(own.name || '').trim() && String(own.code || '').trim()
+      ? { name: own.name, code: own.code }
+      : champ
+        ? { name: settings.champProductName || DEFAULTS.champProductName, code: settings.champProductCode || DEFAULTS.champProductCode }
+        : { name: settings.productName || DEFAULTS.productName, code: settings.productCode || DEFAULTS.productCode };
+  return { name: String(pick.name).trim().slice(0, 50), code: String(pick.code).trim().slice(0, 50), unit: String(settings.unit || DEFAULTS.unit).slice(0, 50) };
 }
 
 // One receipt line's price and discount. amount: what is paid for it; fullPrice: the full price (the group's
@@ -345,4 +365,5 @@ async function action(settings, { kind, receiptNo, crn }) {
 }
 
 module.exports = {
-  discounted, DEFAULTS, printReceipt, testConnection, action, _protocol: { passwordKey, encrypt, decrypt, MAGIC, VERSION } };
+  discounted,
+  lineFor, DEFAULTS, printReceipt, testConnection, action, _protocol: { passwordKey, encrypt, decrypt, MAGIC, VERSION } };

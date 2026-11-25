@@ -799,6 +799,13 @@ function createService(db, { onWrite, getNotify } = {}) {
         newThisMonth: one(`SELECT COUNT(*) AS n FROM students WHERE substr(join_date, 1, 7) = :period`, { period }).n,
         collectedThisMonth: byPeriod[period] || 0,
         collectedLastMonth: byPeriod[addMonths(period, -1)] || 0,
+        // Today's sales: the payments taken today, and how much of it went through the ՀԴՄ.
+        today: one(
+          `SELECT IFNULL(SUM(amount), 0) AS total, COUNT(*) AS count,
+                  IFNULL(SUM(CASE WHEN hdm_receipt IS NOT NULL THEN amount END), 0) AS hdm
+           FROM charges WHERE status = 'paid' AND substr(paid_at, 1, 10) = :t`,
+          { t }
+        ),
         overdue: one(
           `SELECT IFNULL(SUM(amount), 0) AS total, COUNT(DISTINCT student_id) AS students
            FROM charges WHERE status = 'unpaid' AND due_date < :t`,
@@ -1684,7 +1691,7 @@ function createService(db, { onWrite, getNotify } = {}) {
     // ---------------------------------------------------------------- charges & payments
     'charges.list': (p = {}) => {
       const rows = all(
-        `SELECT c.*, s.first_name, s.last_name, s.group_id, s.category, s.join_date, s.monthly_fee AS student_fee, g.name AS group_name, pr.name AS product_name,
+        `SELECT c.*, s.first_name, s.last_name, s.group_id, s.category, s.join_date, s.service, s.monthly_fee AS student_fee, g.name AS group_name, pr.name AS product_name,
                 (SELECT a.file_id FROM absences a WHERE a.student_id = c.student_id AND a.date_from = c.absence_from AND a.date_to = c.absence_to AND a.file_id IS NOT NULL ORDER BY a.id DESC LIMIT 1) AS absence_file_id
          FROM charges c
          JOIN students s ON s.id = c.student_id
@@ -1933,11 +1940,17 @@ function createService(db, { onWrite, getNotify } = {}) {
     },
 
     // Saves the ՀԴՄ receipt number printed for these payments.
-    'charges.setReceipt': ({ ids, receipt, crn, fiscal }, ctx) => {
+    // line: the receipt line printed ({ code, name, unit }); full: { chargeId: the full price before the discount }.
+    'charges.setReceipt': ({ ids, receipt, crn, fiscal, line, full }, ctx) => {
       for (const id of ids || []) {
         run(
-          `UPDATE charges SET hdm_receipt = :receipt, hdm_crn = :crn, hdm_fiscal = :fiscal, hdm_at = datetime('now', 'localtime') WHERE id = :id`,
-          { id, receipt: str(receipt), crn: str(crn), fiscal: str(fiscal) }
+          `UPDATE charges SET hdm_receipt = :receipt, hdm_crn = :crn, hdm_fiscal = :fiscal, hdm_at = datetime('now', 'localtime'),
+                  hdm_code = :code, hdm_name = :name, hdm_unit = :unit, hdm_full = :full WHERE id = :id`,
+          {
+            id, receipt: str(receipt), crn: str(crn), fiscal: str(fiscal),
+            code: str(line?.code), name: str(line?.name), unit: str(line?.unit),
+            full: full && Number(full[id]) > 0 ? Math.round(Number(full[id])) : null,
+          }
         );
       }
       log(ctx, 'charge.receipt', `${receipt} — ${(ids || []).length}`);
@@ -1959,7 +1972,8 @@ function createService(db, { onWrite, getNotify } = {}) {
         log(ctx, 'charge.hdmReturned', `№ ${receipt}`, r.student_id, { ...chargeMeta(r.id), receipt: str(receipt), returnNo: str(returnNo) });
         run(
           `UPDATE charges SET status = 'unpaid', paid_at = NULL, method = NULL, paid_by = NULL,
-             note = TRIM(IFNULL(note, '') || ' ' || :mark), hdm_receipt = NULL, hdm_crn = NULL, hdm_fiscal = NULL, hdm_at = NULL
+             note = TRIM(IFNULL(note, '') || ' ' || :mark), hdm_receipt = NULL, hdm_crn = NULL, hdm_fiscal = NULL, hdm_at = NULL,
+             hdm_code = NULL, hdm_name = NULL, hdm_unit = NULL, hdm_full = NULL
            WHERE id = :id`,
           { id: r.id, mark: `[ՀԴՄ վերադարձ ${str(returnNo) || ''} ← № ${str(receipt)}]` }
         );
@@ -2380,6 +2394,30 @@ function createService(db, { onWrite, getNotify } = {}) {
              ) ORDER BY date, gname COLLATE NOCASE, lname COLLATE NOCASE`,
             { f, tt, gid }
           );
+        // «Վաճառքների վերլուծություն» as ՀԾ makes it: one row per payment with a ՀԴՄ receipt, on the receipt's
+        // day. Payments from before the receipt line was saved get it from their group (and their discount
+        // from the group's full fee, for students with a discount status).
+        case 'salesAnalysis': {
+          const H = require('./hdm');
+          const rows = all(
+            `SELECT substr(IFNULL(c.hdm_at, c.paid_at), 1, 10) AS day, c.hdm_receipt, c.hdm_code, c.hdm_name, c.hdm_unit, c.hdm_full,
+                    c.amount, c.kind, c.period, s.category, s.join_date, s.service, g.monthly_fee AS group_fee, g.championship
+             FROM charges c JOIN students s ON s.id = c.student_id LEFT JOIN groups g ON g.id = s.group_id
+             WHERE c.status = 'paid' AND c.hdm_receipt IS NOT NULL
+               AND substr(IFNULL(c.hdm_at, c.paid_at), 1, 10) BETWEEN :f AND :tt ${groupFilter}
+             ORDER BY IFNULL(c.hdm_at, c.paid_at), CAST(c.hdm_receipt AS INTEGER), c.id`,
+            { f, tt, gid }
+          );
+          return rows.map((r) => {
+            const line = r.hdm_code ? { code: r.hdm_code, name: r.hdm_name || '', unit: r.hdm_unit || 'ամիս' } : H.lineFor(H.DEFAULTS, { champ: !!r.championship, service: r.service });
+            let full = r.hdm_full;
+            if (full == null)
+              full = r.kind === 'monthly' && ['siblings', 'half', 'orphan', 'staff'].includes(r.category) && Number(r.group_fee) > 0
+                ? Math.max(studentFee(r.group_fee, r.period, r.join_date), r.amount)
+                : r.amount;
+            return { day: r.day, receipt: r.hdm_receipt, code: line.code, name: line.name, unit: line.unit, amount: r.amount, full: Math.max(full, r.amount) };
+          });
+        }
         case 'hdmReceipts':
           return all(
             `SELECT c.paid_at, ${student} AS student, g.name AS group_name, c.kind, c.period, c.description, c.amount, c.method,

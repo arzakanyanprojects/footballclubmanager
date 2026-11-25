@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Users, Wallet, AlertTriangle, CalendarCheck, Plus, ChevronRight, FileClock, FileSpreadsheet, MessageCircle } from 'lucide-react';
+import { Users, Wallet, AlertTriangle, CalendarCheck, Plus, ChevronRight, FileClock, FileSpreadsheet, MessageCircle, Banknote } from 'lucide-react';
 import { useT, monthName } from '../i18n';
 import { useCan } from '../components/Auth';
 import { MessageButton, useMessenger } from '../components/Messenger';
@@ -56,6 +56,19 @@ export default function Dashboard({ nav }) {
           <div className="stat-sub">
             {delta >= 0 ? '+' : '−'}
             {money(Math.abs(delta), currency)} {t('dash.vsLastMonth')}
+          </div>
+        </div>
+        <div className="card stat">
+          <div className="stat-top">
+            {t('dash.today')}
+            <div className="stat-icon good">
+              <Banknote size={18} />
+            </div>
+          </div>
+          <div className="stat-value">{money(data.today?.total || 0, currency)}</div>
+          <div className="stat-sub">
+            {t('dash.todayCount', { n: data.today?.count || 0 })}
+            {data.today?.hdm > 0 && ` · ${t('dash.todayHdm', { amount: money(data.today.hdm, currency) })}`}
           </div>
         </div>
         <div className="card stat click" style={{ cursor: 'pointer' }} onClick={() => nav('students', { debtOnly: true })}>

@@ -622,4 +622,81 @@ async function buildTable({ sheetName, title, subtitle, columns, rows, totalLabe
   return wb.xlsx.writeBuffer();
 }
 
-module.exports = { buildReport, buildForm, buildSchedule, buildStudentsTransfer, buildGroups, buildTable };
+// «Վաճառքների վերլուծություն» laid out exactly as ՀԾ exports it (the file accounting already works with):
+// the title merged over A1:F1, the 19 columns with ՀԾ's names, widths and number formats, a light-blue header,
+// one row per sale and a grey «Ընդամենը» row. rows: [{ day, receipt, code, name, unit, amount, full }].
+async function buildSalesAnalysis({ title, rows = [], groupCode = '001', groupName = 'Ուսումնամարզական ծառ․' }) {
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet('Sheet1');
+  const widths = [15.43, 17.86, 6.86, 31, 16.71, 11.86, 22.43, 25.71, 25.57, 26, 24.86, 24.71, 24.86, 25.29, 23.43, 23.43, 6.29, 22.14, 15.71];
+  ws.columns = widths.map((width) => ({ width }));
+  const heads = ['Ամսաթիվ', 'Փաստաթղթի N', 'Կոդ', 'Անվանում', 'Չափման միավոր', 'Գործընկեր', 'Գործընկերոջ անվանում', 'Քանակ', 'Գին', 'Ինքնարժեքը',
+    'Վաճառքի գին', 'Վաճառքի գումար', 'Շահույթը', 'Շահույթը (%)', 'Զեղչի գումար', 'Զեղչ (%)', 'Խումբ', 'Խմբի անվանում', 'Մեկնաբանություն'];
+  const QTY = '###,###,###,##0.000';
+  const AMD = '#,###,###,###,##0.00';
+  const text = (v, width) => (width ? String(v ?? '').padEnd(width, ' ') : String(v ?? ''));
+  ws.mergeCells('A1:F1');
+  const t = ws.getCell('A1');
+  t.value = title;
+  t.font = { bold: true };
+  const head = ws.getRow(3);
+  heads.forEach((h, i) => {
+    const c = head.getCell(i + 1);
+    c.value = h;
+    c.font = { bold: true };
+    c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFADD8E6' } };
+  });
+  let qty = 0;
+  let sum = 0;
+  let disc = 0;
+  rows.forEach((r, i) => {
+    const row = ws.getRow(4 + i);
+    const [y, m, d] = String(r.day).split('-').map(Number);
+    const amount = Number(r.amount) || 0;
+    const full = Math.max(Number(r.full) || amount, amount);
+    const off = full - amount;
+    const cells = [
+      [new Date(Date.UTC(y, m - 1, d)), 'dd/mm/yy'],
+      [text(r.receipt), '@'],
+      [text(r.code), '@'],
+      [text(r.name), '@'],
+      [text(r.unit, 6), '@'],
+      ['', '@'],
+      ['', '@'],
+      [1, QTY],
+      [0, AMD],
+      [0, AMD],
+      [amount, AMD],
+      [amount, AMD],
+      [amount, AMD],
+      [0, '#0.000'],
+      [off, AMD],
+      [full ? (off / full) * 100 : 0, AMD],
+      [text(groupCode, 5), '@'],
+      [groupName, '@'],
+      ['', '@'],
+    ];
+    cells.forEach(([v, fmt], k) => {
+      const c = row.getCell(k + 1);
+      if (v !== '') c.value = v;
+      c.numFmt = fmt;
+    });
+    qty += 1;
+    sum += amount;
+    disc += off;
+  });
+  const total = ws.getRow(4 + rows.length);
+  for (let k = 1; k <= heads.length; k++) {
+    const c = total.getCell(k);
+    c.font = { bold: true };
+    c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD3D3D3' } };
+  }
+  total.getCell(1).value = 'Ընդամենը';
+  [[8, qty, QTY], [10, 0, AMD], [12, sum, AMD], [13, sum, AMD], [15, disc, AMD]].forEach(([k, v, fmt]) => {
+    total.getCell(k).value = v;
+    total.getCell(k).numFmt = fmt;
+  });
+  return wb.xlsx.writeBuffer();
+}
+
+module.exports = { buildReport, buildForm, buildSchedule, buildStudentsTransfer, buildGroups, buildTable, buildSalesAnalysis };

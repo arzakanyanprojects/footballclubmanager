@@ -20,6 +20,7 @@ export default function Settings({ route, nav, appState, setAppState }) {
   const tabs = [
     auth.can('settings', 'view') && { id: 'club', label: t('settings.club'), icon: Building2 },
     { id: 'pc', label: t('settings.thisPc'), icon: Monitor },
+    auth.can('payments') && { id: 'hdm', label: t('hdm.tab'), icon: Receipt },
     auth.can('settings', 'view') && { id: 'network', label: t('settings.network'), icon: Network },
     (auth.can('settings', 'view') || auth.can('students', 'view')) && { id: 'data', label: t('data.tab'), icon: Database },
     auth.can('settings', 'view') && { id: 'notify', label: t('notify.tab'), icon: BellRing },
@@ -40,6 +41,7 @@ export default function Settings({ route, nav, appState, setAppState }) {
       />
       <div style={{ maxWidth: tab === 'notify' || tab === 'activity' ? 1180 : 820 }}>
         {tab === 'club' && <ClubSettings />}
+        {tab === 'hdm' && <HdmTab appState={appState} setAppState={setAppState} />}
         {tab === 'pc' && <PcSettings appState={appState} setAppState={setAppState} />}
         {tab === 'network' && <NetworkSettings appState={appState} setAppState={setAppState} />}
         {tab === 'data' && <DataManagement appState={appState} setAppState={setAppState} />}
@@ -277,21 +279,6 @@ function PcSettings({ appState, setAppState }) {
     </div>
     {auth.can('payments') && <div className="card settings-section">
       <div className="card-head">
-        <Receipt size={17} />
-        <h3>{t('hdm.section')}</h3>
-        <div className="spacer" />
-        {appState.config.hdm?.enabled && (
-          <Badge tone={appState.config.hdm.mode === 'device' ? 'good' : 'warn'}>
-            {t(appState.config.hdm.mode === 'device' ? 'hdm.mode_device' : 'hdm.mode_test')}
-          </Badge>
-        )}
-      </div>
-      <div className="card-pad">
-        <HdmSettings settings={appState.config.hdm} onChange={(hdm) => update({ hdm })} />
-      </div>
-    </div>}
-    {auth.can('payments') && <div className="card settings-section">
-      <div className="card-head">
         <Printer size={17} />
         <h3>{t('thermal.section')}</h3>
       </div>
@@ -301,6 +288,12 @@ function PcSettings({ appState, setAppState }) {
     </div>}
     </>
   );
+}
+
+// «ՀԴՄ»: the fiscal cash register of this computer (its own tab — set per computer).
+function HdmTab({ appState, setAppState }) {
+  const update = async (patch) => setAppState(await window.fc.updateLocal(patch));
+  return <HdmSettings settings={appState.config.hdm} onChange={(hdm) => update({ hdm })} />;
 }
 
 function NetworkSettings({ appState, setAppState }) {

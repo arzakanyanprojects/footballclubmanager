@@ -310,7 +310,10 @@ function GroupSheet({ groupId, nav }) {
             <table className="table att-sheet">
               <thead>
                 <tr>
-                  <th className="sticky-col" rowSpan={2}>
+                  <th className="sticky-col att-idx" rowSpan={2}>
+                    #
+                  </th>
+                  <th className="sticky-col att-name" rowSpan={2}>
                     {t('students.name')}
                   </th>
                   <th colSpan={days.length + 1} className="month-col">
@@ -341,9 +344,10 @@ function GroupSheet({ groupId, nav }) {
                 </tr>
               </thead>
               <tbody>
-                {students.map((s) => (
+                {students.map((s, i) => (
                   <tr key={s.id}>
-                    <td className="sticky-col">
+                    <td className="sticky-col att-idx num muted">{i + 1}</td>
+                    <td className="sticky-col att-name">
                       <a
                         href="#"
                         className="nowrap"
@@ -513,7 +517,7 @@ function ExportModal({ group, month, days, students, filled, onClose }) {
     t('sheet.labelValue', { label: t('groups.assistant'), value: person(group.assistant, group.assistant_phone) }),
     t('sheet.labelValue', { label: t('sheet.monthLabel'), value: monthName(t, month) }),
   ];
-  const rows = students.map((s) => ({ name: [s.first_name, s.last_name, s.patronymic].filter(Boolean).join(' '), debt: s.overdue || 0 }));
+  const rows = students.map((s, i) => ({ no: i + 1, name: [s.first_name, s.last_name, s.patronymic].filter(Boolean).join(' '), debt: s.overdue || 0 }));
 
   const excel = () =>
     act(async () => {
@@ -524,6 +528,7 @@ function ExportModal({ group, month, days, students, filled, onClose }) {
         title,
         lines,
         columns: [
+          { key: 'no', header: '#', width: 5, type: 'number' },
           { key: 'name', header: t('students.name'), width: 36, type: 'text' },
           ...dates.map((d) => ({ key: d, header: fmtDate(d), width: 15, type: 'blank' })),
           { key: 'debt', header: t('sheet.debt'), width: 14, type: 'money' },
@@ -573,21 +578,30 @@ function ExportModal({ group, month, days, students, filled, onClose }) {
   );
 }
 
-// Printable page of the same form (A4; landscape when there are many days).
+// Printable page of the same form (A4; landscape when there are many days). The whole group fits on one
+// page: the rows (and their text) get as tall as the page allows — 27 pt at most, smaller for a big group.
 function formHtml({ title, lines, dates, rows, t, currency, logo }) {
   const esc = (v) => String(v ?? '').replace(/[&<>]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[ch]);
   const landscape = dates.length > 5;
+  const pageH = ((landscape ? 210 : 297) - 24) * (72 / 25.4); // pt, inside the top and bottom margins
+  const headH = (logo ? 66 : 30) + lines.length * 15 + 14 + 26; // title (and logo) + lines + space + the table's header row
+  // Each row also has its border line (≈1 pt).
+  const rowH = Math.max(5, Math.min(27, Math.floor(((pageH - headH - 12) / Math.max(rows.length, 1) - 1.2) * 10) / 10));
+  const font = rowH >= 22 ? 11 : rowH >= 17 ? 10 : rowH >= 14 ? 8.5 : rowH >= 11 ? 7.5 : rowH >= 8 ? 6.5 : 5.5;
   return `<!doctype html><html><head><meta charset="utf-8"><title>${esc(title)}</title><style>
-    @page { size: A4 ${landscape ? 'landscape' : 'portrait'}; margin: 14mm 12mm; }
-    body { font-family: 'GHEA Grapalat', Sylfaen, Arial, sans-serif; color: #111; font-size: 11pt; margin: 0; }
+    @page { size: A4 ${landscape ? 'landscape' : 'portrait'}; margin: 12mm 12mm; }
+    body { font-family: 'GHEA Grapalat', Sylfaen, Arial, sans-serif; color: #111; font-size: 11pt; margin: 0; width: ${landscape ? 273 : 186}mm; }
     h1 { font-size: 17pt; margin: 0 0 6pt; }
     .head { display: flex; align-items: flex-start; gap: 14pt; }
     .head img { width: 58pt; height: 58pt; object-fit: contain; }
     .line { margin: 2pt 0; }
     table { width: 100%; border-collapse: collapse; margin-top: 12pt; }
-    th, td { border: 1px solid #666; padding: 0 7pt; height: 27pt; }
+    th, td { border: 1px solid #666; padding: 0 6pt; height: ${rowH}pt; font-size: ${font}pt; line-height: 1; }
+    th { height: 24pt; }
+    td.no, th.no { width: 22pt; text-align: center; padding: 0 2pt; color: #444; }
     th { background: #0e8a43; color: #fff; font-size: 10.5pt; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     th.name { text-align: left; }
+    td.name { white-space: nowrap; }
     td.date { width: ${landscape ? 70 : 95}pt; }
     td.debt, th.debt { width: 80pt; text-align: right; white-space: nowrap; }
     td.debt { color: #c42b2b; font-weight: bold; }
@@ -603,6 +617,7 @@ function formHtml({ title, lines, dates, rows, t, currency, logo }) {
     </div>
     <table>
       <thead><tr>
+        <th class="no">#</th>
         <th class="name">${esc(t('students.name'))}</th>
         ${dates.map((d) => `<th>${esc(fmtDate(d))}</th>`).join('')}
         <th class="debt">${esc(t('sheet.debt'))}</th>
@@ -610,13 +625,34 @@ function formHtml({ title, lines, dates, rows, t, currency, logo }) {
       <tbody>
         ${rows
           .map(
-            (r) =>
-              `<tr><td>${esc(r.name)}</td>${dates.map(() => '<td class="date"></td>').join('')}<td class="debt">${
+            (r, i) =>
+              `<tr><td class="no">${i + 1}</td><td class="name">${esc(r.name)}</td>${dates.map(() => '<td class="date"></td>').join('')}<td class="debt">${
                 r.debt ? esc(money(r.debt, currency)) : ''
               }</td></tr>`
           )
           .join('')}
       </tbody>
     </table>
+    <script>
+      // One page whatever the group: laid out at the page's width, then shrunk if still taller (or wider) than the
+      // page. The app calls it right before making the PDF (when the logo and fonts are in).
+      window.fitPage = function () {
+        var availH = (${landscape ? 210 : 297} - 24 - 3) * 96 / 25.4;
+        var availW = (${landscape ? 297 : 210} - 24 - 1) * 96 / 25.4;
+        var table = document.querySelector('table');
+        var z = 1;
+        document.body.style.zoom = '1';
+        // Measured again after each step (a table doesn't always shrink in proportion).
+        for (var i = 0; i < 8; i++) {
+          var r = table.getBoundingClientRect();
+          var k = Math.min(availH / (r.bottom + 2), availW / Math.max(r.right, document.body.scrollWidth * z));
+          if (k >= 1) break;
+          z = Math.floor(z * k * 0.99 * 1000) / 1000;
+          document.body.style.zoom = String(z);
+        }
+        return z;
+      };
+      window.addEventListener('load', window.fitPage);
+    </script>
   </body></html>`;
 }

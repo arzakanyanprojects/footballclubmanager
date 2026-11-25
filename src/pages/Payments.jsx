@@ -5,7 +5,7 @@ import { feeShares as holidayShares, freeHalves, parseHolidays } from '../holida
 import { useCan } from '../components/Auth';
 import { useColumns } from '../components/Columns';
 import { SendRemindersButton } from '../components/Notify';
-import { useHdm } from '../components/Hdm';
+import { useHdm, fullPrices } from '../components/Hdm';
 import { useCustomerReceipt } from '../components/Thermal';
 import { useMessenger } from '../components/Messenger';
 import { useRpc, rpc, fmtDate, todayIso, currentPeriod, addMonths, saveCsv, money } from '../lib';
@@ -466,7 +466,13 @@ export function ChargesTable({ rows, showStudent, selectable, onOpenStudent, stu
           }}
         />
       )}
-      {editing && <EditChargeModal charge={{ ...editing, group_id: editing.group_id ?? student?.group_id }} onClose={() => setEditing(null)} onPrint={printReceipt} />}
+      {editing && (
+        <EditChargeModal
+          charge={{ ...editing, group_id: editing.group_id ?? student?.group_id, service: editing.service ?? student?.service }}
+          onClose={() => setEditing(null)}
+          onPrint={printReceipt}
+        />
+      )}
     </>
   );
 }
@@ -572,11 +578,20 @@ export function PayModal({ charges, student, onClose, onDone }) {
           student: nameOf(list[0]),
           items: list.map(lineOf),
           champ: !!groupOfCharge(list[0])?.championship,
+          service: list[0].service ?? student?.service,
         });
         if (pre === false) break;
         const ok = await act(() => rpc('charges.markPaid', { ids: list.map((c) => c.id), amounts, method, paidAt }), t('payments.paidToast'));
         if (!ok) break;
-        if (pre) await rpc('charges.setReceipt', { ids: ok.ids || list.map((c) => c.id), receipt: pre.receiptNo, crn: pre.crn, fiscal: pre.fiscalNo }).catch(() => {});
+        if (pre)
+          await rpc('charges.setReceipt', {
+            ids: ok.ids || list.map((c) => c.id),
+            receipt: pre.receiptNo,
+            crn: pre.crn,
+            fiscal: pre.fiscalNo,
+            line: pre.line,
+            full: fullPrices(list.map((c) => ({ id: c.id, ...lineOf(c) }))),
+          }).catch(() => {});
         saved++;
         messenger?.afterPayment(list[0].student_id, nameOf(list[0]));
         await customer.afterPayment({
@@ -606,7 +621,7 @@ export function PayModal({ charges, student, onClose, onDone }) {
     for (const list of byStudent.values()) {
       const c0 = list[0];
       const items = list.map((c) => ({ id: c.id, ...lineOf(c) }));
-      const r = await hdm.afterPayment({ method, student: nameOf(c0), items, champ: !!groupOfCharge(c0)?.championship });
+      const r = await hdm.afterPayment({ method, student: nameOf(c0), items, champ: !!groupOfCharge(c0)?.championship, service: c0.service ?? student?.service });
       messenger?.afterPayment(c0.student_id, nameOf(c0));
       await customer.afterPayment({ studentId: c0.student_id, items, method, paidAt, hdm: r || null });
     }
@@ -713,7 +728,7 @@ export function ChargeModal({ studentId: fixedStudent, onClose }) {
     const who = student ? `${student.first_name} ${student.last_name}` : '';
     // Real ՀԴՄ: the receipt (and the card payment) first; nothing is saved if it doesn't go through.
     const champ = !!groupOf(student?.group_id)?.championship;
-    const pre = paid ? await hdm.beforePayment({ method, student: who, items: [{ label, amount: Number(amount) }], champ }) : undefined;
+    const pre = paid ? await hdm.beforePayment({ method, student: who, items: [{ label, amount: Number(amount) }], champ, service: student?.service }) : undefined;
     if (pre === false) return;
     const ok = await act(
       () =>
@@ -735,8 +750,9 @@ export function ChargeModal({ studentId: fixedStudent, onClose }) {
     if (!paid || !ok.id) return;
     const items = [{ id: ok.id, label, amount: Number(amount) }];
     let r = pre;
-    if (pre) await rpc('charges.setReceipt', { ids: [ok.id], receipt: pre.receiptNo, crn: pre.crn, fiscal: pre.fiscalNo }).catch(() => {});
-    else r = await hdm.afterPayment({ method, student: who, items, champ });
+    if (pre)
+      await rpc('charges.setReceipt', { ids: [ok.id], receipt: pre.receiptNo, crn: pre.crn, fiscal: pre.fiscalNo, line: pre.line, full: { [ok.id]: Number(amount) } }).catch(() => {});
+    else r = await hdm.afterPayment({ method, student: who, items, champ, service: student?.service });
     messenger?.afterPayment(studentId, who);
     await customer.afterPayment({ studentId, items, method, paidAt: todayIso(), hdm: r || null });
   };
@@ -953,6 +969,7 @@ function EditChargeModal({ charge, onClose, onPrint }) {
                   onClose();
                   hdm.print({
                     champ: !!groupOf(charge.group_id)?.championship,
+                    service: charge.service,
                     method: charge.method || PAYMENT_METHODS[0],
                     student: `${charge.first_name || ''} ${charge.last_name || ''}`.trim(),
                     items: [{ id: charge.id, label: chargeLabel(t, charge), amount: charge.amount }],
@@ -1174,6 +1191,7 @@ export function MonthlyPaymentModal({ student, charges, onClose }) {
       student: who,
       items: selected.map(lineOf),
       champ: !!group?.championship,
+      service: student.service,
     });
     if (pre === false) return;
     const ok = await act(
@@ -1185,8 +1203,9 @@ export function MonthlyPaymentModal({ student, charges, onClose }) {
     if (!ok.ids?.length) return;
     const items = ok.ids.map((id, i) => ({ id, ...lineOf(ok.periods[i]) }));
     let r = pre;
-    if (pre) await rpc('charges.setReceipt', { ids: ok.ids, receipt: pre.receiptNo, crn: pre.crn, fiscal: pre.fiscalNo }).catch(() => {});
-    else r = await hdm.afterPayment({ method, student: who, items, champ: !!group?.championship });
+    if (pre)
+      await rpc('charges.setReceipt', { ids: ok.ids, receipt: pre.receiptNo, crn: pre.crn, fiscal: pre.fiscalNo, line: pre.line, full: fullPrices(items) }).catch(() => {});
+    else r = await hdm.afterPayment({ method, student: who, items, champ: !!group?.championship, service: student.service });
     messenger?.afterPayment(student.id, who);
     await customer.afterPayment({ studentId: student.id, items, method, paidAt, hdm: r || null });
   };

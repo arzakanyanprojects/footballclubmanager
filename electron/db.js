@@ -445,6 +445,14 @@ const MIGRATIONS = [
   UPDATE groups SET championship = 1 WHERE name LIKE 'ԱՌ%';
   UPDATE groups SET monthly_fee = CASE WHEN championship = 1 THEN 35000 ELSE 30000 END WHERE IFNULL(monthly_fee, 0) = 0;
   `,
+  // v36: what the ՀԴՄ receipt printed for each payment — its line (code, name, unit) and the full price before
+  // the discount — for the sales analysis report («Վաճառքների վերլուծություն», as ՀԾ makes it).
+  `
+  ALTER TABLE charges ADD COLUMN hdm_code TEXT;
+  ALTER TABLE charges ADD COLUMN hdm_name TEXT;
+  ALTER TABLE charges ADD COLUMN hdm_unit TEXT;
+  ALTER TABLE charges ADD COLUMN hdm_full INTEGER;
+  `,
 ];
 
 function seed(db) {

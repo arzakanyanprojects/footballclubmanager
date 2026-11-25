@@ -20,6 +20,7 @@ const REPORTS = [
   { id: 'attendance', icon: CalendarCheck, params: 'period' },
   { id: 'joinsLeaves', icon: UserPlus, params: 'range' },
   { id: 'hdmReceipts', icon: Receipt, params: 'range' },
+  { id: 'salesAnalysis', icon: FileSpreadsheet, params: 'range' },
   { id: 'groupsSummary', icon: Shapes, params: 'period' },
   { id: 'missingDocs', icon: FileWarning },
   { id: 'groups', icon: FolderTree, open: 'groups' },
@@ -137,6 +138,22 @@ function ReportOptions({ report, onBack, onDone }) {
   const when = report.params === 'period' ? monthName(t, period) : report.params === 'range' ? `${fmtDate(from)} – ${fmtDate(to)}` : fmtDate(todayIso());
 
   const exportFile = async () => {
+    // As ՀԾ exports it, for accounting.
+    if (report.id === 'salesAnalysis') {
+      const yy = (d) => d.split('-').reverse().map((x, i) => (i === 2 ? x.slice(2) : x)).join('/');
+      const res = await act(async () => {
+        const r = await window.fc.saveXlsx({
+          kind: 'salesAnalysis',
+          defaultName: `SalesAnalysis ${from} - ${to}${groupName ? ` ${groupName}` : ''}.xlsx`.replace(/[\\/:*?"<>|]/g, '_'),
+          title: `Վաճառքների վերլուծություն ${yy(from)} - ${yy(to)}`,
+          rows: rows || [],
+        });
+        if (!r.ok) throw Object.assign(new Error(r.detail || r.error), { code: r.error, detail: r.detail });
+        return r;
+      }, t('reports.saved'));
+      if (res) onDone();
+      return;
+    }
     const sheet = sheetOf(report.id, rows || [], t, club);
     const res = await act(async () => {
       const r = await window.fc.saveXlsx({

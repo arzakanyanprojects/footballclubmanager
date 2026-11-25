@@ -7,7 +7,7 @@ const { createService, DEFAULT_TEMPLATES } = require('./service');
 const notify = require('./notify');
 const network = require('./network');
 const PizZip = require('pizzip');
-const { buildReport, buildForm, buildSchedule, buildStudentsTransfer, buildGroups, buildTable } = require('./xlsx');
+const { buildReport, buildForm, buildSchedule, buildStudentsTransfer, buildGroups, buildTable, buildSalesAnalysis } = require('./xlsx');
 const hdm = require('./hdm');
 const updater = require('./updater');
 const importer = require('./importer');
@@ -828,7 +828,7 @@ function registerIpc() {
       : await dialog.showSaveDialog(win, { defaultPath: report.defaultName, filters: [{ name: 'Excel', extensions: ['xlsx'] }] });
     if (r.canceled || !r.filePath) return { ok: false, error: 'CANCELLED' };
     try {
-      const build = { form: buildForm, schedule: buildSchedule, students: buildStudentsTransfer, groups: buildGroups, table: buildTable }[report.kind] || buildReport;
+      const build = { form: buildForm, schedule: buildSchedule, students: buildStudentsTransfer, groups: buildGroups, table: buildTable, salesAnalysis: buildSalesAnalysis }[report.kind] || buildReport;
       fs.writeFileSync(r.filePath, Buffer.from(await build(report)));
     } catch (err) {
       // Most often the file is open in Excel and locked.
@@ -852,14 +852,39 @@ function registerIpc() {
     }
   });
 
+  // Printing: the page is made into a PDF and opened in the computer's PDF viewer (Edge, Acrobat…), which
+  // shows it and prints it with a real preview, printer choice and copies. (Electron's own print window says
+  // the app doesn't support a preview.) Without a PDF viewer, the print window as before.
   ipcMain.handle('print', async (_e, { html }) => {
     const w = await renderHtmlWindow(html);
-    // Testing (FC_EXPORT_DIR): save what would be printed as a PDF instead of opening the print dialog.
-    if (process.env.FC_EXPORT_DIR) {
-      const pdf = await w.webContents.printToPDF({ printBackground: true, preferCSSPageSize: true });
-      fs.writeFileSync(path.join(process.env.FC_EXPORT_DIR, `print-${Date.now()}.pdf`), pdf);
+    // A page that sizes itself to fit (e.g. the attendance form: the whole group on one page) does it now.
+    await w.webContents
+      .executeJavaScript(`document.fonts.ready.then(() => (typeof window.fitPage === 'function' ? window.fitPage() : 0))`)
+      .catch(() => 0);
+    const pdf = await w.webContents.printToPDF({ printBackground: true, preferCSSPageSize: true }).catch(() => null);
+    // Testing (FC_EXPORT_DIR): keep the PDF in that folder instead of opening it.
+    if (process.env.FC_EXPORT_DIR && pdf) {
+      const stamp = Date.now();
+      fs.writeFileSync(path.join(process.env.FC_EXPORT_DIR, `print-${stamp}.pdf`), pdf);
+      fs.writeFileSync(path.join(process.env.FC_EXPORT_DIR, `print-${stamp}.html`), html);
       w.destroy();
       return { ok: true };
+    }
+    if (pdf) {
+      try {
+        const dir = path.join(app.getPath('temp'), 'FC Manager');
+        fs.mkdirSync(dir, { recursive: true });
+        const title = (String(html).match(/<title>([^<]*)<\/title>/i) || [])[1] || 'FC Manager';
+        const file = path.join(dir, `${Date.now()}-${title.replace(/[\\/:*?"<>|]+/g, '_').slice(0, 100)}.pdf`);
+        fs.writeFileSync(file, pdf);
+        const err = await shell.openPath(file);
+        if (!err) {
+          w.destroy();
+          return { ok: true, via: 'pdf' };
+        }
+      } catch {
+        /* the print window below */
+      }
     }
     return new Promise((resolve) => {
       w.webContents.print({ printBackground: true }, (success, reason) => {

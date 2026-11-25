@@ -1,8 +1,12 @@
 import { Fragment, createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
-import { Printer, RotateCcw, CheckCircle2, AlertTriangle, PlugZap, FileText, Copy } from 'lucide-react';
+import { Printer, RotateCcw, CheckCircle2, AlertTriangle, PlugZap, FileText, Copy, Receipt, Wallet, ListOrdered, ChevronDown, ChevronRight } from 'lucide-react';
 import { useT } from '../i18n';
 import { rpc, money } from '../lib';
-import { Button, Field, Modal, useClub, useConfirm, useToast } from './ui';
+import { Badge, Button, Field, Modal, useClub, useConfirm, useToast } from './ui';
+import { SERVICES } from '../clubLists';
+
+// Services with a receipt line of their own unless changed (as in electron/hdm.js).
+const DEFAULT_SERVICE_LINES = { 'Դարպասապահ 4': { name: 'Դարպասապահների ամսական 4 մարզում', code: '2005' } };
 
 // ՀԴՄ (fiscal receipt) around a payment. Settings live per computer (appState.config.hdm).
 // Test mode: the payment is saved first, then a simulated receipt is shown (afterPayment).
@@ -90,6 +94,10 @@ export function HdmProvider({ settings, operator, children }) {
   );
 }
 
+// { chargeId: the full price before the discount } of a receipt's payments, saved for the sales report.
+export const fullPrices = (items) =>
+  Object.fromEntries(items.filter((i) => i.id).map((i) => [i.id, Math.max(Number(i.fullPrice) || 0, Number(i.amount) || 0)]));
+
 const errorText = (t, r) => {
   const msg = t(`error.${r.error}`);
   return `${msg === `error.${r.error}` ? r.error : msg}${r.detail && r.error !== 'HDM_CARD_FAILED' ? ` (${r.detail})` : ''}`;
@@ -116,6 +124,7 @@ function ReceiptModal({ job, test, operator, onClose }) {
     const r = await window.fc.hdmPrint({
       items: job.items.map(({ label, amount, fullPrice }) => ({ label, amount: Number(amount), ...(Number(fullPrice) > Number(amount) ? { fullPrice: Number(fullPrice) } : {}) })),
       champ: !!job.champ,
+      service: job.service || null,
       total,
       method: job.method,
       student: job.student,
@@ -130,7 +139,15 @@ function ReceiptModal({ job, test, operator, onClose }) {
     }
     rememberCrn(r.result.crn);
     // After a payment (test mode, or printing later): the receipt goes onto the saved payments.
-    if (ids.length) await rpc('charges.setReceipt', { ids, receipt: r.result.receiptNo, crn: r.result.crn, fiscal: r.result.fiscalNo }).catch(() => {});
+    if (ids.length)
+      await rpc('charges.setReceipt', {
+        ids,
+        receipt: r.result.receiptNo,
+        crn: r.result.crn,
+        fiscal: r.result.fiscalNo,
+        line: r.result.line,
+        full: fullPrices(job.items),
+      }).catch(() => {});
     setResult(r.result);
     setState('done');
   }, [job, total, operator, ids.join(',')]);
@@ -308,6 +325,7 @@ export function HdmSettings({ settings, onChange }) {
   const [s, setS] = useState(settings || {});
   const [check, setCheck] = useState(null); // { busy } | { result } | { error }
   const [busy, setBusy] = useState(null);
+  const [showServices, setShowServices] = useState(false);
   const set = (patch) => {
     const next = { ...s, ...patch };
     setS(next);
@@ -335,128 +353,199 @@ export function HdmSettings({ settings, onChange }) {
   const input = (k, { raw, ...props } = {}) => (
     <input className="input" value={s[k] || ''} onChange={(e) => set({ [k]: raw ? e.target.value : e.target.value.trim() })} {...props} />
   );
+  const serviceLines = s.serviceLines ?? DEFAULT_SERVICE_LINES;
+  const ownLines = SERVICES.filter((sv) => serviceLines[sv]?.name && serviceLines[sv]?.code).length;
   return (
-    <div className="stack">
-      <label className="check">
-        <input type="checkbox" checked={!!s.enabled} onChange={(e) => set({ enabled: e.target.checked })} />
-        <span className="strong">{t('hdm.enable')}</span>
-      </label>
-      <div className="small muted">{t('hdm.enableHint')}</div>
-      {s.enabled && (
-        <>
-          <div className="field">
-            <label>{t('hdm.mode')}</label>
-            <div className="seg" style={{ alignSelf: 'flex-start' }}>
-              {['test', 'device'].map((m) => (
-                <button key={m} className={(s.mode || 'test') === m ? 'on' : ''} onClick={() => set({ mode: m })}>
-                  {t(`hdm.mode_${m}`)}
-                </button>
-              ))}
-            </div>
-            <div className="hint">{t(device ? 'hdm.deviceHint' : 'hdm.testHint')}</div>
-          </div>
-          {device && (
+    <>
+      {/* ---------------------------------------------------------- the device */}
+      <div className="card settings-section">
+        <div className="card-head">
+          <Receipt size={17} />
+          <h3>{t('hdm.section')}</h3>
+          <div className="spacer" />
+          {s.enabled && <Badge tone={device ? 'good' : 'warn'}>{t(device ? 'hdm.mode_device' : 'hdm.mode_test')}</Badge>}
+        </div>
+        <div className="card-pad">
+          <label className="check">
+            <input type="checkbox" checked={!!s.enabled} onChange={(e) => set({ enabled: e.target.checked })} />
+            <span className="strong">{t('hdm.enable')}</span>
+          </label>
+          <div className="small muted">{t('hdm.enableHint')}</div>
+          {s.enabled && (
             <>
-              <div className="grid-2">
-                <Field label={t('hdm.host')}>{input('host', { placeholder: '10.10.10.45' })}</Field>
-                <Field label={t('setup.port')}>{input('port', { placeholder: '1025' })}</Field>
-                <Field label={t('hdm.hdmPassword')} className="span-2">
-                  {input('hdmPassword', { type: 'password', raw: true, autoComplete: 'off' })}
-                </Field>
-                <Field label={t('hdm.dep')}>{input('dep', { inputMode: 'numeric' })}</Field>
-                <div />
-                <Field label={t('hdm.cashierNo')}>{input('cashier', { inputMode: 'numeric' })}</Field>
-                <Field label={t('hdm.password')}>{input('password', { type: 'password', raw: true, autoComplete: 'off' })}</Field>
+              <div className="field">
+                <label>{t('hdm.mode')}</label>
+                <div className="seg" style={{ alignSelf: 'flex-start' }}>
+                  {['test', 'device'].map((m) => (
+                    <button key={m} className={(s.mode || 'test') === m ? 'on' : ''} onClick={() => set({ mode: m })}>
+                      {t(`hdm.mode_${m}`)}
+                    </button>
+                  ))}
+                </div>
+                <div className="hint">{t(device ? 'hdm.deviceHint' : 'hdm.testHint')}</div>
               </div>
-              <label className="check">
-                <input type="checkbox" checked={s.devicePos !== false} onChange={(e) => set({ devicePos: e.target.checked })} />
-                {t('hdm.devicePos')}
-              </label>
-              <div className="row wrap">
-                <Button icon={PlugZap} onClick={runCheck} disabled={check?.busy}>
-                  {t('hdm.check')}
-                </Button>
-                <Button icon={Printer} onClick={() => run('sample')} disabled={!!busy}>
-                  {t('hdm.sample')}
-                </Button>
-                <Button icon={Copy} onClick={() => run('lastCopy')} disabled={!!busy}>
-                  {t('hdm.lastCopy')}
-                </Button>
-                <Button icon={FileText} onClick={() => run('x')} disabled={!!busy}>
-                  {t('hdm.reportX')}
-                </Button>
-                <Button
-                  icon={FileText}
-                  variant="danger"
-                  onClick={() => run('z', { title: t('hdm.reportZ'), text: t('hdm.reportZConfirm'), confirmLabel: t('hdm.reportZ') })}
-                  disabled={!!busy}
-                >
-                  {t('hdm.reportZ')}
-                </Button>
-              </div>
-              {check?.busy && (
-                <span className="row muted small">
-                  <span className="spinner" style={{ width: 16, height: 16 }} /> {t('hdm.checking')}
-                </span>
-              )}
-              {check?.error && (
-                <div className="row small" style={{ color: 'var(--bad)' }}>
-                  <AlertTriangle size={16} /> {check.error}
+              {device ? (
+                <>
+                  <div className="grid-2">
+                    <Field label={t('hdm.host')}>{input('host', { placeholder: '10.10.10.45' })}</Field>
+                    <Field label={t('setup.port')}>{input('port', { placeholder: '1025' })}</Field>
+                    <Field label={t('hdm.hdmPassword')} className="span-2">
+                      {input('hdmPassword', { type: 'password', raw: true, autoComplete: 'off' })}
+                    </Field>
+                    <Field label={t('hdm.dep')}>{input('dep', { inputMode: 'numeric' })}</Field>
+                    <div />
+                    <Field label={t('hdm.cashierNo')}>{input('cashier', { inputMode: 'numeric' })}</Field>
+                    <Field label={t('hdm.password')}>{input('password', { type: 'password', raw: true, autoComplete: 'off' })}</Field>
+                  </div>
+                  <label className="check">
+                    <input type="checkbox" checked={s.devicePos !== false} onChange={(e) => set({ devicePos: e.target.checked })} />
+                    {t('hdm.devicePos')}
+                  </label>
+                  <div className="row wrap">
+                    <Button icon={PlugZap} onClick={runCheck} disabled={check?.busy}>
+                      {t('hdm.check')}
+                    </Button>
+                  </div>
+                  {check?.busy && (
+                    <span className="row muted small">
+                      <span className="spinner" style={{ width: 16, height: 16 }} /> {t('hdm.checking')}
+                    </span>
+                  )}
+                  {check?.error && (
+                    <div className="row small" style={{ color: 'var(--bad)' }}>
+                      <AlertTriangle size={16} /> {check.error}
+                    </div>
+                  )}
+                  {check?.result && <CheckResult r={check.result} s={s} />}
+                </>
+              ) : (
+                <div className="row">
+                  <Button
+                    icon={Printer}
+                    onClick={() => hdm.print({ items: [{ label: t('hdm.testItem'), amount: 100 }], method: (s.methods || ['card'])[0] || 'card', practice: true })}
+                  >
+                    {t('hdm.testPrint')}
+                  </Button>
                 </div>
               )}
-              {check?.result && <CheckResult r={check.result} s={s} />}
             </>
           )}
-          <div className="field">
-            <label>{t('hdm.methods')}</label>
-            <div className="row wrap" style={{ gap: 16 }}>
-              {['card', 'easypay', 'transfer'].map((m) => (
-                <label key={m} className="check">
-                  <input type="checkbox" checked={(s.methods || []).includes(m)} onChange={() => toggleMethod(m)} />
-                  {t(`method.${m}`)}
-                </label>
-              ))}
+        </div>
+      </div>
+
+      {s.enabled && (
+        <>
+          {/* ---------------------------------------------------------- which payments get a receipt */}
+          <div className="card settings-section">
+            <div className="card-head">
+              <Wallet size={17} />
+              <h3>{t('hdm.methodsTitle')}</h3>
             </div>
-            {device && <div className="hint">{t('hdm.methodsDeviceHint')}</div>}
-          </div>
-          {/* The receipt lines: regular groups and championship teams («Առաջնության թիմ» in Groups). */}
-          <div className="field">
-            <label>{t('hdm.lines')}</label>
-            <div className="hdm-lines">
-              <div className="hdm-line-head" />
-              <div className="hdm-line-head">{t('hdm.productName')}</div>
-              <div className="hdm-line-head">{t('hdm.productCode')}</div>
-              <div className="strong small">{t('hdm.lineRegular')}</div>
-              <input className="input" value={s.productName ?? 'Ուսումնամարզական ծառայություն'} maxLength={50} onChange={(e) => set({ productName: e.target.value })} />
-              <input className="input" value={s.productCode ?? '1.7.6'} placeholder="1.7.6" onChange={(e) => set({ productCode: e.target.value })} />
-              <div className="strong small">{t('hdm.lineChamp')}</div>
-              <input
-                className="input"
-                value={s.champProductName ?? 'Ուսումնամարզական ծառայություն առաջնության թիմ'}
-                maxLength={50}
-                onChange={(e) => set({ champProductName: e.target.value })}
-              />
-              <input className="input" value={s.champProductCode ?? '1.7.7'} placeholder="1.7.7" onChange={(e) => set({ champProductCode: e.target.value })} />
+            <div className="card-pad">
+              <div className="small muted">{t('hdm.methods')}</div>
+              <div className="row wrap" style={{ gap: 16 }}>
+                {['card', 'easypay', 'transfer'].map((m) => (
+                  <label key={m} className="check">
+                    <input type="checkbox" checked={(s.methods || []).includes(m)} onChange={() => toggleMethod(m)} />
+                    {t(`method.${m}`)}
+                  </label>
+                ))}
+              </div>
+              {device && <div className="small muted">{t('hdm.methodsDeviceHint')}</div>}
             </div>
-            <div className="hint">{t('hdm.champHint')}</div>
           </div>
-          <div className="grid-2">
-            <Field label={t('hdm.adgCode')}>{input('adgCode', { placeholder: '85.51', value: s.adgCode ?? '85.51' })}</Field>
-            <Field label={t('hdm.unit')}>{input('unit', { placeholder: 'ամիս', value: s.unit ?? 'ամիս' })}</Field>
+
+          {/* ---------------------------------------------------------- what the receipt line says */}
+          <div className="card settings-section">
+            <div className="card-head">
+              <ListOrdered size={17} />
+              <h3>{t('hdm.lines')}</h3>
+            </div>
+            <div className="card-pad">
+              <div className="hdm-lines">
+                <div className="hdm-line-head" />
+                <div className="hdm-line-head">{t('hdm.productName')}</div>
+                <div className="hdm-line-head">{t('hdm.productCode')}</div>
+                <div className="strong small">{t('hdm.lineRegular')}</div>
+                <input className="input" value={s.productName ?? 'Ուսումնամարզական ծառայություն'} maxLength={50} onChange={(e) => set({ productName: e.target.value })} />
+                <input className="input" value={s.productCode ?? '1.7.6'} placeholder="1.7.6" onChange={(e) => set({ productCode: e.target.value })} />
+                <div className="strong small">{t('hdm.lineChamp')}</div>
+                <input
+                  className="input"
+                  value={s.champProductName ?? 'Ուսումնամարզական ծառայություն առաջնության թիմ'}
+                  maxLength={50}
+                  onChange={(e) => set({ champProductName: e.target.value })}
+                />
+                <input className="input" value={s.champProductCode ?? '1.7.7'} placeholder="1.7.7" onChange={(e) => set({ champProductCode: e.target.value })} />
+              </div>
+              <div className="small muted">{t('hdm.champHint')}</div>
+              <button type="button" className="hdm-fold" onClick={() => setShowServices((v) => !v)}>
+                {showServices ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                <span className="strong small">{t('hdm.serviceLinesTitle')}</span>
+                <span className="small muted">{t('hdm.serviceLinesCount', { n: ownLines })}</span>
+              </button>
+              {showServices && (
+                <>
+                  <div className="small muted">{t('hdm.serviceLines')}</div>
+                  <div className="hdm-lines">
+                    {SERVICES.map((sv) => {
+                      const cur = serviceLines[sv] || {};
+                      const put = (k, v) => set({ serviceLines: { ...serviceLines, [sv]: { ...cur, [k]: v } } });
+                      return (
+                        <Fragment key={sv}>
+                          <div className="small">{sv}</div>
+                          <input className="input" value={cur.name || ''} placeholder={t('hdm.serviceLineEmpty')} maxLength={50} onChange={(e) => put('name', e.target.value)} />
+                          <input className="input" value={cur.code || ''} onChange={(e) => put('code', e.target.value)} />
+                        </Fragment>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
+              <div className="grid-2">
+                <Field label={t('hdm.adgCode')}>{input('adgCode', { placeholder: '85.51', value: s.adgCode ?? '85.51' })}</Field>
+                <Field label={t('hdm.unit')}>{input('unit', { placeholder: 'ամիս', value: s.unit ?? 'ամիս' })}</Field>
+              </div>
+            </div>
           </div>
-          {!device && (
-            <div className="row">
-              <Button
-                icon={Printer}
-                onClick={() => hdm.print({ items: [{ label: t('hdm.testItem'), amount: 100 }], method: (s.methods || ['card'])[0] || 'card', practice: true })}
-              >
-                {t('hdm.testPrint')}
-              </Button>
+
+          {/* ---------------------------------------------------------- the device's daily actions */}
+          {device && (
+            <div className="card settings-section">
+              <div className="card-head">
+                <FileText size={17} />
+                <h3>{t('hdm.actionsTitle')}</h3>
+              </div>
+              <div className="card-pad">
+                <div className="hdm-actions">
+                  <Button icon={FileText} onClick={() => run('x')} disabled={!!busy}>
+                    {t('hdm.reportX')}
+                  </Button>
+                  <div className="small muted">{t('hdm.reportXHint')}</div>
+                  <Button
+                    icon={FileText}
+                    variant="danger"
+                    onClick={() => run('z', { title: t('hdm.reportZ'), text: t('hdm.reportZConfirm'), confirmLabel: t('hdm.reportZ') })}
+                    disabled={!!busy}
+                  >
+                    {t('hdm.reportZ')}
+                  </Button>
+                  <div className="small muted">{t('hdm.reportZHint')}</div>
+                  <Button icon={Copy} onClick={() => run('lastCopy')} disabled={!!busy}>
+                    {t('hdm.lastCopy')}
+                  </Button>
+                  <div className="small muted">{t('hdm.lastCopyHint')}</div>
+                  <Button icon={Printer} onClick={() => run('sample')} disabled={!!busy}>
+                    {t('hdm.sample')}
+                  </Button>
+                  <div className="small muted">{t('hdm.sampleHint')}</div>
+                </div>
+              </div>
             </div>
           )}
         </>
       )}
-    </div>
+    </>
   );
 }
 

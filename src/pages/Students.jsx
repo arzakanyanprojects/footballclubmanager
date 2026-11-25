@@ -14,19 +14,8 @@ import { useStudentForm } from '../components/StudentFormHost';
 
 export const CATEGORIES = ['siblings', 'half', 'war', 'staff', 'orphan'];
 
-// The club's services (Armenian only).
-export const SERVICES = [
-  'Առաջնություն',
-  'Դարպասապահ 4',
-  'Դարպասապահ 8',
-  'Դարպասապահ 12',
-  'Դարպասապահ 16',
-  'Ուսումնամարզական',
-  'Ֆուտբոլ անհ. 4',
-  'Ֆուտբոլ անհ. 8',
-  'Ֆուտբոլ անհ. 12',
-  'Ֆուտբոլ անհ. 16',
-];
+export { SERVICES } from '../clubLists';
+import { SERVICES } from '../clubLists';
 
 // A new student can be saved only with all of these filled in (the photo and the medical file stay optional).
 export const REQUIRED_NEW = [
@@ -310,7 +299,7 @@ export default function Students({ nav, route }) {
                 onClick={(e) => {
                   if (!payable) return;
                   e.stopPropagation();
-                  setPaying([{ ...m, kind: 'monthly', student_id: s.id, first_name: s.first_name, last_name: s.last_name, group_id: s.group_id, category: s.category, join_date: s.join_date, student_fee: s.monthly_fee }]);
+                  setPaying([{ ...m, kind: 'monthly', student_id: s.id, first_name: s.first_name, last_name: s.last_name, group_id: s.group_id, category: s.category, join_date: s.join_date, student_fee: s.monthly_fee, service: s.service }]);
                 }}
               >
                 {MONTH_MARK[st] ?? '·'}
