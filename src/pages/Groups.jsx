@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Plus, Shapes, Users, Pencil, Trash2, LayoutGrid, List, CalendarCheck, FileSpreadsheet } from 'lucide-react';
 import { GroupsExportModal } from '../components/GroupsExport';
 import { useT } from '../i18n';
-import { useCan } from '../components/Auth';
+import { useCan, useCanExcel } from '../components/Auth';
 import { useRpc, rpc } from '../lib';
 import { Badge, Button, Empty, Field, Loading, Modal, Money, RowMenu, SearchBox, useAction, useConfirm, useToast } from '../components/ui';
 import { EditingMark, useEditLock, useLocks } from '../components/Locks';
@@ -11,6 +11,7 @@ const COLORS = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300'
 
 export default function Groups({ nav }) {
   const canEdit = useCan('groups');
+  const canExcel = useCanExcel('groups');
   const t = useT();
   const locks = useLocks();
   const act = useAction();
@@ -78,7 +79,7 @@ export default function Groups({ nav }) {
           </div>
         </div>
         <div className="spacer" />
-        {data?.length > 0 && (
+        {canExcel && data?.length > 0 && (
           <Button icon={FileSpreadsheet} onClick={() => setExporting(true)}>
             {t('groupsExport.button')}
           </Button>

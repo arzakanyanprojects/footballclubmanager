@@ -70,9 +70,15 @@ const checkPassword = (password, stored) => {
   return got.length === want.length && crypto.timingSafeEqual(got, want);
 };
 
+// rights = { section: 'none' | 'view' | 'edit', excel: { section: true | false } } — excel: may export that
+// menu's lists to Excel (on unless unticked, so users made before the tick keep it).
 const normalizeRights = (r) => {
   const src = typeof r === 'string' ? safeJson(r) : r || {};
-  return Object.fromEntries(SECTIONS.map((s) => [s, LEVEL[src[s]] !== undefined ? src[s] : 'none']));
+  const excel = src.excel && typeof src.excel === 'object' ? src.excel : {};
+  return {
+    ...Object.fromEntries(SECTIONS.map((s) => [s, LEVEL[src[s]] !== undefined ? src[s] : 'none'])),
+    excel: Object.fromEntries(SECTIONS.map((s) => [s, excel[s] !== false])),
+  };
 };
 const safeJson = (s) => {
   try {
@@ -93,7 +99,9 @@ function createAuth({ all, one, run, AppError, log }) {
       is_admin: !!u.is_admin,
       active: !!u.active,
       notify_actions: !!u.notify_actions,
-      rights: u.is_admin ? Object.fromEntries(SECTIONS.map((s) => [s, 'edit'])) : normalizeRights(u.rights),
+      rights: u.is_admin
+        ? { ...Object.fromEntries(SECTIONS.map((s) => [s, 'edit'])), excel: Object.fromEntries(SECTIONS.map((s) => [s, true])) }
+        : normalizeRights(u.rights),
       last_login_at: u.last_login_at,
       created_at: u.created_at,
     };

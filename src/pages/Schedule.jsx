@@ -3,7 +3,7 @@ import {
   ChevronLeft, ChevronRight, Copy, Printer, FileSpreadsheet, CalendarPlus, MapPin, AlertTriangle, RotateCcw, Trash2, CalendarRange, Users, Pencil,
 } from 'lucide-react';
 import { useT } from '../i18n';
-import { useCan } from '../components/Auth';
+import { useCan, useCanExcel } from '../components/Auth';
 import { useRpc, rpc, todayIso, weekday, fmtDate } from '../lib';
 import { Button, Empty, Field, Loading, Modal, Segmented, useAction, useClub, useConfirm, useToast } from '../components/ui';
 import { useEditLock } from '../components/Locks';
@@ -533,6 +533,7 @@ function PitchesModal({ pitches, onClose }) {
 // ---------------------------------------------------------------- print / Excel
 function PrintModal({ view, onClose }) {
   const t = useT();
+  const canExcel = useCanExcel('schedule');
   const act = useAction();
   const [kind, setKind] = useState('grid');
   const { blocks, dates, sessionOf, club } = view;
@@ -602,7 +603,7 @@ function PrintModal({ view, onClose }) {
       footer={
         <>
           <Button onClick={onClose}>{t('common.cancel')}</Button>
-          {kind === 'grid' && (
+          {canExcel && kind === 'grid' && (
             <Button icon={FileSpreadsheet} onClick={excel}>
               Excel
             </Button>

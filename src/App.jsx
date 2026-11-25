@@ -30,7 +30,7 @@ import { ThermalProvider } from './components/Thermal';
 import { LocksProvider } from './components/Locks';
 import { MessengerProvider } from './components/Messenger';
 import { StudentFormHost } from './components/StudentFormHost';
-import { UpdateNotice } from './components/Updates';
+import { UpdateNotice, UpdateScreen, useUpdateStatus } from './components/Updates';
 import { AuthGate, useAuth } from './components/Auth';
 
 // section: the right needed to see the menu (see Settings → Users). Settings is always shown (This computer tab).
@@ -57,7 +57,16 @@ export default function App() {
     else delete document.documentElement.dataset.theme;
   }, [theme]);
 
+  const update = useUpdateStatus();
+
   if (!appState) return null;
+  // A new version: the app stops here until it is updated (see electron/updater.js).
+  if (update.required)
+    return (
+      <I18nProvider lang={appState.config.language}>
+        <UpdateScreen status={update} />
+      </I18nProvider>
+    );
   return (
     <I18nProvider lang={appState.config.language}>
       <ToastProvider>

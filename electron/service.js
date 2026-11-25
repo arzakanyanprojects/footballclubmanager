@@ -862,6 +862,24 @@ function createService(db, { onWrite, getNotify } = {}) {
       };
     },
 
+    // «Այսօրվա վաճառքներ» opened: today's payments, each with the moment it was taken (from the activity log,
+    // else when its ՀԴՄ receipt was printed). mine: only the ones the signed-in user took.
+    'dashboard.today.list': ({ mine = true } = {}, ctx) => {
+      const onlyMine = !!mine && !!ctx.user;
+      const rows = all(
+        `SELECT c.id, c.kind, c.period, c.description, c.amount, c.paid_at, c.method, c.paid_by, c.hdm_receipt,
+                s.id AS student_id, s.first_name, s.last_name, c.paid_by AS paid_by_name,
+                IFNULL((SELECT MAX(l.at) FROM activity_log l
+                        WHERE l.action IN ('charge.paid', 'charge.created_paid') AND l.student_id = c.student_id
+                          AND json_extract(l.meta, '$.chargeId') = c.id), c.hdm_at) AS taken_at
+         FROM charges c JOIN students s ON s.id = c.student_id
+         WHERE c.status = 'paid' AND substr(c.paid_at, 1, 10) = :t AND (:mine = 0 OR c.paid_by = :user)
+         ORDER BY IFNULL(taken_at, c.paid_at), c.id`,
+        { t: today(), mine: onlyMine ? 1 : 0, user: ctx.user || null }
+      );
+      return { rows, mine: onlyMine, signedIn: !!ctx.user };
+    },
+
     // ---------------------------------------------------------------- groups
     // days_total / days_filled: this month's training days, and how many of them have saved attendance.
     'groups.list': () =>

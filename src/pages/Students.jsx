@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { Plus, Users, Paperclip, Camera, Trash2, UserRound, FileText, Wallet, StickyNote, FilterX, FileSignature, FileSpreadsheet } from 'lucide-react';
 import { useT, monthName } from '../i18n';
-import { useCan } from '../components/Auth';
+import { useCan, useCanExcel } from '../components/Auth';
 import { useColumns } from '../components/Columns';
 import { FilterButton, FilterMenu, applyColumnFilters, columnValues } from '../components/ColumnFilter';
 import { ConflictBanner, EditingMark, useEditLock, useLocks } from '../components/Locks';
@@ -45,6 +45,7 @@ export default function Students({ nav, route }) {
   const act = useAction();
   const canEdit = useCan('students');
   const canPay = useCan('payments');
+  const canExcel = useCanExcel('students');
   const t = useT();
   const [start] = useState(() =>
     route.groupId || route.debtOnly
@@ -355,7 +356,9 @@ export default function Students({ nav, route }) {
         <div className="spacer" />
         {columnsButton}
         {/* Excel: every student with all details (the window lets you pick the columns). */}
-        <Button icon={FileSpreadsheet} onClick={() => setExportAll(true)} title={t('groupsExport.allButton')} aria-label={t('groupsExport.allButton')} />
+        {canExcel && (
+          <Button icon={FileSpreadsheet} onClick={() => setExportAll(true)} title={t('groupsExport.allButton')} aria-label={t('groupsExport.allButton')} />
+        )}
 
         {canEdit && (
           <Button variant="primary" icon={Plus} onClick={addStudent}>

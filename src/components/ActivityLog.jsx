@@ -5,6 +5,7 @@ import { dictionaries } from '../locales';
 import { rpc, fmtDateTime, todayIso, money } from '../lib';
 import { Button, Empty, Loading, SearchBox, useAction, useClub } from './ui';
 import { HistoryRow, historyText } from './StudentExtras';
+import { useCanExcel } from './Auth';
 
 const PAGE = 100;
 export const LOG_SECTIONS = ['students', 'payments', 'attendance', 'groups', 'contracts', 'notes', 'users', 'system'];
@@ -16,6 +17,7 @@ let kept = EMPTY;
 // what changed, action names), filter by section, user and dates, page through it, export what is found.
 export default function ActivityLog({ nav }) {
   const t = useT();
+  const canExcel = useCanExcel('settings');
   const lang = useLang();
   const act = useAction();
   const club = useClub();
@@ -126,9 +128,11 @@ export default function ActivityLog({ nav }) {
           </Button>
         )}
         <div className="grow" />
-        <Button icon={FileSpreadsheet} onClick={exportFile} disabled={!data?.total}>
-          Excel
-        </Button>
+        {canExcel && (
+          <Button icon={FileSpreadsheet} onClick={exportFile} disabled={!data?.total}>
+            Excel
+          </Button>
+        )}
       </div>
       <div className="small muted">
         {data ? t(filtered ? 'logSection.found' : 'logSection.total', { n: data.total.toLocaleString('en-US') }) : ''} · {t('logSection.keptForever')}

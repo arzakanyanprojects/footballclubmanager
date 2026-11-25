@@ -894,3 +894,34 @@ fieldset:disabled .switch { cursor: default; opacity: 0.6; }
 
 /* «Հաշվետվություններ»: five figures in a row */
 .dash-page > .stats { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+
+/* Today's sales window: compact columns so the whole table fits the window's width (no sideways scroll) */
+.today-table { width: 100%; }
+.today-table th, .today-table td { padding: 8px 10px; }
+.today-table th { white-space: normal; } /* headers go to two lines only when the window is too narrow */
+.today-table td { font-size: 13px; }
+.today-table .link-btn { text-align: left; }
+
+/* Today's sales window: the total of each payment method, then the grand total */
+.today-totals { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-top: 14px; }
+.today-total { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 14px; display: flex; flex-direction: column; gap: 4px; }
+.today-total-sum { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.today-total.grand { border-color: var(--accent); }
+.today-total.grand .today-total-sum { color: var(--accent); }
+
+/* Users → rights: the «Excel» tick after each menu's level (kept in place, hidden, for menus without Excel) */
+.rights-excel { min-width: 72px; white-space: nowrap; }
+.rights-row:has(.rights-excel) { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 14px; }
+.rights-row:has(.rights-excel) .seg { justify-self: end; }
+.rights-excel.invisible { visibility: hidden; }
+
+/* Mandatory update: replaces the whole app until the new version is installed */
+.update-screen { position: fixed; inset: 0; z-index: 9999; display: grid; place-items: center; background: var(--bg); padding: 24px; }
+.update-box { max-width: 460px; width: 100%; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 14px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 32px 28px; box-shadow: var(--shadow-sm); }
+.update-box h2 { margin: 0; font-size: 20px; }
+.update-box p { margin: 0; }
+.update-icon { color: var(--accent); }
+.update-progress { width: 100%; display: flex; flex-direction: column; gap: 8px; }
+.update-progress .progress { height: 8px; border-radius: 99px; background: var(--surface-2); overflow: hidden; }
+.update-progress .progress > div { height: 100%; background: var(--accent); transition: width .3s; }

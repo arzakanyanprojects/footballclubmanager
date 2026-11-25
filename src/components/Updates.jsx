@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Download, RefreshCw, CheckCircle2, AlertTriangle } from 'lucide-react';
+import { Download, RefreshCw, CheckCircle2, AlertTriangle, ShieldAlert } from 'lucide-react';
 import { useT } from '../i18n';
 import { Button, useConfirm } from './ui';
 
@@ -20,6 +20,43 @@ function useInstall() {
     if (await confirm({ title: t('update.installTitle', { v: version }), text: t('update.installText'), confirmLabel: t('update.install') }))
       window.fc.update.install();
   };
+}
+
+// A new version was found: the update is mandatory, so this screen replaces the whole app (sign-in included)
+// until it is installed — first the download's progress, then the only button, «Update now».
+export function UpdateScreen({ status: s }) {
+  const t = useT();
+  const ready = s.state === 'ready';
+  const failed = s.state === 'error';
+  return (
+    <div className="update-screen">
+      <div className="update-box">
+        <ShieldAlert size={40} className="update-icon" />
+        <h2>{t('update.requiredTitle', { v: s.version || '' })}</h2>
+        <p className="muted">{t('update.requiredText', { current: s.current || '' })}</p>
+        {ready ? (
+          <Button variant="primary" icon={Download} onClick={() => window.fc.update.install()}>
+            {t('update.now')}
+          </Button>
+        ) : failed ? (
+          <>
+            <p style={{ color: 'var(--bad)' }}>{t('update.error', { error: s.error || '' })}</p>
+            <Button icon={RefreshCw} onClick={() => window.fc.update.check()}>
+              {t('update.retry')}
+            </Button>
+          </>
+        ) : (
+          <div className="update-progress">
+            <div className="small">{t('update.downloading', { v: s.version || '', p: s.percent || 0 })}</div>
+            <div className="progress">
+              <div style={{ width: `${s.percent || 0}%` }} />
+            </div>
+          </div>
+        )}
+        <p className="small muted">{t('update.requiredHelp')}</p>
+      </div>
+    </div>
+  );
 }
 
 // Sidebar: shown only when a new version is downloaded and waiting.

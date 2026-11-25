@@ -1,13 +1,14 @@
 // Automatic updates from the GitHub Releases of arzakanyanprojects/footballclubmanager
-// (set in package.json → build.publish). A new version is downloaded in the background and
-// installed when the user clicks "Restart and update" (or the next time the app quits).
+// (set in package.json → build.publish). Updates are mandatory: once a new version is found
+// (status.required), the app shows only the update screen — it downloads, then the only thing
+// the user can do is «Update now» (it also installs the next time the app quits).
 const { app } = require('electron');
 
 let autoUpdater = null;
 let status = { state: 'idle', current: null };
 let notify = () => {};
 
-const CHECK_EVERY = 4 * 60 * 60 * 1000; // 4 hours
+const CHECK_EVERY = 30 * 60 * 1000; // 30 minutes
 
 function set(next) {
   status = { ...status, ...next, current: app.getVersion() };
@@ -19,6 +20,20 @@ function setup(onStatus) {
   status.current = app.getVersion();
   if (!app.isPackaged) {
     status.state = 'dev';
+    // Testing (FC_FAKE_UPDATE=1.2.3): pretend that version was found and downloads, to see the update screen.
+    if (process.env.FC_FAKE_UPDATE) {
+      setTimeout(() => {
+        set({ state: 'downloading', version: process.env.FC_FAKE_UPDATE, percent: 0, required: true });
+        const tick = setInterval(() => {
+          const percent = Math.min(100, (status.percent || 0) + 20);
+          if (percent < 100) set({ percent });
+          else {
+            clearInterval(tick);
+            set({ state: 'ready' });
+          }
+        }, 1000);
+      }, 3000);
+    }
     return;
   }
   ({ autoUpdater } = require('electron-updater'));
@@ -28,7 +43,7 @@ function setup(onStatus) {
 
   autoUpdater.on('checking-for-update', () => set({ state: 'checking', error: null }));
   autoUpdater.on('update-not-available', () => set({ state: 'none', checkedAt: new Date().toISOString() }));
-  autoUpdater.on('update-available', (i) => set({ state: 'downloading', version: i.version, percent: 0 }));
+  autoUpdater.on('update-available', (i) => set({ state: 'downloading', version: i.version, percent: 0, required: true, error: null }));
   autoUpdater.on('download-progress', (p) => set({ state: 'downloading', percent: Math.round(p.percent || 0) }));
   autoUpdater.on('update-downloaded', (i) => set({ state: 'ready', version: i.version }));
   autoUpdater.on('error', (err) => {
@@ -38,13 +53,14 @@ function setup(onStatus) {
     else set({ state: 'error', error: msg.split('\n')[0].slice(0, 200) });
   });
 
-  setTimeout(check, 15 * 1000);
+  setTimeout(check, 3 * 1000);
   setInterval(check, CHECK_EVERY);
 }
 
 function check() {
   if (!autoUpdater) return status;
   if (['checking', 'downloading', 'ready'].includes(status.state)) return status;
+  if (status.required) set({ state: 'downloading', percent: 0, error: null }); // trying again after a failed download
   autoUpdater.checkForUpdates().catch(() => {}); // reported through the 'error' event
   return status;
 }

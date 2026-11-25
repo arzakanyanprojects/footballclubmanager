@@ -22,7 +22,7 @@ export default function Settings({ route, nav, appState, setAppState }) {
     { id: 'pc', label: t('settings.thisPc'), icon: Monitor },
     auth.can('payments') && { id: 'hdm', label: t('hdm.tab'), icon: Receipt },
     auth.can('settings', 'view') && { id: 'network', label: t('settings.network'), icon: Network },
-    (auth.can('settings', 'view') || auth.can('students', 'view')) && { id: 'data', label: t('data.tab'), icon: Database },
+    auth.can('settings', 'view') && { id: 'data', label: t('data.tab'), icon: Database },
     auth.can('settings', 'view') && { id: 'notify', label: t('notify.tab'), icon: BellRing },
     (!auth.required || auth.user?.is_admin) && { id: 'users', label: t('users.tab'), icon: UserCog },
     auth.can('settings', 'view') && { id: 'activity', label: t('settings.activity'), icon: History },

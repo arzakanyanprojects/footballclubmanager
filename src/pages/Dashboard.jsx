@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { Users, Wallet, AlertTriangle, CalendarCheck, Plus, ChevronRight, FileClock, FileSpreadsheet, MessageCircle, Banknote } from 'lucide-react';
 import { useT, monthName } from '../i18n';
-import { useCan } from '../components/Auth';
+import { useCan, useCanExcel } from '../components/Auth';
 import { MessageButton, useMessenger } from '../components/Messenger';
 import { useRpc, rpc, compactMoney, fmtDate, fmtDateTime, money, todayIso } from '../lib';
-import { Avatar, Button, Empty, Loading, Money, useClub } from '../components/ui';
-import { chargeLabel, MethodTag } from './Payments';
+import { Avatar, Button, Empty, Loading, Modal, Money, Segmented, useClub } from '../components/ui';
+import { chargeLabel, MethodTag, PAYMENT_METHODS } from './Payments';
 import { ReportsModal } from '../components/Reports';
 
 export default function Dashboard({ nav }) {
@@ -14,6 +14,8 @@ export default function Dashboard({ nav }) {
   const { data } = useRpc('dashboard.summary');
   const [exporting, setExporting] = useState(false);
   const [chartMode, setChartMode] = useState('paid'); // 'paid': by payment date · 'fees': by the month the fee is for
+  const [showToday, setShowToday] = useState(false);
+  const canExcel = useCanExcel('reports');
   if (!data) return <Loading />;
 
   const m = data.monthlyThisPeriod;
@@ -22,15 +24,18 @@ export default function Dashboard({ nav }) {
 
   return (
     <div className="fill-page dash-page">
+      {showToday && <TodaySalesModal nav={nav} onClose={() => setShowToday(false)} />}
       <div className="page-head">
         <div>
           <h1>{t('nav.dashboard')}</h1>
           <div className="sub">{t('dash.subtitle', { date: fmtDate(todayIso()) })}</div>
         </div>
         <div className="spacer" />
-        <Button variant="primary" icon={FileSpreadsheet} onClick={() => setExporting(true)}>
-          {t('reportsx.title')}
-        </Button>
+        {canExcel && (
+          <Button variant="primary" icon={FileSpreadsheet} onClick={() => setExporting(true)}>
+            {t('reportsx.title')}
+          </Button>
+        )}
       </div>
       {exporting && <ReportsModal onClose={() => setExporting(false)} />}
 
@@ -58,7 +63,7 @@ export default function Dashboard({ nav }) {
             {money(Math.abs(delta), currency)} {t('dash.vsLastMonth')}
           </div>
         </div>
-        <div className="card stat">
+        <div className="card stat click" style={{ cursor: 'pointer' }} title={t('dash.todayOpen')} onClick={() => setShowToday(true)}>
           <div className="stat-top">
             {t('dash.today')}
             <div className="stat-icon good">
@@ -66,10 +71,6 @@ export default function Dashboard({ nav }) {
             </div>
           </div>
           <div className="stat-value">{money(data.today?.total || 0, currency)}</div>
-          <div className="stat-sub">
-            {t('dash.todayCount', { n: data.today?.count || 0 })}
-            {data.today?.hdm > 0 && ` · ${t('dash.todayHdm', { amount: money(data.today.hdm, currency) })}`}
-          </div>
         </div>
         <div className="card stat click" style={{ cursor: 'pointer' }} onClick={() => nav('students', { debtOnly: true })}>
           <div className="stat-top">
@@ -357,5 +358,110 @@ function DebtorsMessageButton() {
     >
       <span className="btn-label">{t('messenger.remindAllShort')}</span>
     </Button>
+  );
+}
+
+// «Այսօրվա վաճառքներ» opened: today's payments in the order they were taken, numbered, with the exact time.
+// When users sign in, first only the ones this user took («Իմ վճարումները»), or everyone's.
+function TodaySalesModal({ nav, onClose }) {
+  const t = useT();
+  const { currency } = useClub();
+  const [mine, setMine] = useState(true);
+  const { data } = useRpc('dashboard.today.list', { mine });
+  const rows = data?.rows || [];
+  const total = rows.reduce((sum, r) => sum + (r.amount || 0), 0);
+  // Today's total by payment method (all three, even when nothing was taken that way), then the grand total.
+  const byMethod = PAYMENT_METHODS.map((m) => {
+    const of = rows.filter((r) => (r.method || PAYMENT_METHODS[0]) === m);
+    return { m, n: of.length, sum: of.reduce((s, r) => s + (r.amount || 0), 0) };
+  });
+  const showWho = data && !data.mine;
+  const open = (r) => {
+    onClose();
+    nav('students', { id: r.student_id });
+  };
+  return (
+    <Modal
+      title={`${t('dash.today')} — ${fmtDate(todayIso())}`}
+      onClose={onClose}
+      width={1040}
+      footer={
+        <>
+          <div className="grow" />
+          <Button onClick={onClose}>{t('common.close')}</Button>
+        </>
+      }
+    >
+      {data?.signedIn && (
+        <div className="row" style={{ marginBottom: 12 }}>
+          <Segmented
+            value={mine}
+            onChange={setMine}
+            options={[
+              { value: true, label: t('dash.todayMine') },
+              { value: false, label: t('dash.todayAll') },
+            ]}
+          />
+        </div>
+      )}
+      {!data ? (
+        <Loading />
+      ) : rows.length === 0 ? (
+        <Empty icon={Banknote} title={t(data.mine ? 'dash.todayNoneMine' : 'dash.todayNone')} />
+      ) : (
+        <div className="table-wrap" style={{ maxHeight: '60vh', overflow: 'auto' }}>
+          <table className="table today-table">
+            <thead>
+              <tr>
+                <th className="num">#</th>
+                <th>{t('dash.todayWhen')}</th>
+                <th>{t('payments.student')}</th>
+                <th>{t('dash.todayWhat')}</th>
+                <th>{t('dash.todayMethod')}</th>
+                <th>{t('dash.todayHdmNo')}</th>
+                {showWho && <th>{t('activity.who')}</th>}
+                <th className="num">{t('dash.todayAmount')}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r, i) => (
+                <tr key={r.id}>
+                  <td className="num muted">{i + 1}</td>
+                  <td>{r.taken_at ? fmtDateTime(r.taken_at) : fmtDate(r.paid_at)}</td>
+                  <td>
+                    <button className="link-btn" onClick={() => open(r)}>
+                      {r.first_name} {r.last_name}
+                    </button>
+                  </td>
+                  <td>{chargeLabel(t, r)}</td>
+                  <td className="nowrap">
+                    <MethodTag method={r.method} />
+                  </td>
+                  <td className="muted nowrap">{r.hdm_receipt || '—'}</td>
+                  {showWho && <td className="muted">{r.paid_by_name || '—'}</td>}
+                  <td className="num strong nowrap">{money(r.amount, currency)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {data && (
+        <div className="today-totals">
+          {byMethod.map((x) => (
+            <div key={x.m} className="today-total">
+              <MethodTag method={x.m} />
+              <div className="today-total-sum">{money(x.sum, currency)}</div>
+              <div className="small muted">{t('dash.todayCount', { n: x.n })}</div>
+            </div>
+          ))}
+          <div className="today-total grand">
+            <span className="strong">{t('dash.todayGrand')}</span>
+            <div className="today-total-sum">{money(total, currency)}</div>
+            <div className="small muted">{t('dash.todayCount', { n: rows.length })}</div>
+          </div>
+        </div>
+      )}
+    </Modal>
   );
 }

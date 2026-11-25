@@ -15,7 +15,7 @@ export default function DataManagement({ appState, setAppState }) {
   return (
     <>
       {auth.can('students', 'edit') && <ImportCard />}
-      {auth.can('students', 'view') && <TransferCard />}
+      {auth.can('students', 'view') && auth.canExcel('students') && <TransferCard />}
       {isHost && auth.can('settings', 'view') && <BackupsCard appState={appState} setAppState={setAppState} />}
     </>
   );

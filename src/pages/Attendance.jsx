@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, ChevronLeft, ChevronRight, CheckCheck, Plus, Trash2, Users, UserRound, Shapes, Save, CalendarCheck, Printer, FileSpreadsheet, FilterX } from 'lucide-react';
 import { useT, monthName } from '../i18n';
-import { useCan } from '../components/Auth';
+import { useCan, useCanExcel } from '../components/Auth';
 import { useRpc, rpc, todayIso, currentPeriod, addMonths, daysInMonth, weekday, fmtDate, fmtDateTime, money } from '../lib';
 import { Badge, Button, Empty, Field, Loading, Modal, Money, SearchBox, Segmented, useAction, useClub, useConfirm } from '../components/ui';
 import { EditingMark, useEditLock, useLocks } from '../components/Locks';
@@ -494,6 +494,7 @@ function DayMenu({ menu, month, groupId, onAllPresent, onClose }) {
 // The coaches' paper form: chosen training days as empty columns to fill in Ներկա / Բացակա by hand.
 function ExportModal({ group, month, days, students, filled, onClose }) {
   const t = useT();
+  const canExcel = useCanExcel('attendance');
   const act = useAction();
   const club = useClub();
   const today = todayIso();
@@ -550,9 +551,11 @@ function ExportModal({ group, month, days, students, filled, onClose }) {
       footer={
         <>
           <Button onClick={onClose}>{t('common.cancel')}</Button>
-          <Button icon={FileSpreadsheet} onClick={excel} disabled={!dates.length}>
-            Excel
-          </Button>
+          {canExcel && (
+            <Button icon={FileSpreadsheet} onClick={excel} disabled={!dates.length}>
+              Excel
+            </Button>
+          )}
           <Button variant="primary" icon={Printer} onClick={print} disabled={!dates.length}>
             {t('sheet.print')}
           </Button>

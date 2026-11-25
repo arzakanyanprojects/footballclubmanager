@@ -6,12 +6,16 @@ import { Badge, BrandLogo, Button, Field, Loading, Modal, Segmented, useAction, 
 
 // Menus a right can be given for (same list as electron/auth.js).
 export const SECTIONS = ['students', 'payments', 'attendance', 'schedule', 'groups', 'contracts', 'reports', 'settings'];
+// Menus that have an Excel button («Excel» tick in the user's rights).
+export const EXCEL_SECTIONS = ['students', 'attendance', 'schedule', 'groups', 'reports', 'settings'];
 const LEVEL = { none: 0, view: 1, edit: 2 };
 
 const AuthCtx = createContext({ required: false, user: null, can: () => true });
 export const useAuth = () => useContext(AuthCtx);
 // True when the signed-in user may do this (always true while sign-in is off).
 export const useCan = (section, level = 'edit') => useAuth().can(section, level);
+// True when the signed-in user may export this menu's lists to Excel (Users → the «Excel» tick).
+export const useCanExcel = (section) => useAuth().canExcel(section);
 
 // Shows the sign-in screen when the club has users and this PC isn't signed in.
 export function AuthGate({ children }) {
@@ -52,6 +56,9 @@ export function AuthGate({ children }) {
     user,
     refresh,
     can: (section, level = 'edit') => !state.required || !!user?.is_admin || LEVEL[user?.rights?.[section]] >= LEVEL[level],
+    // May export this menu's lists to Excel: sees the menu and its «Excel» tick is on.
+    canExcel: (section) =>
+      !state.required || !!user?.is_admin || (LEVEL[user?.rights?.[section]] >= LEVEL.view && user?.rights?.excel?.[section] !== false),
     signIn: async (token, remember) => {
       await window.fc.setAuthToken(token, remember);
       await refresh();
@@ -183,7 +190,10 @@ export function UsersSettings() {
                         <Badge tone="good">{t('users.admin')}</Badge>
                       ) : (
                         SECTIONS.filter((s) => u.rights[s] !== 'none')
-                          .map((s) => `${t(`users.section_${s}`)}${u.rights[s] === 'view' ? ` (${t('users.viewShort')})` : ''}`)
+                          .map((s) => {
+                            const notes = [u.rights[s] === 'view' && t('users.viewShort'), EXCEL_SECTIONS.includes(s) && u.rights.excel?.[s] === false && t('users.noExcelShort')].filter(Boolean);
+                            return `${t(`users.section_${s}`)}${notes.length ? ` (${notes.join(', ')})` : ''}`;
+                          })
                           .join(', ') || <span className="muted">—</span>
                       )}
                     </td>
@@ -242,10 +252,11 @@ function UserModal({ user, onClose, onSaved }) {
     is_admin: user.first ? true : !!user.is_admin,
     active: user.active !== false,
     notify_actions: !!user.notify_actions,
-    rights: { ...NO_RIGHTS, ...(user.is_admin ? {} : user.rights || {}) },
+    rights: { ...NO_RIGHTS, ...(user.is_admin ? {} : user.rights || {}), excel: { ...(user.is_admin ? {} : user.rights?.excel || {}) } },
   });
   const set = (k) => (e) => setF({ ...f, [k]: e?.target ? (e.target.type === 'checkbox' ? e.target.checked : e.target.value) : e });
   const setRight = (s, v) => setF({ ...f, rights: { ...f.rights, [s]: v } });
+  const setExcel = (s, on) => setF({ ...f, rights: { ...f.rights, excel: { ...f.rights.excel, [s]: on } } });
 
   const save = async () => {
     const r = await act(() => rpc('users.save', { id: user.id, ...f }), t('common.saved'));
@@ -256,7 +267,7 @@ function UserModal({ user, onClose, onSaved }) {
     <Modal
       title={user.first ? t('users.createAdmin') : isNew ? t('users.add') : f.full_name || f.username}
       onClose={onClose}
-      width={620}
+      width={720}
       footer={
         <>
           <Button onClick={onClose}>{t('common.cancel')}</Button>
@@ -310,6 +321,18 @@ function UserModal({ user, onClose, onSaved }) {
                   onChange={(v) => setRight(s, v)}
                   options={['none', 'view', 'edit'].map((v) => ({ value: v, label: t(`users.level_${v}`) }))}
                 />
+                <label
+                    className={`check rights-excel ${EXCEL_SECTIONS.includes(s) ? '' : 'invisible'}`}
+                    title={t('users.excelHint')}
+                  >
+                    <input
+                      type="checkbox"
+                      disabled={f.rights[s] === 'none'}
+                      checked={f.rights[s] !== 'none' && f.rights.excel?.[s] !== false}
+                      onChange={(e) => setExcel(s, e.target.checked)}
+                    />
+                    Excel
+                  </label>
               </div>
             ))}
           </div>
