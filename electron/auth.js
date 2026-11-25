@@ -16,6 +16,7 @@ function sectionOf(method) {
     case 'students':
     case 'files':
     case 'applications':
+    case 'notes':
       return 'students';
     case 'charges':
     case 'products':

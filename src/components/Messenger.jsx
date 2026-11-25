@@ -238,7 +238,7 @@ export function MessageButton({ studentIds, kind = 'reminder', size = 'sm', labe
 }
 
 // ---------------------------------------------------------------- Settings → Notifications: the texts
-export function MessengerTemplates() {
+export function MessengerTemplates({ bare = false }) {
   const t = useT();
   const lang = useLang();
   const club = useClub();
@@ -255,14 +255,9 @@ export function MessengerTemplates() {
       toast.error(t(`error.${err.code}`, err.detail));
     }
   };
-  return (
-    <div className="card settings-section">
-      <div className="card-head">
-        <MessageCircle size={17} />
-        <h3>{t('messenger.settingsTitle')}</h3>
-      </div>
-      <div className="card-pad stack">
-        <div className="small muted">{t('messenger.settingsHint')}</div>
+  const body = (
+      <div className={bare ? 'stack' : 'card-pad stack'}>
+        {!bare && <div className="small muted">{t('messenger.settingsHint')}</div>}
         <div className="small muted">{t('messenger.placeholders')}</div>
         {MESSAGE_KINDS.map((k) => (
           <Field key={k} label={t(`messenger.kind_${k}`)}>
@@ -297,6 +292,15 @@ export function MessengerTemplates() {
           </div>
         )}
       </div>
+  );
+  if (bare) return body;
+  return (
+    <div className="card settings-section">
+      <div className="card-head">
+        <MessageCircle size={17} />
+        <h3>{t('messenger.settingsTitle')}</h3>
+      </div>
+      {body}
     </div>
   );
 }

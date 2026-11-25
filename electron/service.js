@@ -48,7 +48,7 @@ const int = (v, def = 0) => {
   const n = Number(v);
   return Number.isFinite(n) ? Math.round(n) : def;
 };
-const formatDate = (iso) => (iso ? iso.split('-').reverse().join('.') : '');
+const formatDate = (iso) => (iso ? iso.split('-').reverse().join('/') : '');
 
 function createService(db, { onWrite, getNotify } = {}) {
   const cache = new Map();
@@ -101,7 +101,7 @@ function createService(db, { onWrite, getNotify } = {}) {
     if (k === 'category') return LABELS.categories[v] || v;
     if (k === 'status') return LABELS.statuses[v] || v;
     if (k === 'medical_doc') return Number(v) ? '✓' : '✕';
-    if (/date$/.test(k)) return String(v).slice(0, 10).split('-').reverse().join('.');
+    if (/date$/.test(k)) return String(v).slice(0, 10).split('-').reverse().join('/');
     if (k === 'monthly_fee') return amd(v);
     return String(v);
   };
@@ -129,7 +129,7 @@ function createService(db, { onWrite, getNotify } = {}) {
     if (!chats.length) return;
     const d = new Date();
     const p2 = (n) => String(n).padStart(2, '0');
-    const when = `${p2(d.getDate())}.${p2(d.getMonth() + 1)}.${d.getFullYear()} ${p2(d.getHours())}:${p2(d.getMinutes())}`;
+    const when = `${p2(d.getDate())}/${p2(d.getMonth() + 1)}/${d.getFullYear()} ${p2(d.getHours())}:${p2(d.getMinutes())}`;
     const shown = lines.slice(0, 20);
     const more = lines.length > shown.length ? `\n… ևս ${lines.length - shown.length}` : '';
     const text = `👤 ${who} · ${when}\n${shown.join('\n')}${more}`;
@@ -142,7 +142,7 @@ function createService(db, { onWrite, getNotify } = {}) {
   };
   // Student fields compared for «what changed» (photo only as changed / not).
   const HISTORY_FIELDS = ['first_name', 'last_name', 'patronymic', 'birth_date', 'document_no', 'contract_no', 'category', 'service', 'medical_doc',
-    'group_id', 'monthly_fee', 'join_date', 'status', 'inactive_reason', 'leave_date', 'notes',
+    'group_id', 'monthly_fee', 'join_date', 'status', 'inactive_reason', 'leave_date',
     'parent_first_name', 'parent_last_name', 'parent_phone', 'parent_messenger', 'parent_email', 'parent_ssn', 'parent_doc_no', 'parent_doc_issuer',
     'parent_doc_date', 'parent_address', 'phone', 'email', 'address', 'photo'];
   const diffStudent = (before, after) => {
@@ -567,6 +567,28 @@ function createService(db, { onWrite, getNotify } = {}) {
   // ---------------------------------------------------------------- edit locks + versions
   const locks = createLocks();
   // The record a write changes, as lock keys: refused while another window holds one of them.
+  // The club's services (Settings: the student form's list); older names map to the new ones.
+  const SERVICE_MAP = {
+    'Առաջնություն անվճար': 'Առաջնություն', 'Առաջնություն զեղչված': 'Առաջնություն', 'Առաջնություն վճարովի': 'Առաջնություն',
+    'Ուսումնամարզական %': 'Ուսումնամարզական', 'Ուսումնամարզական անվճար': 'Ուսումնամարզական',
+    'Ֆուտբոլ անհ.12': 'Ֆուտբոլ անհ. 12', 'Ֆուտբոլ անհ.16': 'Ֆուտբոլ անհ. 16',
+  };
+  const normService = (v) => {
+    const s = str(v);
+    return s ? SERVICE_MAP[s.replace(/\s+/g, ' ')] || s.replace(/\s+/g, ' ') : s;
+  };
+  // A note under the student, with who added it (unless the same text is already there, e.g. a repeated import).
+  function addNote(studentId, text, ctx, always = false) {
+    const t = str(text);
+    if (!t || !studentId) return null;
+    if (!always && one('SELECT id FROM student_notes WHERE student_id = :sid AND text = :t', { sid: studentId, t })) return null;
+    const r = run('INSERT INTO student_notes (student_id, text, created_by, user_id) VALUES (:sid, :t, :by, :uid)', {
+      sid: studentId, t, by: ctx.user || null, uid: ctx.account?.id || null,
+    });
+    log(ctx, 'note.added', `${studentName(studentId)} — ${t.slice(0, 120)}`, studentId);
+    return Number(r.lastInsertRowid);
+  }
+
   function lockKeysFor(method, p = {}) {
     const studentOfCharge = (id) => one('SELECT student_id FROM charges WHERE id = :id', { id: Number(id) || 0 })?.student_id;
     const st = (...ids) => ids.filter(Boolean).map((id) => `student:${id}`);
@@ -803,7 +825,7 @@ function createService(db, { onWrite, getNotify } = {}) {
         `SELECT s.id, s.first_name, s.last_name, s.birth_date, s.phone, s.parent_name, s.parent_phone,
                 s.group_id, g.name AS group_name, g.color AS group_color, g.coach AS group_coach, s.monthly_fee, s.join_date, s.status, s.inactive_reason, s.medical_doc, s.patronymic, s.category, s.contract_no, s.service,
                 s.parent_first_name, s.parent_last_name, s.parent_doc_no, s.parent_doc_issuer, s.parent_doc_date, s.parent_ssn, s.parent_address, s.parent_email, s.parent_messenger,
-                s.document_no, s.notes, s.leave_date,
+                s.document_no, (SELECT group_concat(n.text, char(10)) FROM (SELECT text FROM student_notes WHERE student_id = s.id ORDER BY id) n) AS notes, s.leave_date,
                 IFNULL((SELECT SUM(amount) FROM charges c
                         WHERE c.student_id = s.id AND c.status = 'unpaid' AND c.due_date < :t), 0) AS overdue,
                 IFNULL((SELECT SUM(amount) FROM charges c
@@ -842,6 +864,7 @@ function createService(db, { onWrite, getNotify } = {}) {
       if (!student) throw new AppError('NOT_FOUND');
       return {
         student,
+        notes: all('SELECT id, text, created_at, created_by, user_id FROM student_notes WHERE student_id = :id ORDER BY id DESC', { id }),
         // Linked students (brothers, sisters…): everyone connected through links.
         related: relatedOf(Number(id)),
         // The group's usual training week (for the customer receipt).
@@ -885,7 +908,7 @@ function createService(db, { onWrite, getNotify } = {}) {
         first_name: str(p.first_name),
         patronymic: str(p.patronymic),
         contract_no: str(p.contract_no),
-        service: str(p.service),
+        service: normService(p.service),
         category: ['siblings', 'half', 'war', 'staff', 'orphan'].includes(p.category) ? p.category : null,
         last_name: str(p.last_name),
         birth_date: str(p.birth_date),
@@ -910,7 +933,7 @@ function createService(db, { onWrite, getNotify } = {}) {
         join_date: str(p.join_date),
         status: p.status === 'inactive' ? 'inactive' : 'active',
         inactive_reason: p.status === 'inactive' ? str(p.inactive_reason) : null,
-        notes: str(p.notes),
+        notes: null,
         medical_doc: p.medical_doc === true || Number(p.medical_doc) === 1 ? 1 : 0,
         photo: p.photo || null,
       };
@@ -936,7 +959,7 @@ function createService(db, { onWrite, getNotify } = {}) {
              parent_doc_date = :parent_doc_date, parent_ssn = :parent_ssn, parent_address = :parent_address, parent_email = :parent_email,
              parent_messenger = :parent_messenger,
              monthly_fee = :monthly_fee, join_date = :join_date, status = :status, inactive_reason = :inactive_reason, leave_date = :leave_date,
-             billing_from = :billing_from, notes = :notes, photo = :photo, medical_doc = :medical_doc,
+             billing_from = :billing_from, photo = :photo, medical_doc = :medical_doc,
              updated_at = datetime('now', 'localtime')
            WHERE id = :id`,
           row
@@ -949,6 +972,7 @@ function createService(db, { onWrite, getNotify } = {}) {
         }
         const changes = diffStudent(before, one('SELECT * FROM students WHERE id = :id', { id: p.id }));
         if (changes.length) log(ctx, 'student.updated', `${row.first_name} ${row.last_name}`, p.id, { changes });
+        addNote(p.id, p.notes, ctx);
         ensureMonthlyCharges(p.id);
         return { id: p.id };
       }
@@ -963,6 +987,7 @@ function createService(db, { onWrite, getNotify } = {}) {
         row
       );
       log(ctx, 'student.created', `${row.first_name} ${row.last_name}`, Number(r.lastInsertRowid));
+      addNote(Number(r.lastInsertRowid), p.notes, ctx);
       ensureMonthlyCharges(Number(r.lastInsertRowid));
       return { id: Number(r.lastInsertRowid) };
     },
@@ -984,7 +1009,7 @@ function createService(db, { onWrite, getNotify } = {}) {
         `DELETE FROM charges WHERE student_id = :id AND kind = 'monthly' AND status = 'unpaid' AND period > :month`,
         { id, month: d.slice(0, 7) }
       ).changes;
-      log(ctx, 'student.terminated', `${studentName(id)} — ${d.split('-').reverse().join('.')}`, id, { date: d, reason: str(reason), removed });
+      log(ctx, 'student.terminated', `${studentName(id)} — ${d.split('-').reverse().join('/')}`, id, { date: d, reason: str(reason), removed });
       return { removed };
     },
 
@@ -1117,6 +1142,23 @@ function createService(db, { onWrite, getNotify } = {}) {
       return events.sort((x, y) => String(y.at).localeCompare(String(x.at)) || (y.id || 0) - (x.id || 0));
     },
 
+    // ---------------------------------------------------------------- notes («Նշումներ» on the student's page)
+    // Not tied to the student's edit lock: a note can be added while someone else edits the student.
+    'notes.add': ({ studentId, text }, ctx) => {
+      if (!one('SELECT id FROM students WHERE id = :id', { id: Number(studentId) || 0 })) throw new AppError('NOT_FOUND');
+      if (!str(text)) throw new AppError('TEXT_REQUIRED');
+      return { id: addNote(Number(studentId), text, ctx, true) };
+    },
+    'notes.delete': ({ id }, ctx) => {
+      const n = one('SELECT * FROM student_notes WHERE id = :id', { id: Number(id) || 0 });
+      if (!n) throw new AppError('NOT_FOUND');
+      // The author or an administrator (anyone, when sign-in is off).
+      if (ctx.account && !ctx.account.is_admin && Number(n.user_id) !== Number(ctx.account.id)) throw new AppError('FORBIDDEN');
+      run('DELETE FROM student_notes WHERE id = :id', { id: n.id });
+      log(ctx, 'note.deleted', `${studentName(n.student_id)} — ${n.text.slice(0, 120)}`, n.student_id);
+      return { ok: true };
+    },
+
     // ---------------------------------------------------------------- full transfer to another FC Manager
     // Everything about the chosen students, for moving them to another PC: the student (incl. termination
     // date and photo), payments (incl. «Դիմում» periods, «Հարգելի» months and ՀԴՄ numbers), attendance,
@@ -1136,6 +1178,7 @@ function createService(db, { onWrite, getNotify } = {}) {
           group: s.group_name || null,
           charges: all('SELECT * FROM charges WHERE student_id = :id ORDER BY id', { id }).map((c) => pick(c, ['student_id', 'product_id'])),
           attendance: all('SELECT date, status, marked_by FROM attendance WHERE student_id = :id ORDER BY date', { id }),
+          notes: all('SELECT text, created_at, created_by FROM student_notes WHERE student_id = :id ORDER BY id', { id }),
           absences: all('SELECT * FROM absences WHERE student_id = :id ORDER BY id', { id }).map((a) => pick(a, ['student_id'])),
           files: all('SELECT * FROM student_files WHERE student_id = :id ORDER BY id', { id }).map((f) => ({
             ...pick(f, ['student_id', 'data']),
@@ -1221,6 +1264,13 @@ function createService(db, { onWrite, getNotify } = {}) {
           res.created++;
           log({ ...ctx, quiet: true }, 'student.transferred', `${s.first_name} ${s.last_name}`, sid, { file: str(data.fileName), exportedAt: data.exportedAt });
         }
+
+        // Notes (an older file has them in the student's «notes» field).
+        for (const n of item.notes || (str(s.notes) ? [{ text: str(s.notes), created_at: s.created_at || null, created_by: null }] : []))
+          if (str(n.text) && !one('SELECT id FROM student_notes WHERE student_id = :sid AND text = :text', { sid, text: str(n.text) }))
+            run(`INSERT INTO student_notes (student_id, text, created_at, created_by) VALUES (:sid, :text, IFNULL(:at, datetime('now', 'localtime')), :by)`,
+              { sid, text: str(n.text), at: n.created_at || null, by: n.created_by || null });
+        run('UPDATE students SET notes = NULL WHERE id = :sid AND notes IS NOT NULL', { sid });
 
         // Uploaded documents (skipped when the same file is already there).
         const fileIds = new Map();
@@ -1635,7 +1685,9 @@ function createService(db, { onWrite, getNotify } = {}) {
           description,
           quantity,
           amount,
-          dueDate: str(p.dueDate) || (kind === 'monthly' ? `${p.period}-${pad(int(settings().due_day, 10))}` : today()),
+          dueDate:
+            str(p.dueDate) ||
+            (kind === 'monthly' ? `${p.period}-${pad(int(settings().due_day, 10))}` : /^\d{4}-\d{2}$/.test(p.forPeriod || '') ? `${p.forPeriod}-${pad(int(settings().due_day, 10))}` : today()),
           status: paid ? 'paid' : 'unpaid',
           paidAt: paid ? str(p.paidAt) || today() : null,
           method: paid ? str(p.method) || DEFAULT_METHOD : null,
@@ -2221,7 +2273,7 @@ function createService(db, { onWrite, getNotify } = {}) {
           );
         case 'discounts':
           return all(
-            `SELECT ${student} AS student, g.name AS group_name, s.category, s.monthly_fee, s.status, s.notes,
+            `SELECT ${student} AS student, g.name AS group_name, s.category, s.monthly_fee, s.status, (SELECT group_concat(n.text, char(10)) FROM (SELECT text FROM student_notes WHERE student_id = s.id ORDER BY id) n) AS notes,
                     (SELECT IFNULL(SUM(amount), 0) FROM charges c WHERE c.student_id = s.id AND c.status = 'paid') AS paid_total
              FROM students s LEFT JOIN groups g ON g.id = s.group_id
              WHERE (s.category IS NOT NULL OR s.monthly_fee = 0) ${groupFilter} ${byGroup}`,
@@ -2334,13 +2386,57 @@ function createService(db, { onWrite, getNotify } = {}) {
     },
 
     // ---------------------------------------------------------------- activity
-    'activity.list': ({ limit } = {}) =>
-      // Per-student details (attendance corrections, receipt numbers, transferred students) stay in the student's history.
-      all(
-        `SELECT * FROM activity_log WHERE action NOT IN ('attendance.changed', 'charge.hdm', 'charge.hdmReturned', 'student.transferred', 'student.transferUpdated')
-         ORDER BY id DESC LIMIT :limit`,
-        { limit: Math.min(int(limit, 200), 1000) }
-      ),
+    // The activity log (kept for good): searched and filtered, newest first, a page at a time.
+    // q: words in the details, the user, the student's name or what changed; actions: action keys whose
+    // names (in the screen's language) contain q; section: a part of the app; user; from / to: dates.
+    'activity.list': ({ q, actions, section, user, from, to, limit, offset } = {}) => {
+      const SECTIONS = {
+        students: ['student.%', 'students.%', 'application.%'],
+        payments: ['charge.%', 'message.%', 'notify.%', 'product.%'],
+        attendance: ['attendance.%', 'training.%'],
+        groups: ['group.%', 'schedule.%'],
+        contracts: ['contract.%', 'template.%', 'file.%'],
+        notes: ['note.%'],
+        users: ['auth.%', 'user.%'],
+        system: ['settings.%', 'data.%', 'demo.%'],
+      };
+      const where = [];
+      const p = {};
+      if (SECTIONS[section]) where.push(`(${SECTIONS[section].map((pat, i) => ((p[`s${i}`] = pat), `a.action LIKE :s${i}`)).join(' OR ')})`);
+      if (str(user)) {
+        where.push('a.user = :user');
+        p.user = str(user);
+      }
+      if (/^\d{4}-\d{2}-\d{2}$/.test(from || '')) {
+        where.push('a.at >= :from');
+        p.from = from;
+      }
+      if (/^\d{4}-\d{2}-\d{2}$/.test(to || '')) {
+        where.push("a.at < date(:to, '+1 day')");
+        p.to = to;
+      }
+      const words = String(q || '').trim().split(/\s+/).filter(Boolean).slice(0, 6);
+      const keys = (Array.isArray(actions) ? actions : []).filter((k) => /^[a-zA-Z_.]+$/.test(k)).slice(0, 200);
+      const keyList = keys.map((k, i) => ((p[`k${i}`] = k), `:k${i}`)).join(', ');
+      // Every word must be found somewhere (or the whole text names the action).
+      if (words.length) {
+        const hay = `ulower(IFNULL(a.details, '') || ' ' || IFNULL(a.user, '') || ' ' || IFNULL(s.first_name, '') || ' ' || IFNULL(s.last_name, '') || ' ' || IFNULL(s.patronymic, '') || ' ' || IFNULL(a.meta, ''))`;
+        const conds = words.map((w, i) => ((p[`w${i}`] = `%${w}%`), `${hay} LIKE ulower(:w${i})`)).join(' AND ');
+        where.push(keys.length ? `((${conds}) OR a.action IN (${keyList}))` : `(${conds})`);
+      }
+      const from_ = `FROM activity_log a LEFT JOIN students s ON s.id = a.student_id ${where.length ? `WHERE ${where.join(' AND ')}` : ''}`;
+      const rows = all(
+        `SELECT a.id, a.at, a.user, a.action, a.details, a.student_id, a.meta,
+                CASE WHEN s.id IS NOT NULL THEN s.first_name || ' ' || s.last_name END AS student_name
+         ${from_} ORDER BY a.id DESC LIMIT :limit OFFSET :offset`,
+        { ...p, limit: Math.min(Math.max(int(limit, 100), 1), 20000), offset: Math.max(int(offset, 0), 0) }
+      ).map((r) => ({ ...r, meta: r.meta ? (() => { try { return JSON.parse(r.meta); } catch { return null; } })() : null }));
+      return {
+        rows,
+        total: one(`SELECT COUNT(*) AS n ${from_}`, p).n,
+        users: int(offset, 0) ? undefined : all('SELECT DISTINCT user FROM activity_log WHERE user IS NOT NULL ORDER BY user').map((r) => r.user),
+      };
+    },
   };
 
   // 10 training days spread evenly over the month, moving any Sunday to the next day.

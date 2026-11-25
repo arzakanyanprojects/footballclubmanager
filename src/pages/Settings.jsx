@@ -7,13 +7,13 @@ import { HdmSettings } from '../components/Hdm';
 import { ThermalSettings } from '../components/Thermal';
 import { UpdateSettings } from '../components/Updates';
 import { NotifySettings } from '../components/Notify';
-import { MessengerTemplates } from '../components/Messenger';
 import { MyAccount, UsersSettings, useAuth } from '../components/Auth';
 import DataManagement from '../components/DataManagement';
+import ActivityLog from '../components/ActivityLog';
 import { useEditLock } from '../components/Locks';
 import { Badge, BrandLogo, Button, Field, Loading, Segmented, Tabs, useAction, useConfirm, useToast } from '../components/ui';
 
-export default function Settings({ route, appState, setAppState }) {
+export default function Settings({ route, nav, appState, setAppState }) {
   const t = useT();
   const auth = useAuth();
   // Club, network and activity need the Settings right; Users is for admins (or anyone while sign-in is off).
@@ -38,19 +38,14 @@ export default function Settings({ route, appState, setAppState }) {
         onChange={setTab}
         tabs={tabs}
       />
-      <div style={{ maxWidth: 820 }}>
+      <div style={{ maxWidth: tab === 'notify' || tab === 'activity' ? 1180 : 820 }}>
         {tab === 'club' && <ClubSettings />}
         {tab === 'pc' && <PcSettings appState={appState} setAppState={setAppState} />}
         {tab === 'network' && <NetworkSettings appState={appState} setAppState={setAppState} />}
         {tab === 'data' && <DataManagement appState={appState} setAppState={setAppState} />}
         {tab === 'users' && <UsersSettings />}
-        {tab === 'notify' && (
-          <>
-            <MessengerTemplates />
-            <NotifySettings />
-          </>
-        )}
-        {tab === 'activity' && <ActivityLog />}
+        {tab === 'notify' && <NotifySettings />}
+        {tab === 'activity' && <ActivityLog nav={nav} />}
       </div>
     </>
   );
@@ -351,37 +346,6 @@ function NetworkSettings({ appState, setAppState }) {
       </div>
 
     </>
-  );
-}
-
-function ActivityLog() {
-  const t = useT();
-  const { data } = useRpc('activity.list', { limit: 300 });
-  if (!data) return <Loading />;
-  return (
-    <div className="table-wrap">
-      <table className="table">
-        <thead>
-          <tr>
-            <th>{t('activity.when')}</th>
-            <th>{t('activity.who')}</th>
-            <th>{t('activity.what')}</th>
-          </tr>
-        </thead>
-        <tbody>
-          {data.map((a) => (
-            <tr key={a.id}>
-              <td className="small nowrap">{fmtDateTime(a.at)}</td>
-              <td className="small">{a.user || '—'}</td>
-              <td className="small">
-                <span className="strong">{t(`activity.${a.action}`)}</span>
-                {a.details && <span className="muted"> · {a.details}</span>}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
   );
 }
 

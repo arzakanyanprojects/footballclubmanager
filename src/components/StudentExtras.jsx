@@ -241,13 +241,12 @@ export function HistoryTab({ student }) {
   );
 }
 
-function HistoryRow({ e }) {
-  const t = useT();
-  const { currency } = useClub();
+// One history entry as text: what happened, its details, and (for a changed student) each change.
+export function historyText(t, e, fmtMoney) {
   const m = e.meta || {};
   const charge = () => {
     const what = m.kind === 'monthly' ? `${t('charge.monthly')} · ${monthName(t, m.period)}` : m.description || t(`charge.${m.kind || 'other'}`);
-    return [what, m.amount != null ? money(m.amount, currency) : null, m.method ? t(`method.${m.method}`) : null, m.hdm ? `ՀԴՄ № ${m.hdm}` : null].filter(Boolean).join(' · ');
+    return [what, m.amount != null ? fmtMoney(m.amount) : null, m.method ? t(`method.${m.method}`) : null, m.hdm ? `ՀԴՄ № ${m.hdm}` : null].filter(Boolean).join(' · ');
   };
   const field = (k) => {
     const key = { first_name: 'students.firstName', last_name: 'students.lastName', patronymic: 'students.patronymic', birth_date: 'students.birthDate', document_no: 'students.documentNo', contract_no: 'students.contractNo', category: 'students.category', service: 'students.service', medical_doc: 'students.medicalDoc', group: 'students.group', monthly_fee: 'students.monthlyFee', join_date: 'students.joinDate', status: 'students.status', inactive_reason: 'students.inactiveReason', leave_date: 'students.leaveDate', notes: 'students.notes', parent_first_name: 'parent.firstName', parent_last_name: 'parent.lastName', parent_phone: 'parent.phone', parent_messenger: 'parent.messenger', parent_email: 'parent.email', parent_ssn: 'parent.ssn', parent_doc_no: 'parent.docNo', parent_doc_issuer: 'parent.docIssuer', parent_doc_date: 'parent.docDate', parent_address: 'parent.address', phone: 'students.phone', email: 'students.email', address: 'students.address', photo: 'students.photo' }[k];
@@ -259,34 +258,47 @@ function HistoryRow({ e }) {
     if (k === 'status') return t(`status.${v}`);
     if (k === 'medical_doc') return t(Number(v) ? 'medicalDoc.provided' : 'medicalDoc.missing');
     if (/date$/.test(k)) return fmtDate(v);
-    if (k === 'monthly_fee') return money(v, currency);
+    if (k === 'monthly_fee') return fmtMoney(v);
     return String(v);
   };
   let detail = e.details || '';
   if (e.action.startsWith('charge.')) detail = charge();
   if (e.action === 'charge.hdm') detail = `${charge()} · ${t('hdm.receiptNo')} ${m.receipt}${m.fiscal ? ` · ${t('hdm.fiscalNo')} ${m.fiscal}` : ''}`;
   if (e.action === 'charge.hdmReturned') detail = `${charge()} · ${t('hdm.receiptNo')} ${m.receipt} → ${m.returnNo || ''}`;
-  if (e.action === 'charge.updated' && m.before) detail = `${charge()} (${t('history.was')} ${money(m.before.amount, currency)})`;
+  if (e.action === 'charge.updated' && m.before) detail = `${charge()} (${t('history.was')} ${fmtMoney(m.before.amount)})`;
   if (e.action === 'attendance.mark') detail = `${fmtDate(m.date)} · ${t(`att.${m.status}`)}`;
   if (e.action === 'attendance.changed') detail = `${fmtDate(m.date)} · ${m.from ? t(`att.${m.from}`) : '—'} → ${m.to ? t(`att.${m.to}`) : t('history.removed')}`;
   if (e.action === 'file.uploaded' || e.action === 'file.deleted') detail = m.name || detail;
-  if (e.action === 'application.created') detail = `${fmtDate(m.from)} – ${fmtDate(m.to)}${m.reason ? ` · ${m.reason}` : ''}`;
-  if (e.action.startsWith('contract.')) detail = m.number ? `№ ${m.number}` : '';
-  if (e.action === 'student.linked' || e.action === 'student.unlinked') detail = `${m.other || ''}${m.relation ? ` · ${t(`relation.${m.relation}`)}` : ''}`;
-  if (e.action === 'student.terminated') detail = `${fmtDate(m.date)}${m.reason ? ` · ${m.reason}` : ''}`;
-  if (e.action === 'student.transferred' || e.action === 'student.transferUpdated') detail = m.file || '';
+  if (e.action === 'application.created' && m.from) detail = `${fmtDate(m.from)} – ${fmtDate(m.to)}${m.reason ? ` · ${m.reason}` : ''}`;
+  if (e.action.startsWith('contract.') && m.number) detail = `№ ${m.number}`;
+  if ((e.action === 'student.linked' || e.action === 'student.unlinked') && m.other) detail = `${m.other}${m.relation ? ` · ${t(`relation.${m.relation}`)}` : ''}`;
+  if (e.action === 'student.terminated' && m.date) detail = `${fmtDate(m.date)}${m.reason ? ` · ${m.reason}` : ''}`;
+  if ((e.action === 'student.transferred' || e.action === 'student.transferUpdated') && m.file) detail = m.file;
+  // In the general log the student has a column of their own: drop the name from the front of the details.
+  if (e.student_name && detail.startsWith(e.student_name)) detail = detail.slice(e.student_name.length).replace(/^\s*[—·-]\s*/, '');
+  const label = t(`history.${e.action}`) === `history.${e.action}` ? t(`activity.${e.action}`) : t(`history.${e.action}`);
+  const changes = e.action === 'student.updated' && Array.isArray(m.changes) ? m.changes.map(([k, a, b]) => [field(k), value(k, a), value(k, b)]) : [];
+  return { label, detail, changes: changes.map(([f, a, b]) => `${f}: ${a} → ${b}`), changeParts: changes };
+}
+
+export function HistoryRow({ e, studentCell }) {
+  const t = useT();
+  const { currency } = useClub();
+  const m = e.meta || {};
+  const h = historyText(t, e, (v) => money(v, currency));
   return (
     <tr>
       <td className="small nowrap">{e.action === 'attendance.mark' ? fmtDate(m.date) : fmtDateTime(e.at)}</td>
       <td className="small">{e.user || <span className="muted">—</span>}</td>
+      {studentCell !== undefined && <td className="small">{studentCell}</td>}
       <td className="small">
-        <span className="strong">{t(`history.${e.action}`) === `history.${e.action}` ? t(`activity.${e.action}`) : t(`history.${e.action}`)}</span>
-        {detail && <span className="muted"> · {detail}</span>}
-        {e.action === 'student.updated' && Array.isArray(m.changes) && (
+        <span className="strong">{h.label}</span>
+        {h.detail && <span className="muted"> · {h.detail}</span>}
+        {h.changeParts.length > 0 && (
           <div className="history-changes">
-            {m.changes.map(([k, a, b], i) => (
+            {h.changeParts.map(([f, a, b], i) => (
               <div key={i}>
-                {field(k)}: <span className="muted">{value(k, a)}</span> → <span className="strong">{value(k, b)}</span>
+                {f}: <span className="muted">{a}</span> → <span className="strong">{b}</span>
               </div>
             ))}
           </div>

@@ -24,7 +24,7 @@ const PLACEHOLDERS = [
 ];
 
 const val = (v) => (v == null || String(v).trim() === '' ? undefined : String(v).trim());
-const fmtDate = (iso) => (iso ? iso.slice(0, 10).split('-').reverse().join('.') : undefined);
+const fmtDate = (iso) => (iso ? iso.slice(0, 10).split('-').reverse().join('/') : undefined);
 const fmtSlash = (iso) => (iso ? iso.slice(0, 10).split('-').reverse().join('/') : undefined);
 const money = (n) => (n ? Number(n).toLocaleString('en-US').replace(/,/g, ' ') : undefined);
 

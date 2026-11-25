@@ -223,7 +223,7 @@ function isGrey(hex) {
   const [r, g, b] = [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16));
   return Math.max(r, g, b) - Math.min(r, g, b) <= 16 && (r + g + b) / 3 >= 60 && (r + g + b) / 3 <= 225;
 }
-const fmt = (iso) => iso.split('-').reverse().join('.');
+const fmt = (iso) => iso.split('-').reverse().join('/');
 // One row's months → paid monthly fees: [{ period, paid_at, method, note }]. Grey / empty cells are skipped.
 function paymentsOf(cells, fills, monthCols, t) {
   const warn = [];

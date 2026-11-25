@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, ChevronLeft, ChevronRight, CheckCheck, Plus, Trash2, Users, UserRound, Shapes, Save, CalendarCheck, Printer, FileSpreadsheet } from 'lucide-react';
+import { ArrowLeft, ChevronLeft, ChevronRight, CheckCheck, Plus, Trash2, Users, UserRound, Shapes, Save, CalendarCheck, Printer, FileSpreadsheet, FilterX } from 'lucide-react';
 import { useT, monthName } from '../i18n';
 import { useCan } from '../components/Auth';
 import { useRpc, rpc, todayIso, currentPeriod, addMonths, daysInMonth, weekday, fmtDate, fmtDateTime, money } from '../lib';
-import { Badge, Button, Empty, Field, Loading, Modal, Money, useAction, useClub, useConfirm } from '../components/ui';
+import { Badge, Button, Empty, Field, Loading, Modal, Money, SearchBox, Segmented, useAction, useClub, useConfirm } from '../components/ui';
 import { EditingMark, useEditLock, useLocks } from '../components/Locks';
 
 // Marks that count as attended; anything else recorded counts as absent.
@@ -23,11 +23,30 @@ function SubmittedBadge({ filled, total }) {
   );
 }
 
+// The groups page's search and filters, kept while going into a group's sheet and back.
+let cardFilters = { q: '', status: 'all', coach: '', year: '' };
+const isSubmitted = (g) => g.days_total > 0 && g.days_filled >= g.days_total;
+const groupYear = (g) => (String(g.name || '').match(/(19|20)\d{2}/) || [''])[0];
+
 function GroupCards({ nav }) {
   const t = useT();
   const { data, loading } = useRpc('groups.list');
   const groups = (data || []).filter((g) => !g.archived);
   const locks = useLocks();
+  const [flt, setFlt] = useState(cardFilters);
+  const setF = (k) => (v) => setFlt((f) => (cardFilters = { ...f, [k]: v }));
+  const coaches = useMemo(() => [...new Set(groups.map((g) => g.coach).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'hy')), [data]);
+  const years = useMemo(() => [...new Set(groups.map(groupYear).filter(Boolean))].sort(), [data]);
+  const q = flt.q.trim().toLowerCase();
+  const base = groups.filter(
+    (g) =>
+      (!q || `${g.name} ${g.coach || ''} ${g.assistant || ''}`.toLowerCase().includes(q)) &&
+      (!flt.coach || g.coach === flt.coach) &&
+      (!flt.year || groupYear(g) === flt.year)
+  );
+  const shown = base.filter((g) => flt.status === 'all' || (flt.status === 'done') === isSubmitted(g));
+  const doneCount = base.filter(isSubmitted).length;
+  const filtered = !!(q || flt.coach || flt.year || flt.status !== 'all');
 
   // Set up this month's training days for every group, so each card can show its count.
   const ids = groups.map((g) => g.id).join(',');
@@ -50,8 +69,51 @@ function GroupCards({ nav }) {
           <Empty icon={Shapes} title={t('sheet.noGroups')} />
         </div>
       ) : (
+        <>
+        <div className="toolbar">
+          <SearchBox value={flt.q} onChange={setF('q')} placeholder={t('sheet.searchGroups')} width={260} />
+          <Segmented
+            value={flt.status}
+            onChange={setF('status')}
+            options={[
+              { value: 'all', label: `${t('sheet.filterAll')} · ${base.length}` },
+              { value: 'done', label: `${t('sheet.submitted')} · ${doneCount}` },
+              { value: 'todo', label: `${t('sheet.notSubmitted')} · ${base.length - doneCount}` },
+            ]}
+          />
+          {coaches.length > 1 && (
+            <select className="select" style={{ maxWidth: 240 }} value={flt.coach} onChange={(e) => setF('coach')(e.target.value)}>
+              <option value="">{t('sheet.allCoaches')}</option>
+              {coaches.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </select>
+          )}
+          {years.length > 1 && (
+            <select className="select" value={flt.year} onChange={(e) => setF('year')(e.target.value)}>
+              <option value="">{t('sheet.allYears')}</option>
+              {years.map((y) => (
+                <option key={y} value={y}>
+                  {y}
+                </option>
+              ))}
+            </select>
+          )}
+          {filtered && (
+            <Button variant="ghost" icon={FilterX} onClick={() => setFlt((cardFilters = { q: '', status: 'all', coach: '', year: '' }))}>
+              {t('sheet.clearFilters')}
+            </Button>
+          )}
+        </div>
+        {!shown.length && (
+          <div className="card">
+            <Empty icon={Shapes} title={t('sheet.noMatch')} />
+          </div>
+        )}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 16 }}>
-          {groups.map((g) => (
+          {shown.map((g) => (
             <button
               key={g.id}
               className="card group-pick"
@@ -81,6 +143,7 @@ function GroupCards({ nav }) {
             </button>
           ))}
         </div>
+        </>
       )}
     </>
   );

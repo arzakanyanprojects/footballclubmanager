@@ -407,6 +407,29 @@ const MIGRATIONS = [
   },
   // v31: «Գործողությունները՝ Telegram-ով» — this user's every action goes to the staff's Telegram chats.
   `ALTER TABLE users ADD COLUMN notify_actions INTEGER NOT NULL DEFAULT 0;`,
+  // v32: «Նշումներ» become a list on the student's page: each note with when and by whom it was added.
+  // The old single «Նշումներ» field moves in as the first note. The services shrink to the club's new list.
+  `
+  CREATE TABLE student_notes (
+    id         INTEGER PRIMARY KEY,
+    student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+    text       TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    created_by TEXT,
+    user_id    INTEGER
+  );
+  CREATE INDEX ix_student_notes_student ON student_notes(student_id);
+  INSERT INTO student_notes (student_id, text, created_at)
+    SELECT id, trim(notes), IFNULL(created_at, datetime('now', 'localtime')) FROM students WHERE trim(IFNULL(notes, '')) != '';
+  UPDATE students SET notes = NULL WHERE notes IS NOT NULL;
+  UPDATE students SET service = 'Առաջնություն' WHERE service IN ('Առաջնություն անվճար', 'Առաջնություն զեղչված', 'Առաջնություն վճարովի');
+  UPDATE students SET service = 'Ուսումնամարզական' WHERE service IN ('Ուսումնամարզական %', 'Ուսումնամարզական անվճար');
+  UPDATE students SET service = 'Ֆուտբոլ անհ. 12' WHERE service = 'Ֆուտբոլ անհ.12';
+  UPDATE students SET service = 'Ֆուտբոլ անհ. 16' WHERE service = 'Ֆուտբոլ անհ.16';
+  `,
+  // v33: the activity log is searched by dates and users.
+  `CREATE INDEX IF NOT EXISTS activity_log_at ON activity_log (at);
+   CREATE INDEX IF NOT EXISTS activity_log_user ON activity_log (user);`,
 ];
 
 function seed(db) {

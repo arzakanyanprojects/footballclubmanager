@@ -103,7 +103,7 @@ async function buildReport({ sheetName, title, subtitle, columns, rows, totals =
         horizontal: c.type === 'money' ? 'right' : c.type === 'index' || c.type === 'date' ? 'center' : 'left',
       };
       if (c.type === 'money') cell.numFmt = moneyFmt;
-      if (c.type === 'date') cell.numFmt = 'dd.mm.yyyy';
+      if (c.type === 'date') cell.numFmt = 'dd\\/mm\\/yyyy';
       if (idx % 2 === 1) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: STRIPE } };
     });
     row.height = 20;
@@ -458,7 +458,7 @@ async function buildGroups({ columns, sheets, emptyText = '', currencySymbol = '
             }
           } else if (c.type === 'date') {
             cell.value = toDate(v);
-            cell.numFmt = 'dd.mm.yyyy';
+            cell.numFmt = 'dd\\/mm\\/yyyy';
           } else if (c.type === 'money') {
             cell.value = v == null || v === '' ? null : Number(v);
             cell.numFmt = moneyFmt;
@@ -566,7 +566,7 @@ async function buildTable({ sheetName, title, subtitle, columns, rows, totalLabe
   ws.getRow(2).height = 20;
   ws.getRow(3).height = 8;
   const align = (c) => (c.type === 'money' || c.type === 'number' || c.type === 'percent' ? 'right' : c.type === 'index' || c.type === 'date' ? 'center' : 'left');
-  const fmtOf = (c) => (c.type === 'money' ? moneyFmt : c.type === 'percent' ? '0%' : c.type === 'number' ? '#,##0' : c.type === 'date' ? 'dd.mm.yyyy' : undefined);
+  const fmtOf = (c) => (c.type === 'money' ? moneyFmt : c.type === 'percent' ? '0%' : c.type === 'number' ? '#,##0' : c.type === 'date' ? 'dd\\/mm\\/yyyy' : undefined);
   const header = ws.getRow(4);
   columns.forEach((c, i) => {
     Object.assign(header.getCell(i + 1), {

@@ -218,7 +218,7 @@ function ReceiptSlip({ job, total, result, test, operator, faded }) {
   const club = useClub();
   const when = result ? new Date(result.printedAt) : new Date();
   const pad = (n) => String(n).padStart(2, '0');
-  const stamp = `${pad(when.getDate())}.${pad(when.getMonth() + 1)}.${when.getFullYear()} ${pad(when.getHours())}:${pad(when.getMinutes())}`;
+  const stamp = `${pad(when.getDate())}/${pad(when.getMonth() + 1)}/${when.getFullYear()} ${pad(when.getHours())}:${pad(when.getMinutes())}`;
   return (
     <div className={`receipt ${faded ? 'faded' : ''}`}>
       <div className="center strong">{club.club_name || 'FC Manager'}</div>

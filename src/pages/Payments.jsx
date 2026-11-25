@@ -164,7 +164,7 @@ function ChargesView({ preset, nav }) {
   );
 }
 
-export function ChargesTable({ rows, showStudent, selectable, onOpenStudent, student }) {
+export function ChargesTable({ rows, showStudent, selectable, onOpenStudent, student, tools }) {
   const canEdit = useCan('payments');
   const t = useT();
   const act = useAction();
@@ -367,7 +367,10 @@ export function ChargesTable({ rows, showStudent, selectable, onOpenStudent, stu
           </Button>
         </div>
       )}
-      <div className="table-tools">{columnsButton}</div>
+      <div className="table-tools">
+        {tools}
+        {columnsButton}
+      </div>
       <div className="table-wrap">
         <table className="table">
           <thead>
@@ -742,6 +745,69 @@ export function ChargeModal({ studentId: fixedStudent, onClose }) {
         <Field label={t('payments.note')}>
           <input className="input" value={note} onChange={(e) => setNote(e.target.value)} />
         </Field>
+      </div>
+    </Modal>
+  );
+}
+
+// «Ավելացնել պարտք»: an amount the student owes for a month, saved unpaid (e.g. «December is 7,000 ֏» that
+// was agreed and not entered). A month without its fee yet gets its fee with this amount; a month that has
+// one gets this as a separate amount for that month.
+export function DebtModal({ student, charges, onClose }) {
+  const t = useT();
+  const act = useAction();
+  const club = useClub();
+  const lock = useEditLock(`student:${student.id}`);
+  const [period, setPeriod] = useState(currentPeriod());
+  const [amount, setAmount] = useState('');
+  const [note, setNote] = useState('');
+  const fee = /^\d{4}-\d{2}$/.test(period) ? charges.find((c) => c.kind === 'monthly' && c.period === period) : null;
+  const month = /^\d{4}-\d{2}$/.test(period) ? monthName(t, period) : '';
+  const save = async () => {
+    const ok = await act(
+      () =>
+        rpc(
+          'charges.create',
+          fee
+            ? { studentId: student.id, kind: 'other', amount, description: `${month} · ${note.trim() || t('debt.extra')}`, forPeriod: period, paid: false }
+            : { studentId: student.id, kind: 'monthly', amount, period, paid: false, note }
+        ),
+      t('common.saved')
+    );
+    if (ok) onClose();
+  };
+  return (
+    <Modal
+      title={t('debt.title')}
+      lock={lock}
+      onClose={onClose}
+      width={500}
+      footer={
+        <>
+          <Button onClick={onClose}>{t('common.cancel')}</Button>
+          <Button variant="primary" onClick={save} disabled={!month || !(Number(amount) > 0)}>
+            {t('common.save')}
+          </Button>
+        </>
+      }
+    >
+      <div className="stack">
+        <div className="grid-2">
+          <Field label={t('debt.month')}>
+            <input className="input" type="month" value={period} onChange={(e) => setPeriod(e.target.value)} />
+          </Field>
+          <Field label={t('payments.amount')}>
+            <input className="input" type="number" min="0" step="500" value={amount} onChange={(e) => setAmount(e.target.value)} autoFocus />
+          </Field>
+        </div>
+        <Field label={t('debt.note')}>
+          <input className="input" value={note} onChange={(e) => setNote(e.target.value)} />
+        </Field>
+        {month && (
+          <div className="small muted">
+            {fee ? t('debt.extraHint', { month, amount: money(fee.amount, club.currency) }) : t('debt.newFee', { month })}
+          </div>
+        )}
       </div>
     </Modal>
   );

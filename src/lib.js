@@ -72,7 +72,7 @@ export function seasonMonths(period = currentPeriod()) {
   const start = `${m >= 8 ? y : y - 1}-08`;
   return Array.from({ length: 12 }, (_, i) => addMonths(start, i));
 }
-export const fmtDate = (iso) => (iso ? iso.slice(0, 10).split('-').reverse().join('.') : '—');
+export const fmtDate = (iso) => (iso ? iso.slice(0, 10).split('-').reverse().join('/') : '—');
 export const fmtDateTime = (s) => (s ? `${fmtDate(s.slice(0, 10))} ${s.slice(11, 16)}` : '—');
 export const daysInMonth = (period) => {
   const [y, m] = period.split('-').map(Number);

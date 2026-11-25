@@ -530,7 +530,16 @@ table.table { width: 100%; border-collapse: collapse; }
 .login-box { width: 100%; max-width: 380px; padding: 26px; display: flex; flex-direction: column; gap: 14px; }
 .rights { display: flex; flex-direction: column; gap: 6px; border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
 .rights-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.table-tools { display: flex; justify-content: flex-end; margin-bottom: 8px; }
+.table-tools { display: flex; justify-content: flex-end; gap: 8px; margin-bottom: 8px; }
+
+/* The new-student form: every field is required (marked *), the empty ones turn red after Save. */
+.all-required .field:not(.optional) > label::after { content: ' *'; color: var(--bad); }
+.input.invalid, .select.invalid { border-color: var(--bad); box-shadow: 0 0 0 3px var(--bad-soft); }
+.form-error { background: var(--bad-soft); color: var(--bad); border-radius: 8px; padding: 9px 12px; margin-bottom: 12px; font-size: 13px; font-weight: 500; }
+
+/* «Նշումներ» */
+.note-text { white-space: pre-wrap; word-break: break-word; line-height: 1.45; }
+.note-new { border-bottom: 1px solid var(--border); }
 .columns-panel { position: fixed; z-index: 60; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 12px 32px rgba(0,0,0,.25); padding: 12px; max-height: 70vh; overflow: auto; }
 .columns-list { display: flex; flex-direction: column; gap: 2px; }
 .columns-item { display: flex; align-items: center; gap: 6px; padding: 4px 6px; border-radius: 6px; }
@@ -823,3 +832,33 @@ table.table { width: 100%; border-collapse: collapse; }
 /* # column before the name (both stay when scrolling sideways) */
 .students-table .idx-col { width: 46px; min-width: 46px; max-width: 46px; padding-left: 10px; padding-right: 6px; text-align: right; }
 .students-table .sticky-name { left: 46px; }
+
+/* ---------------------------------------------------------------- Settings → Notifications: one card per option */
+.opt-group-title { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-3); margin: 22px 0 10px; }
+.opt-group-title:first-of-type { margin-top: 4px; }
+/* Cards stack in columns (each one right under the one above it), so there are no empty gaps. */
+.opt-grid { columns: 3 300px; column-gap: 14px; }
+.opt-grid.wide { columns: 2 380px; }
+.opt-grid > .opt-card { break-inside: avoid; margin-bottom: 14px; width: 100%; }
+.opt-grid .span-all { column-span: all; }
+.opt-grid + .settings-section, .opt-grid + .card { margin-top: 22px; }
+.opt-card { display: flex; flex-direction: column; transition: opacity 0.15s; }
+.opt-head { display: flex; align-items: center; gap: 10px; padding: 14px 16px 10px; }
+.opt-head h4 { font-size: 14.5px; }
+.opt-icon { width: 32px; height: 32px; border-radius: 9px; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); flex-shrink: 0; }
+.opt-card.off .opt-icon { background: var(--surface-2, rgba(127, 127, 127, 0.12)); color: var(--text-3); }
+.opt-body { display: flex; flex-direction: column; gap: 10px; padding: 0 16px 16px; }
+.opt-needs { color: var(--warn); }
+.switch { position: relative; display: inline-block; width: 38px; height: 22px; flex-shrink: 0; cursor: pointer; }
+.switch input { position: absolute; opacity: 0; width: 0; height: 0; }
+.switch span { position: absolute; inset: 0; border-radius: 999px; background: var(--border-strong); transition: background 0.15s; }
+.switch span::after { content: ''; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: transform 0.15s; }
+.switch input:checked + span { background: var(--accent); }
+.switch input:checked + span::after { transform: translateX(16px); }
+.switch input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
+fieldset:disabled .switch { cursor: default; opacity: 0.6; }
+
+/* Settings → «Գործողությունների մատյան» */
+.activity-table td { vertical-align: top; }
+.link-btn { background: none; border: 0; padding: 0; color: var(--accent); cursor: pointer; font: inherit; text-align: left; }
+.link-btn:hover { text-decoration: underline; }

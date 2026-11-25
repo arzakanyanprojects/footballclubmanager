@@ -1010,6 +1010,9 @@ function applyAutoStart() {
 }
 
 // ------------------------------------------------------------------ app lifecycle
+// Date fields show day/month/year (dd/MM/yyyy) whatever the Windows language is.
+app.commandLine.appendSwitch('lang', 'en-GB');
+
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {

@@ -14,24 +14,26 @@ import { useStudentForm } from '../components/StudentFormHost';
 
 export const CATEGORIES = ['siblings', 'half', 'war', 'staff', 'orphan'];
 
-// The club's services, as listed in its records (Armenian only).
+// The club's services (Armenian only).
 export const SERVICES = [
-  'Առաջնություն անվճար',
-  'Առաջնություն զեղչված',
-  'Առաջնություն վճարովի',
-  'Դարպասապահ 12',
-  'Դարպասապահ 16',
+  'Առաջնություն',
   'Դարպասապահ 4',
   'Դարպասապահ 8',
-  'Մարզահագուստ (ամառային)',
-  'Մարզահագուստ (ձմեռային)',
+  'Դարպասապահ 12',
+  'Դարպասապահ 16',
   'Ուսումնամարզական',
-  'Ուսումնամարզական %',
-  'Ուսումնամարզական անվճար',
   'Ֆուտբոլ անհ. 4',
   'Ֆուտբոլ անհ. 8',
-  'Ֆուտբոլ անհ.12',
-  'Ֆուտբոլ անհ.16',
+  'Ֆուտբոլ անհ. 12',
+  'Ֆուտբոլ անհ. 16',
+];
+
+// A new student can be saved only with all of these filled in (the photo and the medical file stay optional).
+export const REQUIRED_NEW = [
+  'first_name', 'last_name', 'patronymic', 'birth_date', 'document_no', 'contract_no',
+  'parent_first_name', 'parent_last_name', 'parent_ssn', 'parent_doc_no', 'parent_doc_issuer', 'parent_doc_date',
+  'parent_phone', 'parent_messenger', 'parent_email', 'parent_address',
+  'group_id', 'monthly_fee', 'join_date', 'service', 'category',
 ];
 
 export const MONTH_MARK = { paid: '✓', overdue: '✕', unpaid: '•', waived: '—', excused: '✓', notyet: '' };
@@ -45,16 +47,26 @@ export function monthStatus(m, period, joinDate) {
   return m.due_date && m.due_date < todayIso() ? 'overdue' : 'unpaid';
 }
 
+// The list's search and filters, kept while a student is opened and the list is come back to (until the app
+// closes). Opened from elsewhere with a preset (a group, «debtors») the list starts from that instead.
+const LIST_DEFAULTS = { search: '', status: 'active', groupId: '', debtOnly: false, category: '', colFilters: {}, sort: null };
+let keptList = LIST_DEFAULTS;
+
 export default function Students({ nav, route }) {
   const act = useAction();
   const canEdit = useCan('students');
   const canPay = useCan('payments');
   const t = useT();
-  const [search, setSearch] = useState('');
-  const [status, setStatus] = useState('active');
-  const [groupId, setGroupId] = useState(route.groupId ? String(route.groupId) : '');
-  const [debtOnly, setDebtOnly] = useState(!!route.debtOnly);
-  const [category, setCategory] = useState(''); // '' all · 'none' without a category · a category key
+  const [start] = useState(() =>
+    route.groupId || route.debtOnly
+      ? { ...LIST_DEFAULTS, groupId: route.groupId ? String(route.groupId) : '', debtOnly: !!route.debtOnly }
+      : keptList
+  );
+  const [search, setSearch] = useState(start.search);
+  const [status, setStatus] = useState(start.status);
+  const [groupId, setGroupId] = useState(start.groupId);
+  const [debtOnly, setDebtOnly] = useState(start.debtOnly);
+  const [category, setCategory] = useState(start.category); // '' all · 'none' without a category · a category key
   // New / edited students open in the app-wide form (it can be minimized to look at another page).
   const studentForm = useStudentForm();
   const addStudent = () => studentForm.open({}, { onSaved: (id) => nav('students', { id }) });
@@ -85,8 +97,11 @@ export default function Students({ nav, route }) {
   );
 
   // Excel-style filters in the column headers: { columnId: values shown }, and one sorted column.
-  const [colFilters, setColFilters] = useState({});
-  const [sort, setSort] = useState(null); // { id, dir: 1 | -1 }
+  const [colFilters, setColFilters] = useState(start.colFilters);
+  const [sort, setSort] = useState(start.sort); // { id, dir: 1 | -1 }
+  useEffect(() => {
+    keptList = { search, status, groupId, debtOnly, category, colFilters, sort };
+  }, [search, status, groupId, debtOnly, category, colFilters, sort]);
   const [menu, setMenu] = useState(null); // { id, rect }
   const fdefs = useMemo(() => {
     const plainDef = (get, sortBy) => ({ value: (s) => String(get(s) ?? ''), ...(sortBy ? { sort: sortBy } : {}) });
@@ -513,11 +528,13 @@ export function StudentForm({ student, onClose, onSaved, minimized, onMinimize, 
     medical_doc: 0,
     group_id: '',
     monthly_fee: '',
-    join_date: todayIso(),
+    join_date: '',
     status: 'active',
-    notes: '',
     photo: null,
     ...Object.fromEntries(Object.entries(student).map(([k, v]) => [k, v ?? ''])),
+    // «Առանց կարգավիճակ» is a choice of its own; a new student's is picked, not assumed.
+    category: student.id ? student.category || 'none' : student.category || '',
+    notes: '',
   });
   const [f, setF] = useState(() => init(student));
   // The name for the minimized form's bar.
@@ -533,6 +550,13 @@ export function StudentForm({ student, onClose, onSaved, minimized, onMinimize, 
   // One person edits a student at a time (the form, payments, applications…).
   const lock = useEditLock(student.id ? `student:${student.id}` : null, { onGranted: reload });
   const set = (k) => (e) => setF((s) => ({ ...s, [k]: e?.target ? e.target.value : e }));
+  // A new student: every field must be filled in; the empty ones are marked once Save is pressed.
+  const isNew = !student.id;
+  const [showMissing, setShowMissing] = useState(false);
+  const missing = isNew
+    ? [...REQUIRED_NEW, ...(f.status === 'inactive' ? ['inactive_reason'] : [])].filter((k) => f[k] == null || String(f[k]).trim() === '')
+    : [];
+  const cls = (base, k) => (showMissing && missing.includes(k) ? `${base} invalid` : base);
 
   const pickPhoto = async (e) => {
     const file = e.target.files?.[0];
@@ -560,6 +584,11 @@ export function StudentForm({ student, onClose, onSaved, minimized, onMinimize, 
 
   const save = async () => {
     setConflict(null);
+    if (missing.length) {
+      setShowMissing(true);
+      setTimeout(() => document.querySelector('.modal .invalid')?.focus(), 0);
+      return;
+    }
     const r = await act(async () => {
       const res = await rpc('students.save', f).catch((err) => {
         if (err.code !== 'CONFLICT') throw err;
@@ -618,7 +647,7 @@ export function StudentForm({ student, onClose, onSaved, minimized, onMinimize, 
             variant="primary"
             icon={withContract ? FileSignature : undefined}
             onClick={save}
-            disabled={!f.first_name.trim() || !f.last_name.trim() || (withContract && !tplId)}
+            disabled={(!isNew && (!f.first_name.trim() || !f.last_name.trim())) || (withContract && !tplId)}
           >
             {withContract ? t('students.createContract') : t('common.save')}
           </Button>
@@ -626,7 +655,8 @@ export function StudentForm({ student, onClose, onSaved, minimized, onMinimize, 
       }
     >
       <ConflictBanner conflict={conflict} onReload={reload} />
-      <div className="stack" style={{ gap: 0 }}>
+      {showMissing && missing.length > 0 && <div className="form-error">{t('studentForm.fillAll', { n: missing.length })}</div>}
+      <div className={`stack${isNew ? ' all-required' : ''}`} style={{ gap: 0 }}>
         <FormSection icon={UserRound} title={t('form.student')}>
           <div className="row" style={{ gap: 18, alignItems: 'flex-start' }}>
             <div className="stack" style={{ gap: 6, alignItems: 'center' }}>
@@ -641,17 +671,17 @@ export function StudentForm({ student, onClose, onSaved, minimized, onMinimize, 
               <input ref={fileRef} type="file" accept="image/*" hidden onChange={pickPhoto} />
             </div>
             <div className="grid-3 grow">
-              <Field label={`${t('students.firstName')} *`}>
-                <input className="input" value={f.first_name} onChange={set('first_name')} autoFocus />
+              <Field label={isNew ? t('students.firstName') : `${t('students.firstName')} *`}>
+                <input className={cls('input', 'first_name')} value={f.first_name} onChange={set('first_name')} autoFocus />
               </Field>
-              <Field label={`${t('students.lastName')} *`}>
-                <input className="input" value={f.last_name} onChange={set('last_name')} />
+              <Field label={isNew ? t('students.lastName') : `${t('students.lastName')} *`}>
+                <input className={cls('input', 'last_name')} value={f.last_name} onChange={set('last_name')} />
               </Field>
               <Field label={t('students.patronymic')}>
-                <input className="input" value={f.patronymic} onChange={set('patronymic')} />
+                <input className={cls('input', 'patronymic')} value={f.patronymic} onChange={set('patronymic')} />
               </Field>
               <Field label={t('students.birthDate')}>
-                <input className="input" type="date" value={f.birth_date} onChange={set('birth_date')} />
+                <input className={cls('input', 'birth_date')} type="date" value={f.birth_date} onChange={set('birth_date')} />
               </Field>
             </div>
           </div>
@@ -660,19 +690,19 @@ export function StudentForm({ student, onClose, onSaved, minimized, onMinimize, 
         <FormSection icon={FileText} title={t('form.documents')}>
           <div className="grid-3">
             <Field label={t('students.documentNo')}>
-              <input className="input" value={f.document_no} onChange={set('document_no')} />
+              <input className={cls('input', 'document_no')} value={f.document_no} onChange={set('document_no')} />
             </Field>
             <Field label={t('students.contractNo')}>
-              <input className="input" value={f.contract_no} onChange={set('contract_no')} />
+              <input className={cls('input', 'contract_no')} value={f.contract_no} onChange={set('contract_no')} />
             </Field>
             <Field label={t('students.medicalDoc')}>
-              <select className="select" value={f.medical_doc ? '1' : '0'} onChange={(e) => set('medical_doc')(Number(e.target.value))}>
+              <select className={cls('select', 'medical_doc')} value={f.medical_doc ? '1' : '0'} onChange={(e) => set('medical_doc')(Number(e.target.value))}>
                 <option value="0">{t('medicalDoc.missing')}</option>
                 <option value="1">{t('medicalDoc.provided')}</option>
               </select>
             </Field>
             {!!f.medical_doc && (
-              <Field label={t('files.medicalUpload')} hint={student.id ? t('files.medicalUploadHintEdit') : t('files.medicalUploadHint')} className="span-3">
+              <Field label={t('files.medicalUpload')} hint={student.id ? t('files.medicalUploadHintEdit') : t('files.medicalUploadHint')} className="span-3 optional">
                 <div className="row wrap">
                   <Button icon={Paperclip} onClick={() => docRef.current.click()}>
                     {medicalFile ? t('files.otherFile') : t('files.choose')}
@@ -703,34 +733,34 @@ export function StudentForm({ student, onClose, onSaved, minimized, onMinimize, 
         <FormSection icon={Users} title={t('form.parent')}>
           <div className="grid-3">
             <Field label={t('parent.firstName')}>
-              <input className="input" value={f.parent_first_name} onChange={set('parent_first_name')} />
+              <input className={cls('input', 'parent_first_name')} value={f.parent_first_name} onChange={set('parent_first_name')} />
             </Field>
             <Field label={t('parent.lastName')}>
-              <input className="input" value={f.parent_last_name} onChange={set('parent_last_name')} />
+              <input className={cls('input', 'parent_last_name')} value={f.parent_last_name} onChange={set('parent_last_name')} />
             </Field>
             <Field label={t('parent.ssn')}>
-              <input className="input" value={f.parent_ssn} onChange={set('parent_ssn')} />
+              <input className={cls('input', 'parent_ssn')} value={f.parent_ssn} onChange={set('parent_ssn')} />
             </Field>
             <Field label={t('parent.docNo')}>
-              <input className="input" value={f.parent_doc_no} onChange={set('parent_doc_no')} />
+              <input className={cls('input', 'parent_doc_no')} value={f.parent_doc_no} onChange={set('parent_doc_no')} />
             </Field>
             <Field label={t('parent.docIssuer')}>
-              <input className="input" value={f.parent_doc_issuer} onChange={set('parent_doc_issuer')} />
+              <input className={cls('input', 'parent_doc_issuer')} value={f.parent_doc_issuer} onChange={set('parent_doc_issuer')} />
             </Field>
             <Field label={t('parent.docDate')}>
-              <input className="input" type="date" value={f.parent_doc_date} onChange={set('parent_doc_date')} />
+              <input className={cls('input', 'parent_doc_date')} type="date" value={f.parent_doc_date} onChange={set('parent_doc_date')} />
             </Field>
             <Field label={t('parent.phone')}>
-              <input className="input" value={f.parent_phone} onChange={set('parent_phone')} />
+              <input className={cls('input', 'parent_phone')} value={f.parent_phone} onChange={set('parent_phone')} />
             </Field>
             <Field label={t('parent.messenger')}>
-              <input className="input" value={f.parent_messenger} onChange={set('parent_messenger')} />
+              <input className={cls('input', 'parent_messenger')} value={f.parent_messenger} onChange={set('parent_messenger')} />
             </Field>
             <Field label={t('parent.email')}>
-              <input className="input" value={f.parent_email} onChange={set('parent_email')} />
+              <input className={cls('input', 'parent_email')} value={f.parent_email} onChange={set('parent_email')} />
             </Field>
             <Field label={t('parent.address')} className="span-3">
-              <input className="input" value={f.parent_address} onChange={set('parent_address')} />
+              <input className={cls('input', 'parent_address')} value={f.parent_address} onChange={set('parent_address')} />
             </Field>
           </div>
         </FormSection>
@@ -738,8 +768,8 @@ export function StudentForm({ student, onClose, onSaved, minimized, onMinimize, 
         <FormSection icon={Wallet} title={t('form.training')}>
           <div className="grid-3">
             <Field label={t('students.group')}>
-              <select className="select" value={f.group_id} onChange={set('group_id')}>
-                <option value="">{t('students.noGroup')}</option>
+              <select className={cls('select', 'group_id')} value={f.group_id} onChange={set('group_id')}>
+                <option value="">{isNew ? t('form.choose') : t('students.noGroup')}</option>
                 {(groups || []).filter((g) => !g.archived || g.id === Number(f.group_id)).map((g) => (
                   <option key={g.id} value={g.id}>
                     {g.coach ? `${g.name} — ${g.coach}` : g.name}
@@ -748,14 +778,14 @@ export function StudentForm({ student, onClose, onSaved, minimized, onMinimize, 
               </select>
             </Field>
             <Field label={t('students.monthlyFee')} hint={t('students.monthlyFeeHint')}>
-              <input className="input" type="number" min="0" step="500" value={f.monthly_fee} onChange={set('monthly_fee')} />
+              <input className={cls('input', 'monthly_fee')} type="number" min="0" step="500" value={f.monthly_fee} onChange={set('monthly_fee')} />
             </Field>
-            <Field label={`${t('students.joinDate')} *`}>
-              <input className="input" type="date" value={f.join_date} onChange={set('join_date')} />
+            <Field label={isNew ? t('students.joinDate') : `${t('students.joinDate')} *`}>
+              <input className={cls('input', 'join_date')} type="date" value={f.join_date} onChange={set('join_date')} />
             </Field>
             <Field label={t('students.service')}>
-              <select className="select" value={f.service || ''} onChange={set('service')}>
-                <option value="">—</option>
+              <select className={cls('select', 'service')} value={f.service || ''} onChange={set('service')}>
+                <option value="">{isNew ? t('form.choose') : '—'}</option>
                 {SERVICES.map((sv) => (
                   <option key={sv} value={sv}>
                     {sv}
@@ -765,8 +795,9 @@ export function StudentForm({ student, onClose, onSaved, minimized, onMinimize, 
               </select>
             </Field>
             <Field label={t('students.category')}>
-              <select className="select" value={f.category || ''} onChange={set('category')}>
-                <option value="">—</option>
+              <select className={cls('select', 'category')} value={f.category || ''} onChange={set('category')}>
+                {!f.category && <option value="">{t('form.choose')}</option>}
+                <option value="none">{t('category.none')}</option>
                 {CATEGORIES.map((c) => (
                   <option key={c} value={c}>
                     {t(`category.${c}`)}
@@ -775,21 +806,17 @@ export function StudentForm({ student, onClose, onSaved, minimized, onMinimize, 
               </select>
             </Field>
             <Field label={t('students.status')}>
-              <select className="select" value={f.status} onChange={set('status')}>
+              <select className={cls('select', 'status')} value={f.status} onChange={set('status')}>
                 <option value="active">{t('status.active')}</option>
                 <option value="inactive">{t('status.inactive')}</option>
               </select>
             </Field>
             {f.status === 'inactive' && (
               <Field label={t('students.inactiveReason')}>
-                <input className="input" value={f.inactive_reason || ''} onChange={set('inactive_reason')} autoFocus />
+                <input className={cls('input', 'inactive_reason')} value={f.inactive_reason || ''} onChange={set('inactive_reason')} autoFocus />
               </Field>
             )}
           </div>
-        </FormSection>
-
-        <FormSection icon={StickyNote} title={t('students.notes')}>
-          <textarea className="textarea" rows={3} value={f.notes} onChange={set('notes')} />
         </FormSection>
       </div>
     </Modal>

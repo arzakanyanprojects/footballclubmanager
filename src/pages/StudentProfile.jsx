@@ -3,14 +3,14 @@ import {
   ArrowLeft, Pencil, Plus, FileSignature, Trash2, Phone, Cake, Shapes, CalendarPlus, Wallet, CalendarCheck, IdCard, UserRound, FileText, Users, StickyNote, FolderOpen, Upload, ExternalLink, Download, Stethoscope, FilePlus2, Printer, UserX, Link2, History,
 } from 'lucide-react';
 import { useT } from '../i18n';
-import { useCan } from '../components/Auth';
+import { useAuth, useCan } from '../components/Auth';
 import { MessageButton } from '../components/Messenger';
 import { useRpc, rpc, age, fmtDate, fmtDateTime, money, readFileBase64, fileSize, todayIso } from '../lib';
 import { Avatar, Badge, Button, Empty, Field, Loading, Modal, Money, Tabs, useAction, useClub, useConfirm } from '../components/ui';
 import { FormSection } from './Students';
 import { useStudentForm } from '../components/StudentFormHost';
 import { AbsenceModal, printStoredFile, openStoredFile } from '../components/Absence';
-import { ChargesTable, MonthlyPaymentModal, chargeStatus } from './Payments';
+import { ChargesTable, DebtModal, MonthlyPaymentModal, chargeStatus } from './Payments';
 import { NewContractModal, ContractModal, CONTRACT_TONE } from './Contracts';
 import { RelatedTab, HistoryTab } from '../components/StudentExtras';
 import { useEditLock } from '../components/Locks';
@@ -43,6 +43,11 @@ export default function StudentProfile({ id, nav }) {
   if (!data) return <Loading />;
   const s = data.student;
   const st = data.attendanceStats;
+  const debtButton = canPay ? (
+    <Button icon={Plus} onClick={() => setModal('debt')}>
+      {t('debt.button')}
+    </Button>
+  ) : null;
 
   const remove = async () => {
     const ok = await confirm({
@@ -88,6 +93,12 @@ export default function StudentProfile({ id, nav }) {
                 <Shapes size={15} />
                 {s.group_name || t('students.noGroup')}
               </span>
+              {s.contract_no && (
+                <span title={t('students.contractNo')}>
+                  <FileSignature size={15} />
+                  № {s.contract_no}
+                </span>
+              )}
               {s.birth_date && (
                 <span>
                   <Cake size={15} />
@@ -158,16 +169,20 @@ export default function StudentProfile({ id, nav }) {
           { id: 'contracts', label: t('files.tab'), icon: FolderOpen, count: data.contracts.length + (data.files || []).length || null },
           { id: 'related', label: t('related.tab'), icon: Link2, count: (data.related || []).length || null },
           { id: 'history', label: t('history.tab'), icon: History },
+          { id: 'notes', label: t('notes.tab'), icon: StickyNote, count: (data.notes || []).length || null },
         ]}
       />
 
       {tab === 'payments' &&
         (data.charges.length ? (
-          <ChargesTable rows={data.charges} student={s} />
+          <ChargesTable rows={data.charges} student={s} tools={debtButton} />
         ) : (
-          <div className="card">
-            <Empty icon={Wallet} title={t('students.noCharges')} text={s.monthly_fee ? '' : t('students.noFeeHint')} />
-          </div>
+          <>
+            {debtButton && <div className="table-tools">{debtButton}</div>}
+            <div className="card">
+              <Empty icon={Wallet} title={t('students.noCharges')} text={s.monthly_fee ? '' : t('students.noFeeHint')} />
+            </div>
+          </>
         ))}
 
       {tab === 'attendance' && (
@@ -257,6 +272,7 @@ export default function StudentProfile({ id, nav }) {
 
       {tab === 'related' && <RelatedTab student={s} related={data.related || []} nav={nav} />}
       {tab === 'history' && <HistoryTab student={s} />}
+      {tab === 'notes' && <NotesTab student={s} notes={data.notes || []} />}
 
       {tab === 'info' && (
         <div className="card card-pad details-form">
@@ -307,20 +323,20 @@ export default function StudentProfile({ id, nav }) {
               {canPay && <Ro label={t('students.monthlyFee')} value={money(s.monthly_fee, currency)} />}
               <Ro label={t('students.joinDate')} value={fmtDate(s.join_date)} />
               <Ro label={t('students.service')} value={s.service} />
-              <Ro label={t('students.category')} value={s.category ? t(`category.${s.category}`) : ''} />
+              <Ro label={t('students.category')} value={t(`category.${s.category || 'none'}`)} />
               <Ro label={t('students.status')} value={t(`status.${s.status}`)} />
               {s.status === 'inactive' && <Ro label={t('students.inactiveReason')} value={s.inactive_reason} className="span-2" />}
               {s.leave_date && <Ro label={t('students.leaveDate')} value={fmtDate(s.leave_date)} />}
             </div>
           </FormSection>
-          <FormSection icon={StickyNote} title={t('students.notes')}>
-            <div className="ro-field ro-multi">{s.notes || <span className="muted">—</span>}</div>
-            <div className="small muted">{t('students.createdAt')}: {fmtDateTime(s.created_at)}</div>
-          </FormSection>
+          <div className="small muted">
+            {t('students.createdAt')}: {fmtDateTime(s.created_at)}
+          </div>
         </div>
       )}
 
       {modal === 'charge' && <MonthlyPaymentModal student={s} charges={data.charges} onClose={() => setModal(null)} />}
+      {modal === 'debt' && <DebtModal student={s} charges={data.charges} onClose={() => setModal(null)} />}
       {modal === 'absence' && <AbsenceModal student={s} onClose={() => setModal(null)} />}
       {modal === 'terminate' && <TerminateModal student={s} onClose={() => setModal(null)} />}
       {modal === 'contract' && (
@@ -328,6 +344,83 @@ export default function StudentProfile({ id, nav }) {
       )}
       {modal?.contract && <ContractModal id={modal.contract} onClose={() => setModal(null)} />}
     </>
+  );
+}
+
+// «Նշումներ»: notes about the student, newest first, each with when and by whom. Adding one doesn't need the
+// student's edit lock (it can be done while someone else edits the student).
+function NotesTab({ student, notes }) {
+  const t = useT();
+  const act = useAction();
+  const confirm = useConfirm();
+  const auth = useAuth();
+  const canEdit = useCan('students');
+  const [adding, setAdding] = useState(false);
+  const [text, setText] = useState('');
+  const mayDelete = (n) => canEdit && (!auth.required || !!auth.user?.is_admin || (n.user_id && n.user_id === auth.user?.id));
+  const cancel = () => {
+    setAdding(false);
+    setText('');
+  };
+  const save = async () => {
+    if (await act(() => rpc('notes.add', { studentId: student.id, text }), t('common.saved'))) cancel();
+  };
+  const remove = async (n) => {
+    if (await confirm({ title: t('notes.deleteTitle'), text: t('notes.deleteText'), confirmLabel: t('common.delete') }))
+      await act(() => rpc('notes.delete', { id: n.id }), t('common.deleted'));
+  };
+  return (
+    <div className="card">
+      <div className="card-head">
+        <StickyNote size={17} />
+        <h3>{t('notes.tab')}</h3>
+        <div className="spacer" />
+        {canEdit && !adding && (
+          <Button variant="primary" size="sm" icon={Plus} onClick={() => setAdding(true)}>
+            {t('notes.add')}
+          </Button>
+        )}
+      </div>
+      {adding && (
+        <div className="card-pad stack note-new" style={{ gap: 10 }}>
+          <textarea
+            className="textarea"
+            rows={3}
+            autoFocus
+            value={text}
+            placeholder={t('notes.placeholder')}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && text.trim()) save();
+            }}
+          />
+          <div className="row">
+            <div className="grow" />
+            <Button onClick={cancel}>{t('common.cancel')}</Button>
+            <Button variant="primary" onClick={save} disabled={!text.trim()}>
+              {t('common.save')}
+            </Button>
+          </div>
+        </div>
+      )}
+      {notes.length === 0 ? (
+        !adding && <Empty icon={StickyNote} title={t('notes.empty')} />
+      ) : (
+        <div className="list">
+          {notes.map((n) => (
+            <div key={n.id} className="list-item" style={{ alignItems: 'flex-start' }}>
+              <div className="grow">
+                <div className="note-text">{n.text}</div>
+                <div className="small muted" style={{ marginTop: 4 }}>
+                  {fmtDateTime(n.created_at)} · {n.created_by || t('notes.imported')}
+                </div>
+              </div>
+              {mayDelete(n) && <Button size="sm" variant="ghost" icon={Trash2} title={t('common.delete')} onClick={() => remove(n)} />}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 

@@ -153,7 +153,7 @@ export function GroupsExportModal({ groups, onClose, flat = false }) {
         (a, b) => !a.group_name - !b.group_name || cmp(a.group_name, b.group_name) || cmp(a.last_name, b.last_name) || cmp(a.first_name, b.first_name)
       );
       const sheets = flat
-        ? [{ name: t('nav.students'), color: SHEET_COLORS[0], groups: [block(t('groupsExport.allTitle', { n: everyone.length, date: todayIso().split('-').reverse().join('.') }), everyone)] }]
+        ? [{ name: t('nav.students'), color: SHEET_COLORS[0], groups: [block(t('groupsExport.allTitle', { n: everyone.length, date: todayIso().split('-').reverse().join('/') }), everyone)] }]
         : names.map((name, i) => ({ name, color: SHEET_COLORS[i % SHEET_COLORS.length], groups: bySheet.get(name) }));
       const r = await window.fc.saveXlsx({
         kind: 'groups',

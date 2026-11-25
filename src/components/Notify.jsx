@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
-import { Mail, Send, Users, Megaphone, History, Save, RefreshCw, RotateCcw, Search, CheckCircle2 } from 'lucide-react';
+import { Mail, Send, Users, Megaphone, History, Save, RefreshCw, RotateCcw, Search, CheckCircle2, Receipt, BellRing, FileText, Wallet, CalendarClock, CalendarRange, UserCheck, AtSign, MessageCircle } from 'lucide-react';
 import { useT } from '../i18n';
 import { rpc, useRpc, fmtDateTime } from '../lib';
 import { Badge, Button, Field, Loading, useAction, useConfirm, useToast } from './ui';
 import { useCan } from './Auth';
+import { MessengerTemplates } from './Messenger';
 
 const ok = (r) => {
   if (!r.ok) throw Object.assign(new Error(r.error), { code: r.error, detail: r.detail, showDetail: true });
@@ -20,6 +21,17 @@ export function NotifySettings() {
   const [f, setF] = useState(null);
   const [testTo, setTestTo] = useState('');
   const [showTpl, setShowTpl] = useState(false);
+  const [showMsg, setShowMsg] = useState(false);
+  const messengerCard = (
+    <OptCard icon={MessageCircle} title={t('messenger.settingsTitle')} text={t('messenger.settingsHint')} className={showMsg ? 'span-all' : ''}>
+      <div className="row">
+        <Button variant={showMsg ? 'ghost' : undefined} onClick={() => setShowMsg((v) => !v)}>
+          {t(showMsg ? 'notify.hideTemplates' : 'notify.editMessages')}
+        </Button>
+      </div>
+      {showMsg && <MessengerTemplates bare />}
+    </OptCard>
+  );
 
   useEffect(() => {
     window.fc.notify.get().then((s) => {
@@ -35,6 +47,7 @@ export function NotifySettings() {
         <div className="card settings-section">
           <div className="card-pad small muted">{t('notify.clientNote')}</div>
         </div>
+        <div className="opt-grid" style={{ marginBottom: 18 }}>{messengerCard}</div>
         <Outbox />
       </>
     );
@@ -57,6 +70,10 @@ export function NotifySettings() {
   const tg = f.telegram;
   const disabled = !canEdit;
 
+  const needEmail = !e.enabled ? t('notify.needsEmailShort') : null;
+  const needTg = !tg.enabled ? t('notify.needsTgShort') : null;
+  const needAny = !tg.enabled && !e.enabled ? t('notify.needsChannelShort') : null;
+
   return (
     <fieldset className="plain-fieldset" disabled={disabled}>
       {canEdit && dirty && (
@@ -71,35 +88,26 @@ export function NotifySettings() {
         </div>
       )}
 
-      {/* ---------------------------------------------------------- email */}
-      <div className="card settings-section">
-        <div className="card-head">
-          <Mail size={17} />
-          <h3>{t('notify.email')}</h3>
-          <div className="spacer" />
-          <Badge tone={state.config.email.enabled ? 'good' : ''}>{t(state.config.email.enabled ? 'notify.on' : 'notify.off')}</Badge>
-        </div>
-        <div className="card-pad">
-          <label className="check">
-            <input type="checkbox" checked={!!e.enabled} onChange={(ev) => set('email.enabled', ev.target.checked)} />
-            <span className="strong">{t('notify.emailEnable')}</span>
-          </label>
+      {/* ---------------------------------------------------------- channels */}
+      <div className="opt-group-title">{t('notify.channels')}</div>
+      <div className="opt-grid wide">
+        <OptCard icon={Mail} title={t('notify.email')} text={t('notify.emailText')} on={e.enabled} onToggle={(v) => set('email.enabled', v)}>
           {e.enabled && (
             <>
               <div className="small muted">{t('notify.emailHint')}</div>
-              <div className="grid-3">
+              <div className="grid-2">
                 <Field label={t('notify.smtpHost')}>
                   <input className="input" value={e.host} placeholder="smtp.gmail.com" onChange={(ev) => set('email.host', ev.target.value.trim())} />
                 </Field>
-                <Field label={t('setup.port')}>
-                  <input className="input" type="number" value={e.port} onChange={(ev) => set('email.port', Number(ev.target.value))} />
-                </Field>
-                <Field label=" ">
+                <div className="row" style={{ gap: 10, alignItems: 'flex-end' }}>
+                  <Field label={t('setup.port')}>
+                    <input className="input" type="number" style={{ width: 90 }} value={e.port} onChange={(ev) => set('email.port', Number(ev.target.value))} />
+                  </Field>
                   <label className="check" style={{ height: 38 }}>
                     <input type="checkbox" checked={!!e.secure} onChange={(ev) => set('email.secure', ev.target.checked)} />
                     {t('notify.ssl')}
                   </label>
-                </Field>
+                </div>
                 <Field label={t('notify.smtpUser')}>
                   <input className="input" value={e.user} placeholder="club@gmail.com" onChange={(ev) => set('email.user', ev.target.value.trim())} />
                 </Field>
@@ -111,7 +119,7 @@ export function NotifySettings() {
                 </Field>
               </div>
               <div className="row wrap">
-                <input className="input" style={{ maxWidth: 280 }} value={testTo} placeholder={t('notify.testTo')} onChange={(ev) => setTestTo(ev.target.value.trim())} />
+                <input className="input" style={{ maxWidth: 240 }} value={testTo} placeholder={t('notify.testTo')} onChange={(ev) => setTestTo(ev.target.value.trim())} />
                 <Button
                   icon={Send}
                   disabled={!testTo.includes('@')}
@@ -122,22 +130,9 @@ export function NotifySettings() {
               </div>
             </>
           )}
-        </div>
-      </div>
+        </OptCard>
 
-      {/* ---------------------------------------------------------- Telegram */}
-      <div className="card settings-section">
-        <div className="card-head">
-          <Send size={17} />
-          <h3>Telegram</h3>
-          <div className="spacer" />
-          <Badge tone={state.config.telegram.enabled ? 'good' : ''}>{t(state.config.telegram.enabled ? 'notify.on' : 'notify.off')}</Badge>
-        </div>
-        <div className="card-pad">
-          <label className="check">
-            <input type="checkbox" checked={!!tg.enabled} onChange={(ev) => set('telegram.enabled', ev.target.checked)} />
-            <span className="strong">{t('notify.tgEnable')}</span>
-          </label>
+        <OptCard icon={Send} title="Telegram" text={t('notify.tgText')} on={tg.enabled} onToggle={(v) => set('telegram.enabled', v)}>
           {tg.enabled && (
             <>
               <ol className="small muted steps">
@@ -196,26 +191,26 @@ export function NotifySettings() {
               </div>
             </>
           )}
-        </div>
+        </OptCard>
       </div>
 
       {/* ---------------------------------------------------------- parents */}
-      <div className="card settings-section">
-        <div className="card-head">
-          <Users size={17} />
-          <h3>{t('notify.parents')}</h3>
-        </div>
-        <div className="card-pad">
-          {!e.enabled && <div className="small" style={{ color: 'var(--warn)' }}>{t('notify.needsEmail')}</div>}
-          <label className="check">
-            <input type="checkbox" checked={!!f.receipts} onChange={(ev) => set('receipts', ev.target.checked)} />
-            {t('notify.receipts')}
-          </label>
-          <div className="row wrap" style={{ gap: 8 }}>
-            <label className="check">
-              <input type="checkbox" checked={!!f.reminders.auto} onChange={(ev) => set('reminders.auto', ev.target.checked)} />
-              {t('notify.autoReminders')}
-            </label>
+      <div className="opt-group-title">
+        <Users size={16} /> {t('notify.forParents')}
+      </div>
+      <div className="opt-grid">
+        {messengerCard}
+        <OptCard icon={Receipt} title={t('notify.optReceipts')} text={t('notify.receipts')} on={f.receipts} onToggle={(v) => set('receipts', v)} needs={needEmail} />
+        <OptCard
+          icon={BellRing}
+          title={t('notify.optReminders')}
+          text={t('notify.optRemindersText')}
+          on={f.reminders.auto}
+          onToggle={(v) => set('reminders.auto', v)}
+          needs={needEmail}
+        >
+          <div className="row wrap small" style={{ gap: 8 }}>
+            <span className="muted">{t('notify.optReminderDay')}</span>
             <input
               className="input"
               type="number"
@@ -225,32 +220,38 @@ export function NotifySettings() {
               value={f.reminders.day}
               onChange={(ev) => set('reminders.day', Math.min(28, Math.max(1, Number(ev.target.value) || 1)))}
             />
-            <span className="small muted">{t('notify.autoRemindersDay')}</span>
+            <span className="muted">{t('notify.autoRemindersDay')}</span>
           </div>
           <div className="small muted">{t('notify.remindersHint')}</div>
           <div className="row">
             <SendRemindersButton />
-            <Button variant="ghost" onClick={() => setShowTpl((v) => !v)}>
+          </div>
+        </OptCard>
+        <OptCard icon={FileText} title={t('notify.optTemplates')} text={t('notify.optTemplatesText')} className={showTpl ? 'span-all' : ''}>
+          <div className="row">
+            <Button variant={showTpl ? 'ghost' : undefined} onClick={() => setShowTpl((v) => !v)}>
               {t(showTpl ? 'notify.hideTemplates' : 'notify.editTemplates')}
             </Button>
           </div>
           {showTpl && (
             <div className="stack">
               <div className="small muted">{t('notify.placeholders')}</div>
-              {[
-                ['reminderSubject', 'notify.tplReminderSubject', false],
-                ['reminderBody', 'notify.tplReminderBody', true],
-                ['receiptSubject', 'notify.tplReceiptSubject', false],
-                ['receiptBody', 'notify.tplReceiptBody', true],
-              ].map(([k, label, multi]) => (
-                <Field key={k} label={t(label)}>
-                  {multi ? (
-                    <textarea className="textarea" rows={8} value={tpl[k]} onChange={(ev) => setTpl(k, ev.target.value)} />
-                  ) : (
-                    <input className="input" value={tpl[k]} onChange={(ev) => setTpl(k, ev.target.value)} />
-                  )}
-                </Field>
-              ))}
+              <div className="grid-2">
+                {[
+                  ['reminderSubject', 'notify.tplReminderSubject', false],
+                  ['receiptSubject', 'notify.tplReceiptSubject', false],
+                  ['reminderBody', 'notify.tplReminderBody', true],
+                  ['receiptBody', 'notify.tplReceiptBody', true],
+                ].map(([k, label, multi]) => (
+                  <Field key={k} label={t(label)}>
+                    {multi ? (
+                      <textarea className="textarea" rows={8} value={tpl[k]} onChange={(ev) => setTpl(k, ev.target.value)} />
+                    ) : (
+                      <input className="input" value={tpl[k]} onChange={(ev) => setTpl(k, ev.target.value)} />
+                    )}
+                  </Field>
+                ))}
+              </div>
               <div className="row">
                 <Button size="sm" icon={RotateCcw} onClick={() => set('templates', {})}>
                   {t('notify.resetTemplates')}
@@ -258,60 +259,91 @@ export function NotifySettings() {
               </div>
             </div>
           )}
-        </div>
+        </OptCard>
       </div>
 
       {/* ---------------------------------------------------------- staff */}
-      <div className="card settings-section">
-        <div className="card-head">
-          <Megaphone size={17} />
-          <h3>{t('notify.staff')}</h3>
-        </div>
-        <div className="card-pad">
-          {!tg.enabled && !e.enabled && <div className="small" style={{ color: 'var(--warn)' }}>{t('notify.needsChannel')}</div>}
-          <label className="check">
-            <input type="checkbox" checked={!!f.paymentAlerts} onChange={(ev) => set('paymentAlerts', ev.target.checked)} />
-            {t('notify.paymentAlerts')}
-          </label>
-          <div className="small muted">{t('notify.watchMoved')}</div>
-          <div className="row wrap" style={{ gap: 8 }}>
-            <label className="check">
-              <input type="checkbox" checked={!!f.daily.enabled} onChange={(ev) => set('daily.enabled', ev.target.checked)} />
-              {t('notify.daily')}
-            </label>
+      <div className="opt-group-title">
+        <Megaphone size={16} /> {t('notify.forStaff')}
+      </div>
+      <div className="opt-grid">
+        <OptCard icon={Wallet} title={t('notify.optPayments')} text={t('notify.paymentAlerts')} on={f.paymentAlerts} onToggle={(v) => set('paymentAlerts', v)} needs={needTg} />
+        <OptCard icon={CalendarClock} title={t('notify.optDaily')} on={f.daily.enabled} onToggle={(v) => set('daily.enabled', v)} needs={needAny}>
+          <div className="row wrap small" style={{ gap: 8 }}>
+            <span className="muted">{t('notify.optDailyAt')}</span>
             <input className="input" type="time" style={{ width: 120 }} value={f.daily.time} onChange={(ev) => set('daily.time', ev.target.value)} />
           </div>
-          <label className="check">
-            <input type="checkbox" checked={!!f.monthly.enabled} onChange={(ev) => set('monthly.enabled', ev.target.checked)} />
-            {t('notify.monthly')}
-          </label>
-          <Field label={t('notify.summaryEmails')} hint={t('notify.summaryEmailsHint')}>
-            <input className="input" value={f.summaryEmails} placeholder="director@example.com, admin@example.com" onChange={(ev) => set('summaryEmails', ev.target.value)} />
-          </Field>
-          <div className="row wrap">
-            {['daily', 'monthly'].map((k) => (
-              <Button
-                key={k}
-                icon={Send}
-                onClick={() =>
-                  act(async () => {
-                    await save(true);
-                    const n = ok(await window.fc.notify.run(k));
-                    if (!n) throw Object.assign(new Error(), { code: 'NO_RECIPIENTS' });
-                    return n;
-                  }, t('notify.queued'))
-                }
-              >
-                {t(`notify.sendNow_${k}`)}
-              </Button>
-            ))}
+          <div className="row">
+            <SendNowButton kind="daily" act={act} save={save} t={t} />
           </div>
-        </div>
+        </OptCard>
+        <OptCard icon={CalendarRange} title={t('notify.optMonthly')} text={t('notify.optMonthlyText')} on={f.monthly.enabled} onToggle={(v) => set('monthly.enabled', v)} needs={needAny}>
+          <div className="row">
+            <SendNowButton kind="monthly" act={act} save={save} t={t} />
+          </div>
+        </OptCard>
+        <OptCard icon={AtSign} title={t('notify.optRecipients')} text={t('notify.summaryEmailsHint')} needs={needEmail}>
+          <input className="input" value={f.summaryEmails} placeholder="director@example.com, admin@example.com" onChange={(ev) => set('summaryEmails', ev.target.value)} />
+        </OptCard>
+        <OptCard icon={UserCheck} title={t('notify.optActions')} text={t('notify.watchMoved')} needs={needTg}>
+          <WatchedUsers />
+        </OptCard>
       </div>
 
       <Outbox />
     </fieldset>
   );
+}
+
+// One option of the notifications page: its own card with an on/off switch in the corner.
+function OptCard({ icon: Icon, title, text, on, onToggle, needs, className = '', children }) {
+  return (
+    <div className={`card opt-card ${onToggle && !on ? 'off' : ''} ${className}`}>
+      <div className="opt-head">
+        <div className="opt-icon">
+          <Icon size={17} />
+        </div>
+        <h4 className="grow">{title}</h4>
+        {onToggle && (
+          <label className="switch" title={title}>
+            <input type="checkbox" checked={!!on} onChange={(ev) => onToggle(ev.target.checked)} />
+            <span />
+          </label>
+        )}
+      </div>
+      <div className="opt-body">
+        {text && <div className="small muted">{text}</div>}
+        {needs && on !== false && <div className="small opt-needs">{needs}</div>}
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function SendNowButton({ kind, act, save, t }) {
+  return (
+    <Button
+      icon={Send}
+      onClick={() =>
+        act(async () => {
+          await save(true);
+          const n = ok(await window.fc.notify.run(kind));
+          if (!n) throw Object.assign(new Error(), { code: 'NO_RECIPIENTS' });
+          return n;
+        }, t('notify.queued'))
+      }
+    >
+      {t(`notify.sendNow_${kind}`)}
+    </Button>
+  );
+}
+
+// Who has «Գործողությունները՝ Telegram-ով» ticked (Settings → Users).
+function WatchedUsers() {
+  const t = useT();
+  const { data } = useRpc('users.list');
+  const names = (data || []).filter((u) => u.notify_actions).map((u) => u.full_name || u.username);
+  return <div className="small strong">{names.length ? t('notify.optActionsWho', { names: names.join(', ') }) : <span className="muted">{t('notify.optActionsNone')}</span>}</div>;
 }
 
 // "Send reminders" to the parents of every student with an overdue fee.
