@@ -875,3 +875,7 @@ fieldset:disabled .switch { cursor: default; opacity: 0.6; }
 
 /* «Զեղչով վճարում»: the counted % */
 .discount-pct { font-weight: 700; color: var(--accent); margin-left: 2px; }
+
+/* ՀԴՄ settings: the two receipt lines side by side */
+.hdm-lines { display: grid; grid-template-columns: auto minmax(0, 1fr) 110px; gap: 8px 10px; align-items: center; }
+.hdm-line-head { font-size: 12px; color: var(--text-3); }

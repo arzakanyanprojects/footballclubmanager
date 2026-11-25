@@ -368,14 +368,6 @@ export function HdmSettings({ settings, onChange }) {
                 <Field label={t('hdm.cashierNo')}>{input('cashier', { inputMode: 'numeric' })}</Field>
                 <Field label={t('hdm.password')}>{input('password', { type: 'password', raw: true, autoComplete: 'off' })}</Field>
               </div>
-              <div className="grid-2">
-                <Field label={t('hdm.productName')} className="span-2">
-                  <input className="input" value={s.productName ?? 'Ուսումնամարզական ծառայություն'} maxLength={50} onChange={(e) => set({ productName: e.target.value })} />
-                </Field>
-                <Field label={t('hdm.adgCode')}>{input('adgCode', { placeholder: '85.51', value: s.adgCode ?? '85.51' })}</Field>
-                <Field label={t('hdm.productCode')}>{input('productCode', { placeholder: '1.7.6', value: s.productCode ?? '1.7.6' })}</Field>
-                <Field label={t('hdm.unit')}>{input('unit', { placeholder: 'ամիս', value: s.unit ?? 'ամիս' })}</Field>
-              </div>
               <label className="check">
                 <input type="checkbox" checked={s.devicePos !== false} onChange={(e) => set({ devicePos: e.target.checked })} />
                 {t('hdm.devicePos')}
@@ -427,13 +419,30 @@ export function HdmSettings({ settings, onChange }) {
             </div>
             {device && <div className="hint">{t('hdm.methodsDeviceHint')}</div>}
           </div>
+          {/* The receipt lines: regular groups and championship teams («Առաջնության թիմ» in Groups). */}
+          <div className="field">
+            <label>{t('hdm.lines')}</label>
+            <div className="hdm-lines">
+              <div className="hdm-line-head" />
+              <div className="hdm-line-head">{t('hdm.productName')}</div>
+              <div className="hdm-line-head">{t('hdm.productCode')}</div>
+              <div className="strong small">{t('hdm.lineRegular')}</div>
+              <input className="input" value={s.productName ?? 'Ուսումնամարզական ծառայություն'} maxLength={50} onChange={(e) => set({ productName: e.target.value })} />
+              <input className="input" value={s.productCode ?? '1.7.6'} placeholder="1.7.6" onChange={(e) => set({ productCode: e.target.value })} />
+              <div className="strong small">{t('hdm.lineChamp')}</div>
+              <input
+                className="input"
+                value={s.champProductName ?? 'Ուսումնամարզական ծառայություն առաջնության թիմ'}
+                maxLength={50}
+                onChange={(e) => set({ champProductName: e.target.value })}
+              />
+              <input className="input" value={s.champProductCode ?? '1.7.7'} placeholder="1.7.7" onChange={(e) => set({ champProductCode: e.target.value })} />
+            </div>
+            <div className="hint">{t('hdm.champHint')}</div>
+          </div>
           <div className="grid-2">
-            <Field label={t('hdm.champProductName')} hint={t('hdm.champHint')}>
-              <input className="input" value={s.champProductName ?? ''} placeholder="Ուսումնամարզական ծառայություն առաջնության թիմ" onChange={(e) => set({ champProductName: e.target.value })} />
-            </Field>
-            <Field label={t('hdm.champProductCode')}>
-              <input className="input" value={s.champProductCode ?? ''} placeholder="1.7.7" onChange={(e) => set({ champProductCode: e.target.value })} />
-            </Field>
+            <Field label={t('hdm.adgCode')}>{input('adgCode', { placeholder: '85.51', value: s.adgCode ?? '85.51' })}</Field>
+            <Field label={t('hdm.unit')}>{input('unit', { placeholder: 'ամիս', value: s.unit ?? 'ամիս' })}</Field>
           </div>
           <Field label={t('hdm.discountFormat')} hint={t('hdm.discountFormatHint')}>
             <select className="select" style={{ maxWidth: 320 }} value={s.discountFormat || 'percent'} onChange={(e) => set({ discountFormat: e.target.value })}>
