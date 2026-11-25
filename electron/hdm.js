@@ -29,8 +29,6 @@ const DEFAULTS = {
   champProductCode: '1.7.7',
   unit: 'ամիս',
   methods: ['card'], // payment methods that need a receipt
-  // «Զեղչով վճարում»: how the discount shows on the receipt — 'percent' (Զեղչ 50%) or 'amount' (Զեղչ 15,000)
-  discountFormat: 'percent',
   testCounter: 0,
 };
 
@@ -245,7 +243,7 @@ async function printReceipt(settings, receipt, nextTestNo) {
       const item = (i) => ({
         dep,
         qty: 1,
-        ...discounted(i, settings.discountFormat),
+        ...discounted(i),
         productCode: String((receipt.champ ? settings.champProductCode || DEFAULTS.champProductCode : settings.productCode) || DEFAULTS.productCode).slice(0, 50),
         productName: String((receipt.champ ? settings.champProductName || DEFAULTS.champProductName : settings.productName) || DEFAULTS.productName).slice(0, 50),
         adgCode: String(settings.adgCode || DEFAULTS.adgCode),
@@ -276,17 +274,17 @@ async function printReceipt(settings, receipt, nextTestNo) {
 
 // One receipt line's price and discount. amount: what is paid for it; fullPrice: the full price (the group's
 // full monthly fee for that month). The % is counted from them (30 000 → 15 000 = 50%, → 3 000 = 90%).
-// percent: price = the full price, discount = % (type 1) — used only when the device's own sum (rounded up to
-// 0.01) gives exactly the amount paid; otherwise (and for format 'amount') the discount is the amount off (type 4).
+// The discount goes as a percent (type 1, «Զեղչ … 50.00 %», as on the club's receipts) when the device's own sum
+// (rounded up to 0.01) gives exactly the amount paid; otherwise as the amount off (type 4), so the total is exact.
 const ceil2 = (v) => Math.ceil(Math.round(v * 1000) / 10) / 100;
-function discounted(i, format) {
+function discounted(i) {
   const amount = round2(i.amount);
   let full = Number(i.fullPrice) > 0 ? round2(i.fullPrice) : 0;
   const given = Number(i.discountPct);
   if (!full && given > 0 && given < 100) full = round2((amount * 100) / (100 - given));
   if (!(full > amount) || !(amount > 0)) return { price: amount };
   const pct = round2(((full - amount) / full) * 100);
-  if (format !== 'amount' && pct > 0 && pct < 100 && ceil2(full - (full * pct) / 100) === amount) return { price: full, discount: pct, discountType: 1 };
+  if (pct > 0 && pct < 100 && ceil2(full - (full * pct) / 100) === amount) return { price: full, discount: pct, discountType: 1 };
   return { price: full, discount: round2(full - amount), discountType: 4 };
 }
 

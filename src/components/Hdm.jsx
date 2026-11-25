@@ -444,12 +444,6 @@ export function HdmSettings({ settings, onChange }) {
             <Field label={t('hdm.adgCode')}>{input('adgCode', { placeholder: '85.51', value: s.adgCode ?? '85.51' })}</Field>
             <Field label={t('hdm.unit')}>{input('unit', { placeholder: 'ամիս', value: s.unit ?? 'ամիս' })}</Field>
           </div>
-          <Field label={t('hdm.discountFormat')} hint={t('hdm.discountFormatHint')}>
-            <select className="select" style={{ maxWidth: 320 }} value={s.discountFormat || 'percent'} onChange={(e) => set({ discountFormat: e.target.value })}>
-              <option value="percent">{t('hdm.discountPercent')}</option>
-              <option value="amount">{t('hdm.discountAmount')}</option>
-            </select>
-          </Field>
           {!device && (
             <div className="row">
               <Button
