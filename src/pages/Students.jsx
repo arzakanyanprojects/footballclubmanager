@@ -33,7 +33,7 @@ export const REQUIRED_NEW = [
   'first_name', 'last_name', 'patronymic', 'birth_date', 'document_no', 'contract_no',
   'parent_first_name', 'parent_last_name', 'parent_ssn', 'parent_doc_no', 'parent_doc_issuer', 'parent_doc_date',
   'parent_phone', 'parent_messenger', 'parent_email', 'parent_address',
-  'group_id', 'monthly_fee', 'join_date', 'service', 'category',
+  'group_id', 'monthly_fee', 'first_fee', 'join_date', 'service', 'category',
 ];
 
 export const MONTH_MARK = { paid: '✓', overdue: '✕', unpaid: '•', waived: '—', excused: '✓', notyet: '' };
@@ -529,6 +529,8 @@ export function StudentForm({ student, onClose, onSaved, minimized, onMinimize, 
     group_id: '',
     monthly_fee: '',
     join_date: '',
+    first_fee: '',
+    contract_auto: false,
     status: 'active',
     photo: null,
     ...Object.fromEntries(Object.entries(student).map(([k, v]) => [k, v ?? ''])),
@@ -557,6 +559,13 @@ export function StudentForm({ student, onClose, onSaved, minimized, onMinimize, 
     ? [...REQUIRED_NEW, ...(f.status === 'inactive' ? ['inactive_reason'] : [])].filter((k) => f[k] == null || String(f[k]).trim() === '')
     : [];
   const cls = (base, k) => (showMissing && missing.includes(k) ? `${base} invalid` : base);
+  // A new student's contract number: the next free one (Settings → Club), given for good when saving.
+  useEffect(() => {
+    if (!isNew) return;
+    rpc('students.contractNo.get')
+      .then((r) => r?.next && setF((s) => (s.contract_no ? s : { ...s, contract_no: r.next, contract_auto: true })))
+      .catch(() => {});
+  }, []);
 
   const pickPhoto = async (e) => {
     const file = e.target.files?.[0];
@@ -610,7 +619,7 @@ export function StudentForm({ student, onClose, onSaved, minimized, onMinimize, 
     } catch {
       /* per-PC convenience only */
     }
-    setReady({ contractId: c.id, studentId: r.id, number: f.contract_no });
+    setReady({ contractId: c.id, studentId: r.id, number: r.contract_no || f.contract_no });
   };
 
   if (ready)
@@ -656,7 +665,7 @@ export function StudentForm({ student, onClose, onSaved, minimized, onMinimize, 
     >
       <ConflictBanner conflict={conflict} onReload={reload} />
       {showMissing && missing.length > 0 && <div className="form-error">{t('studentForm.fillAll', { n: missing.length })}</div>}
-      <div className={`stack${isNew ? ' all-required' : ''}`} style={{ gap: 0 }}>
+      <div className={`stack student-form${isNew ? ' all-required' : ''}`} style={{ gap: 0 }}>
         <FormSection icon={UserRound} title={t('form.student')}>
           <div className="row" style={{ gap: 18, alignItems: 'flex-start' }}>
             <div className="stack" style={{ gap: 6, alignItems: 'center' }}>
@@ -693,7 +702,12 @@ export function StudentForm({ student, onClose, onSaved, minimized, onMinimize, 
               <input className={cls('input', 'document_no')} value={f.document_no} onChange={set('document_no')} />
             </Field>
             <Field label={t('students.contractNo')}>
-              <input className={cls('input', 'contract_no')} value={f.contract_no} onChange={set('contract_no')} />
+              <input
+                className={cls('input', 'contract_no')}
+                value={f.contract_no}
+                title={f.contract_auto ? t('students.contractAuto') : undefined}
+                onChange={(e) => setF((s) => ({ ...s, contract_no: e.target.value, contract_auto: false }))}
+              />
             </Field>
             <Field label={t('students.medicalDoc')}>
               <select className={cls('select', 'medical_doc')} value={f.medical_doc ? '1' : '0'} onChange={(e) => set('medical_doc')(Number(e.target.value))}>
@@ -777,9 +791,32 @@ export function StudentForm({ student, onClose, onSaved, minimized, onMinimize, 
                 ))}
               </select>
             </Field>
-            <Field label={t('students.monthlyFee')} hint={t('students.monthlyFeeHint')}>
-              <input className={cls('input', 'monthly_fee')} type="number" min="0" step="500" value={f.monthly_fee} onChange={set('monthly_fee')} />
+            <Field label={t('students.monthlyFee')}>
+              <input
+                className={cls('input', 'monthly_fee')}
+                type="number"
+                min="0"
+                step="500"
+                value={f.monthly_fee}
+                placeholder={t('students.feeZero')}
+                title={t('students.monthlyFeeHint')}
+                onChange={set('monthly_fee')}
+              />
             </Field>
+            {isNew && (
+              <Field label={t('students.firstFee')}>
+                <input
+                  className={cls('input', 'first_fee')}
+                  type="number"
+                  min="0"
+                  step="500"
+                  value={f.first_fee}
+                  placeholder={t('students.feeZero')}
+                  title={t('students.firstFeeHint')}
+                  onChange={set('first_fee')}
+                />
+              </Field>
+            )}
             <Field label={isNew ? t('students.joinDate') : `${t('students.joinDate')} *`}>
               <input className={cls('input', 'join_date')} type="date" value={f.join_date} onChange={set('join_date')} />
             </Field>

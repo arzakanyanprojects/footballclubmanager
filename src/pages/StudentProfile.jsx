@@ -321,6 +321,7 @@ export default function StudentProfile({ id, nav }) {
             <div className="grid-3">
               <Ro label={t('students.group')} value={s.group_name} />
               {canPay && <Ro label={t('students.monthlyFee')} value={money(s.monthly_fee, currency)} />}
+              {canPay && s.first_fee != null && <Ro label={t('students.firstFee')} value={money(s.first_fee, currency)} />}
               <Ro label={t('students.joinDate')} value={fmtDate(s.join_date)} />
               <Ro label={t('students.service')} value={s.service} />
               <Ro label={t('students.category')} value={t(`category.${s.category || 'none'}`)} />

@@ -210,7 +210,7 @@ function createService(db, { onWrite, getNotify } = {}) {
     for (const c of all(
       `SELECT c.id, c.amount, c.period, s.monthly_fee, s.join_date FROM charges c JOIN students s ON s.id = c.student_id
        WHERE c.kind = 'monthly' AND c.status = 'unpaid' AND c.excused_by IS NULL AND c.period = substr(s.join_date, 1, 7)
-         AND CAST(substr(s.join_date, 9, 2) AS INTEGER) >= 16 ${studentId ? 'AND s.id = :sid AND c.student_id = :sid' : ''}`,
+         AND s.first_fee IS NULL AND CAST(substr(s.join_date, 9, 2) AS INTEGER) >= 16 ${studentId ? 'AND s.id = :sid AND c.student_id = :sid' : ''}`,
       studentId ? { sid: studentId } : {}
     )) {
       // Only a month still at the usual price (a special price, e.g. set by an import, stays).
@@ -237,11 +237,15 @@ function createService(db, { onWrite, getNotify } = {}) {
          SELECT strftime('%Y-%m', date(p || '-01', '+1 month')) FROM months WHERE p < :current
        )
        INSERT OR IGNORE INTO charges (student_id, kind, period, amount, due_date, created_by)
-       SELECT st.id, 'monthly', m.p, ${feeSql('st.monthly_fee', 'm.p')}, m.p || '-' || :dueDay, 'system'
+       SELECT st.id, 'monthly', m.p,
+              CASE WHEN st.first_fee IS NOT NULL AND m.p = substr(st.join_date, 1, 7) THEN st.first_fee ELSE ${feeSql('st.monthly_fee', 'm.p')} END,
+              m.p || '-' || :dueDay, 'system'
        FROM students st
        JOIN months m ON m.p >= substr(st.join_date, 1, 7)
                     AND m.p >= IFNULL(st.billing_from, '0000-00')
-       WHERE st.status = 'active' AND st.monthly_fee > 0 ${studentId ? 'AND st.id = :sid' : ''}
+       WHERE st.status = 'active'
+         AND (CASE WHEN st.first_fee IS NOT NULL AND m.p = substr(st.join_date, 1, 7) THEN st.first_fee ELSE st.monthly_fee END) > 0
+         ${studentId ? 'AND st.id = :sid' : ''}
          ${(() => {
            const free = Object.entries(feeShares()).filter(([, v]) => v === 0).map(([p]) => `'${p}'`);
            return free.length ? `AND m.p NOT IN (${free.join(', ')})` : ''; // months with no fee at all
@@ -254,6 +258,7 @@ function createService(db, { onWrite, getNotify } = {}) {
 
   // ---------------------------------------------------------------- settings
   const SETTING_KEYS = ['club_name', 'club_address', 'club_phone', 'director_name', 'currency', 'due_day', 'billing_start', 'club_logo', 'holidays',
+    'contract_prefix', 'contract_next', // the next new student's contract number: prefix + number
     'msg_reminder', 'msg_receipt', 'msg_free']; // msg_*: WhatsApp / Viber message texts
 
   // A «Դիմում» period on a payment: both dates, the end not before the start; otherwise none.
@@ -577,6 +582,28 @@ function createService(db, { onWrite, getNotify } = {}) {
     const s = str(v);
     return s ? SERVICE_MAP[s.replace(/\s+/g, ' ')] || s.replace(/\s+/g, ' ') : s;
   };
+  // Contract numbers in order: prefix («26-08-») + the next number, skipping numbers already used.
+  // reserve: this one is taken now (the counter moves past it).
+  const setSetting = (key, value) =>
+    run('INSERT INTO settings (key, value) VALUES (:key, :value) ON CONFLICT(key) DO UPDATE SET value = excluded.value', { key, value: String(value) });
+  function nextContractNo(reserve) {
+    const st = settings();
+    const prefix = st.contract_prefix || '';
+    if (blank(st.contract_next)) return null;
+    let n = Math.max(int(st.contract_next, 1), 1);
+    while (one('SELECT 1 AS x FROM students WHERE contract_no = :c', { c: `${prefix}${n}` })) n++;
+    if (reserve) setSetting('contract_next', n + 1);
+    return `${prefix}${n}`;
+  }
+  // A number typed by hand that is next in line (or beyond) moves the counter past it too.
+  function noteContractNo(no) {
+    const st = settings();
+    const prefix = st.contract_prefix || '';
+    if (!no || blank(st.contract_next) || !String(no).startsWith(prefix)) return;
+    const tail = String(no).slice(prefix.length);
+    if (/^\d+$/.test(tail) && Number(tail) >= int(st.contract_next, 1)) setSetting('contract_next', Number(tail) + 1);
+  }
+
   // A note under the student, with who added it (unless the same text is already there, e.g. a repeated import).
   function addNote(studentId, text, ctx, always = false) {
     const t = str(text);
@@ -679,7 +706,8 @@ function createService(db, { onWrite, getNotify } = {}) {
         run(
           `UPDATE charges SET amount = ${feeSql('(SELECT monthly_fee FROM students s WHERE s.id = charges.student_id)', 'charges.period', sharesAfter)}
            WHERE kind = 'monthly' AND status = 'unpaid' AND period = :period AND excused_by IS NULL
-             AND (SELECT monthly_fee FROM students s WHERE s.id = charges.student_id) > 0`,
+             AND (SELECT monthly_fee FROM students s WHERE s.id = charges.student_id) > 0
+             AND NOT EXISTS (SELECT 1 FROM students s WHERE s.id = charges.student_id AND s.first_fee IS NOT NULL AND substr(s.join_date, 1, 7) = charges.period)`,
           { period }
         );
       }
@@ -816,6 +844,9 @@ function createService(db, { onWrite, getNotify } = {}) {
 
     // ---------------------------------------------------------------- students
     // How many students there are: active, inactive, all (for «shown N of M»).
+    // The next new student's contract number (the first free one from Settings → Club).
+    'students.contractNo.get': () => ({ next: nextContractNo(false), prefix: settings().contract_prefix || '', from: settings().contract_next || '' }),
+
     'students.summary': () => one(
       `SELECT SUM(status = 'active') AS active, SUM(status != 'active') AS inactive, COUNT(*) AS total FROM students`
     ),
@@ -934,6 +965,7 @@ function createService(db, { onWrite, getNotify } = {}) {
         status: p.status === 'inactive' ? 'inactive' : 'active',
         inactive_reason: p.status === 'inactive' ? str(p.inactive_reason) : null,
         notes: null,
+        first_fee: blank(p.first_fee) ? null : Math.max(int(p.first_fee), 0),
         medical_doc: p.medical_doc === true || Number(p.medical_doc) === 1 ? 1 : 0,
         photo: p.photo || null,
       };
@@ -967,7 +999,9 @@ function createService(db, { onWrite, getNotify } = {}) {
         // A changed fee applies to this month's and future unpaid monthly charges.
         if (prev.monthly_fee !== row.monthly_fee) {
           const shares = feeShares();
+          const ownFirst = before.first_fee != null ? String(before.join_date || '').slice(0, 7) : null;
           for (const c of all(`SELECT id, period FROM charges WHERE student_id = :id AND kind = 'monthly' AND status = 'unpaid' AND period >= :period AND excused_by IS NULL`, { id: p.id, period: currentPeriod() }))
+            if (c.period !== ownFirst)
             run('UPDATE charges SET amount = :fee WHERE id = :id', { id: c.id, fee: studentFee(row.monthly_fee, c.period, row.join_date) });
         }
         const changes = diffStudent(before, one('SELECT * FROM students WHERE id = :id', { id: p.id }));
@@ -977,19 +1011,22 @@ function createService(db, { onWrite, getNotify } = {}) {
         return { id: p.id };
       }
 
+      // The number shown in the form was the next one then; the next free one is taken now.
+      if (p.contract_auto) row.contract_no = nextContractNo(true) || row.contract_no;
+      else noteContractNo(row.contract_no);
       const r = run(
         `INSERT INTO students (first_name, last_name, patronymic, category, contract_no, service, birth_date, gender, phone, email, address, document_no,
            parent_name, parent_phone, group_id, monthly_fee, join_date, status, inactive_reason, notes, photo, medical_doc,
-           parent_first_name, parent_last_name, parent_doc_no, parent_doc_issuer, parent_doc_date, parent_ssn, parent_address, parent_email, parent_messenger)
+           parent_first_name, parent_last_name, parent_doc_no, parent_doc_issuer, parent_doc_date, parent_ssn, parent_address, parent_email, parent_messenger, first_fee)
          VALUES (:first_name, :last_name, :patronymic, :category, :contract_no, :service, :birth_date, :gender, :phone, :email, :address, :document_no,
            :parent_name, :parent_phone, :group_id, :monthly_fee, :join_date, :status, :inactive_reason, :notes, :photo, :medical_doc,
-           :parent_first_name, :parent_last_name, :parent_doc_no, :parent_doc_issuer, :parent_doc_date, :parent_ssn, :parent_address, :parent_email, :parent_messenger)`,
+           :parent_first_name, :parent_last_name, :parent_doc_no, :parent_doc_issuer, :parent_doc_date, :parent_ssn, :parent_address, :parent_email, :parent_messenger, :first_fee)`,
         row
       );
       log(ctx, 'student.created', `${row.first_name} ${row.last_name}`, Number(r.lastInsertRowid));
       addNote(Number(r.lastInsertRowid), p.notes, ctx);
       ensureMonthlyCharges(Number(r.lastInsertRowid));
-      return { id: Number(r.lastInsertRowid) };
+      return { id: Number(r.lastInsertRowid), contract_no: row.contract_no };
     },
 
     // «Դադարեցում»: the student stops on `date` — becomes inactive with that leave date. Monthly fees

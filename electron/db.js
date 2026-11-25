@@ -430,6 +430,13 @@ const MIGRATIONS = [
   // v33: the activity log is searched by dates and users.
   `CREATE INDEX IF NOT EXISTS activity_log_at ON activity_log (at);
    CREATE INDEX IF NOT EXISTS activity_log_user ON activity_log (user);`,
+  // v34: «Առաջին ամսվա վճար» (the joining month's fee, when it differs from the monthly fee), and the
+  // contract numbers given out in order: «26-08-» + 1130, 1131… (changed in Settings → Club for a new year).
+  `
+  ALTER TABLE students ADD COLUMN first_fee INTEGER;
+  INSERT OR IGNORE INTO settings (key, value) VALUES ('contract_prefix', '26-08-');
+  INSERT OR IGNORE INTO settings (key, value) VALUES ('contract_next', '1130');
+  `,
 ];
 
 function seed(db) {

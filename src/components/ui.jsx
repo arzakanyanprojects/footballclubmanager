@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { X, CheckCircle2, AlertCircle, Search, Inbox, MoreHorizontal, Shield, Minus } from 'lucide-react';
+import { X, CheckCircle2, AlertCircle, Search, Inbox, MoreHorizontal, Shield, Minus, CircleX } from 'lucide-react';
 import { avatarColor, money, rpc } from '../lib';
 import { useT } from '../i18n';
 
@@ -91,10 +91,25 @@ export function Avatar({ first = '', last = '', photo, size = 34, seed }) {
 }
 
 export function SearchBox({ value, onChange, placeholder, width }) {
+  const t = useT();
+  const input = useRef(null);
   return (
-    <div className="search" style={width ? { width } : undefined}>
+    <div className={`search${value ? ' has-value' : ''}`} style={width ? { width } : undefined}>
       <Search size={16} />
-      <input className="input" value={value} placeholder={placeholder} onChange={(e) => onChange(e.target.value)} />
+      <input ref={input} className="input" value={value} placeholder={placeholder} onChange={(e) => onChange(e.target.value)} />
+      {value && (
+        <button
+          type="button"
+          className="search-clear"
+          title={t('search.clear')}
+          onClick={() => {
+            onChange('');
+            input.current?.focus();
+          }}
+        >
+          <CircleX size={17} />
+        </button>
+      )}
     </div>
   );
 }

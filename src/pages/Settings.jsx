@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { FlaskConical, Trash2, Building2, Monitor, Network, History, Save, RefreshCw, Copy, LogOut, Server, Receipt, UserCog, ImagePlus, BellRing, Database, Printer, Plus } from 'lucide-react';
+import { FileDigit, FlaskConical, Trash2, Building2, Monitor, Network, History, Save, RefreshCw, Copy, LogOut, Server, Receipt, UserCog, ImagePlus, BellRing, Database, Printer, Plus } from 'lucide-react';
 import { useT, monthName } from '../i18n';
 import { feeShares, parseHolidays } from '../holidays';
 import { useRpc, rpc, fmtDateTime, currentPeriod, fitImage } from '../lib';
@@ -153,6 +153,7 @@ function ClubSettings() {
         </div>
       </div>
     </div>
+    <ContractNumbering />
     <div className="card settings-section">
       <div className="card-head">
         <FlaskConical size={17} />
@@ -170,6 +171,76 @@ function ClubSettings() {
       </div>
     </div>
     </>
+  );
+}
+
+// «Պայմանագրերի համարակալում»: new students get «prefix + number» in order (e.g. 26-08-1130, 26-08-1131…);
+// numbers already used are skipped. For a new year: a new prefix and starting number.
+function ContractNumbering() {
+  const t = useT();
+  const act = useAction();
+  const canEdit = useAuth().can('settings', 'edit');
+  const { data: next, reload } = useRpc('students.contractNo.get');
+  const [f, setF] = useState(null);
+  useEffect(() => {
+    if (next && !f) setF({ prefix: next.prefix, from: next.from });
+  }, [next]);
+  if (!f) return null;
+  const dirty = f.prefix !== next.prefix || String(f.from) !== String(next.from);
+  const preview = `${f.prefix}${f.from}`;
+  return (
+    <div className="card settings-section">
+      <div className="card-head">
+        <FileDigit size={17} />
+        <h3>{t('contractNo.title')}</h3>
+      </div>
+      <div className="card-pad">
+        <div className="small muted">{t('contractNo.text')}</div>
+        <div className="row wrap" style={{ alignItems: 'flex-end', gap: 12 }}>
+          <Field label={t('contractNo.prefix')}>
+            <input className="input" style={{ width: 140 }} value={f.prefix} placeholder="26-08-" disabled={!canEdit} onChange={(e) => setF({ ...f, prefix: e.target.value })} />
+          </Field>
+          <Field label={t('contractNo.next')}>
+            <input
+              className="input"
+              type="number"
+              min="1"
+              style={{ width: 140 }}
+              value={f.from}
+              disabled={!canEdit}
+              onChange={(e) => setF({ ...f, from: e.target.value.replace(/\D/g, '') })}
+            />
+          </Field>
+          {canEdit && (
+            <Button
+              variant="primary"
+              icon={Save}
+              disabled={!dirty}
+              onClick={async () => {
+                if (await act(() => rpc('settings.update', { contract_prefix: f.prefix, contract_next: f.from }), t('common.saved'))) {
+                  setF(null);
+                  reload();
+                }
+              }}
+            >
+              {t('common.save')}
+            </Button>
+          )}
+        </div>
+        <div className="small">
+          {!f.from ? (
+            <span className="muted">{t('contractNo.off')}</span>
+          ) : dirty ? (
+            t('contractNo.preview', { no: preview })
+          ) : (
+            <>
+              {t('contractNo.preview', { no: '' })}
+              <span className="strong">{next.next}</span>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 
