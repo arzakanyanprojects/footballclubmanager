@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useState } from 'react';
-import { Plus, Download, Wallet, CheckCircle2, Pencil, Ban, RotateCcw, Trash2, Printer, Package, Receipt, Undo2 } from 'lucide-react';
+import { Plus, Download, Wallet, CheckCircle2, Pencil, Ban, RotateCcw, Trash2, Printer, Package, Receipt, Undo2, FileText } from 'lucide-react';
 import { useT, monthName } from '../i18n';
 import { feeShares as holidayShares, freeHalves, parseHolidays } from '../holidays';
 import { useCan } from '../components/Auth';
@@ -14,9 +14,47 @@ import {
   useAction, useClub, useConfirm,
 } from '../components/ui';
 import { useEditLock } from '../components/Locks';
+import { openStoredFile } from '../components/Absence';
 
 // Payment methods the club accepts, in the order shown; the first is the default.
 export const PAYMENT_METHODS = ['card', 'easypay', 'transfer'];
+// Students' «Կարգավիճակ» with a discount, and how much (the war victims' 100% pay nothing, so no receipt).
+export const CATEGORY_DISCOUNT = { siblings: 50, half: 50, orphan: 50, staff: 50 };
+
+// The payment date with «Զեղչով վճարում» on its right: a discounted payment's ՀԴՄ receipt shows the full price
+// and «Զեղչ» (shown while the ՀԴՄ is on). value: { on, pct }.
+function PaidAtField({ value, onChange, discount, onDiscount }) {
+  const t = useT();
+  const hdm = useHdm();
+  return (
+    <Field label={t('payments.paidAt')}>
+      <div className="row nowrap" style={{ gap: 12 }}>
+        <input className="input" type="date" value={value} onChange={(e) => onChange(e.target.value)} style={{ width: 160 }} />
+        {hdm.enabled && (
+          <label className="check nowrap" title={t('payments.discountPayHint')}>
+            <input type="checkbox" checked={discount.on} onChange={(e) => onDiscount({ ...discount, on: e.target.checked })} />
+            {t('payments.discountPay')}
+            {discount.on && (
+              <>
+                <input
+                  className="input num"
+                  type="number"
+                  min="1"
+                  max="99"
+                  style={{ width: 62, padding: '4px 6px', height: 30 }}
+                  value={discount.pct}
+                  onChange={(e) => onDiscount({ ...discount, pct: e.target.value })}
+                />
+                %
+              </>
+            )}
+          </label>
+        )}
+      </div>
+    </Field>
+  );
+}
+const discountOf = (d) => (d.on && Number(d.pct) > 0 && Number(d.pct) < 100 ? Number(d.pct) : 0);
 // Each payment method has its own colour (picker buttons, tables, reports).
 export const METHOD_COLORS = { card: '#2f6fdb', easypay: '#e07b00', transfer: '#8a4fd8' };
 
@@ -255,7 +293,22 @@ export function ChargesTable({ rows, showStudent, selectable, onOpenStudent, stu
       cell: (c) => (
         <td>
           <div>{chargeLabel(t, c)}</div>
-          {c.absence_from && <div className="small app-link">{applicationLabel(t, c.absence_from, c.absence_to)}</div>}
+          {c.absence_from &&
+            (c.absence_file_id ? (
+              <button
+                type="button"
+                className="small app-link link"
+                title={t('payments.openApplication')}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  act(() => openStoredFile(c.absence_file_id));
+                }}
+              >
+                <FileText size={13} /> {applicationLabel(t, c.absence_from, c.absence_to)}
+              </button>
+            ) : (
+              <div className="small app-link">{applicationLabel(t, c.absence_from, c.absence_to)}</div>
+            ))}
           {c.note && <div className="small muted">{c.note}</div>}
         </td>
       ),
@@ -476,6 +529,13 @@ export function PayModal({ charges, student, onClose, onDone }) {
   const messenger = useMessenger();
   const [method, setMethod] = useState(PAYMENT_METHODS[0]);
   const [paidAt, setPaidAt] = useState(todayIso());
+  // «Զեղչով վճարում»: on by itself when every student here has a discount «Կարգավիճակ».
+  const catOf = (c) => c.category ?? student?.category;
+  const [discount, setDiscount] = useState(() => {
+    const pcts = charges.map((c) => CATEGORY_DISCOUNT[catOf(c)] || 0);
+    return { on: pcts.length > 0 && pcts.every((p) => p > 0), pct: String(Math.max(...pcts, 0) || 50) };
+  });
+  const dpct = discountOf(discount);
   // The amount actually received for each charge; starts at the amount due and can be changed.
   const [amounts, setAmounts] = useState(() => Object.fromEntries(charges.map((c) => [c.id, String(c.amount)])));
   const total = charges.reduce((s, c) => s + (Number(amounts[c.id]) || 0), 0);
@@ -494,7 +554,7 @@ export function PayModal({ charges, student, onClose, onDone }) {
         const pre = await hdm.beforePayment({
           method,
           student: nameOf(list[0]),
-          items: list.map((c) => ({ label: chargeLabel(t, c), amount: Number(amounts[c.id]) })),
+          items: list.map((c) => ({ label: chargeLabel(t, c), amount: Number(amounts[c.id]), discountPct: dpct })),
         });
         if (pre === false) break;
         const ok = await act(() => rpc('charges.markPaid', { ids: list.map((c) => c.id), amounts, method, paidAt }), t('payments.paidToast'));
@@ -528,7 +588,7 @@ export function PayModal({ charges, student, onClose, onDone }) {
     }
     for (const list of byStudent.values()) {
       const c0 = list[0];
-      const items = list.map((c) => ({ id: c.id, label: chargeLabel(t, c), amount: Number(amounts[c.id]) }));
+      const items = list.map((c) => ({ id: c.id, label: chargeLabel(t, c), amount: Number(amounts[c.id]), discountPct: dpct }));
       const r = await hdm.afterPayment({ method, student: nameOf(c0), items });
       messenger?.afterPayment(c0.student_id, nameOf(c0));
       await customer.afterPayment({ studentId: c0.student_id, items, method, paidAt, hdm: r || null });
@@ -587,9 +647,9 @@ export function PayModal({ charges, student, onClose, onDone }) {
           <Field label={t('payments.method')} className="span-2">
             <MethodPicker value={method} onChange={setMethod} />
           </Field>
-          <Field label={t('payments.paidAt')}>
-            <input className="input" type="date" value={paidAt} onChange={(e) => setPaidAt(e.target.value)} />
-          </Field>
+          <div className="span-2">
+            <PaidAtField value={paidAt} onChange={setPaidAt} discount={discount} onDiscount={setDiscount} />
+          </div>
         </div>
       </div>
     </Modal>
@@ -1053,6 +1113,8 @@ export function MonthlyPaymentModal({ student, charges, onClose }) {
   const [paidAt, setPaidAt] = useState(todayIso());
   const [note, setNote] = useState('');
   const [absence, setAbsence] = useState(null);
+  const [discount, setDiscount] = useState(() => ({ on: !!CATEGORY_DISCOUNT[student.category], pct: String(CATEGORY_DISCOUNT[student.category] || 50) }));
+  const dpct = discountOf(discount);
   const selected = periods.filter((p) => picked.has(p));
   const club = useClub();
   const shares = feeShares(club);
@@ -1080,7 +1142,7 @@ export function MonthlyPaymentModal({ student, charges, onClose }) {
     const pre = await hdm.beforePayment({
       method,
       student: who,
-      items: selected.map((p) => ({ label: chargeLabel(t, { kind: 'monthly', period: p }), amount: amountOf(p) })),
+      items: selected.map((p) => ({ label: chargeLabel(t, { kind: 'monthly', period: p }), amount: amountOf(p), discountPct: dpct })),
     });
     if (pre === false) return;
     const ok = await act(
@@ -1090,7 +1152,7 @@ export function MonthlyPaymentModal({ student, charges, onClose }) {
     if (!ok) return;
     onClose();
     if (!ok.ids?.length) return;
-    const items = ok.ids.map((id, i) => ({ id, label: chargeLabel(t, { kind: 'monthly', period: ok.periods[i] }), amount: amountOf(ok.periods[i]) }));
+    const items = ok.ids.map((id, i) => ({ id, label: chargeLabel(t, { kind: 'monthly', period: ok.periods[i] }), amount: amountOf(ok.periods[i]), discountPct: dpct }));
     let r = pre;
     if (pre) await rpc('charges.setReceipt', { ids: ok.ids, receipt: pre.receiptNo, crn: pre.crn, fiscal: pre.fiscalNo }).catch(() => {});
     else r = await hdm.afterPayment({ method, student: who, items });
@@ -1135,12 +1197,12 @@ export function MonthlyPaymentModal({ student, charges, onClose }) {
           </div>
         </Field>
         <div className="grid-2">
-          <Field label={t('payments.amountPerMonth')}>
-            <input className="input" type="number" min="0" step="500" value={amount} onChange={(e) => setAmount(e.target.value)} />
-          </Field>
-          <Field label={t('payments.paidAt')}>
-            <input className="input" type="date" value={paidAt} onChange={(e) => setPaidAt(e.target.value)} />
-          </Field>
+          <div className="span-2 row" style={{ gap: 16, alignItems: 'flex-start' }}>
+            <Field label={t('payments.amountPerMonth')}>
+              <input className="input" type="number" min="0" step="500" style={{ width: 150 }} value={amount} onChange={(e) => setAmount(e.target.value)} />
+            </Field>
+            <PaidAtField value={paidAt} onChange={setPaidAt} discount={discount} onDiscount={setDiscount} />
+          </div>
           {lateJoin && (
             <div className="span-full small" style={{ color: 'var(--info)' }}>
               {t('payments.lateJoin', { month: monthName(t, lateJoin), date: fmtDate(student.join_date) })} — {money(amountOf(lateJoin), club.currency)}

@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { Fragment, createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { Printer, RotateCcw, CheckCircle2, AlertTriangle, PlugZap, FileText, Copy } from 'lucide-react';
 import { useT } from '../i18n';
 import { rpc, money } from '../lib';
@@ -114,7 +114,7 @@ function ReceiptModal({ job, test, operator, onClose }) {
     setState('printing');
     setError(null);
     const r = await window.fc.hdmPrint({
-      items: job.items.map(({ label, amount }) => ({ label, amount: Number(amount) })),
+      items: job.items.map(({ label, amount, discountPct }) => ({ label, amount: Number(amount), ...(discountPct ? { discountPct: Number(discountPct) } : {}) })),
       total,
       method: job.method,
       student: job.student,
@@ -245,12 +245,36 @@ function ReceiptSlip({ job, total, result, test, operator, faded }) {
         </div>
       )}
       <div className="sep" />
-      {job.items.map((i, k) => (
-        <div className="line" key={k}>
-          <span>{i.label}</span>
-          <span>{money(i.amount, club.currency)}</span>
-        </div>
-      ))}
+      {job.items.map((i, k) => {
+        const pct = Number(i.discountPct);
+        if (!(pct > 0 && pct < 100))
+          return (
+            <div className="line" key={k}>
+              <span>{i.label}</span>
+              <span>{money(i.amount, club.currency)}</span>
+            </div>
+          );
+        // As the ՀԴՄ prints it: the full price, «Զեղչ», then what is paid.
+        const full = Math.round((Number(i.amount) * 100) / (100 - pct));
+        return (
+          <Fragment key={k}>
+            <div className="line">
+              <span>{i.label}</span>
+              <span>{money(full, club.currency)}</span>
+            </div>
+            <div className="line muted">
+              <span>
+                {t('hdm.discount')} {pct}%
+              </span>
+              <span>−{money(full - Number(i.amount), club.currency)}</span>
+            </div>
+            <div className="line">
+              <span />
+              <span>{money(i.amount, club.currency)}</span>
+            </div>
+          </Fragment>
+        );
+      })}
       <div className="sep" />
       <div className="line total">
         <span>{t('hdm.total')}</span>
@@ -402,6 +426,12 @@ export function HdmSettings({ settings, onChange }) {
             </div>
             {device && <div className="hint">{t('hdm.methodsDeviceHint')}</div>}
           </div>
+          <Field label={t('hdm.discountFormat')} hint={t('hdm.discountFormatHint')}>
+            <select className="select" style={{ maxWidth: 320 }} value={s.discountFormat || 'percent'} onChange={(e) => set({ discountFormat: e.target.value })}>
+              <option value="percent">{t('hdm.discountPercent')}</option>
+              <option value="amount">{t('hdm.discountAmount')}</option>
+            </select>
+          </Field>
           {!device && (
             <div className="row">
               <Button

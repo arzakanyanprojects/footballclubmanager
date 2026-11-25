@@ -26,6 +26,8 @@ const DEFAULTS = {
   productCode: '1.7.6',
   unit: 'ամիս',
   methods: ['card'], // payment methods that need a receipt
+  // «Զեղչով վճարում»: how the discount shows on the receipt — 'percent' (Զեղչ 50%) or 'amount' (Զեղչ 15,000)
+  discountFormat: 'percent',
   testCounter: 0,
 };
 
@@ -203,7 +205,10 @@ const fail = (err) => ({ ok: false, error: err.code || 'HDM_DEVICE_ERROR', detai
 // ---------------------------------------------------------------- actions
 
 /**
- * receipt: { items: [{ label, amount }], total, method, student, cashier }
+ * receipt: { items: [{ label, amount, discountPct? }], total, method, student, cashier }
+ * discountPct (a discounted student's payment): the line goes at the full price with the discount, so the
+ * receipt shows «Զեղչ» (protocol v0.7.3: discount + discountType 1 = percent, 4 = an amount off the line;
+ * the fields are left out when there is no discount). What is paid stays `amount`.
  * nextTestNo: returns the next simulated receipt number (test mode)
  * In device mode the receipt is an itemised fiscal receipt (mode 2): one line per payment (a month's fee)
  * with the configured service name and codes, quantity 1. Card payments go through the ՀԴՄ's own POS
@@ -236,7 +241,7 @@ async function printReceipt(settings, receipt, nextTestNo) {
       const item = (i) => ({
         dep,
         qty: 1,
-        price: round2(i.amount),
+        ...discounted(i, settings.discountFormat),
         productCode: String(settings.productCode || DEFAULTS.productCode).slice(0, 50),
         productName: String(settings.productName || DEFAULTS.productName).slice(0, 50),
         adgCode: String(settings.adgCode || DEFAULTS.adgCode),
@@ -263,6 +268,19 @@ async function printReceipt(settings, receipt, nextTestNo) {
     if (sent && err.code === 'HDM_NO_ANSWER') err.uncertain = true;
     return fail(err);
   }
+}
+
+// One receipt line's price and discount. amount: what is paid for it; pct: the student's discount (0 < pct < 100).
+// percent: price = the full price, discount = pct (type 1) — used only when the device's own sum (rounded up to
+// 0.01) gives exactly the amount paid; otherwise (and for format 'amount') the discount is the amount off (type 4).
+const ceil2 = (v) => Math.ceil(Math.round(v * 1000) / 10) / 100;
+function discounted(i, format) {
+  const amount = round2(i.amount);
+  const pct = Number(i.discountPct);
+  if (!(pct > 0 && pct < 100)) return { price: amount };
+  const full = round2((amount * 100) / (100 - pct));
+  if (format !== 'amount' && ceil2(full - (full * pct) / 100) === amount) return { price: full, discount: pct, discountType: 1 };
+  return { price: full, discount: round2(full - amount), discountType: 4 };
 }
 
 // «Ստուգել կապը»: the device's operators and departments (password only), then an operator login.
@@ -321,4 +339,5 @@ async function action(settings, { kind, receiptNo, crn }) {
   }
 }
 
-module.exports = { DEFAULTS, printReceipt, testConnection, action, _protocol: { passwordKey, encrypt, decrypt, MAGIC, VERSION } };
+module.exports = {
+  discounted, DEFAULTS, printReceipt, testConnection, action, _protocol: { passwordKey, encrypt, decrypt, MAGIC, VERSION } };

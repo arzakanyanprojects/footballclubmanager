@@ -365,12 +365,15 @@ function createService(db, { onWrite, getNotify } = {}) {
       const c = one(`SELECT id, status, amount FROM charges WHERE student_id = :sid AND kind = 'monthly' AND period = :period`, { sid: s.id, period });
       if (free.size >= 2) {
         if (c) {
-          if (c.status === 'unpaid') run(`UPDATE charges SET status = 'waived', excused_by = :aid WHERE id = :id`, { id: c.id, aid: a.id });
+          if (c.status === 'unpaid')
+            run(`UPDATE charges SET status = 'waived', excused_by = :aid, absence_from = :from, absence_to = :to WHERE id = :id`, {
+              id: c.id, aid: a.id, from: a.date_from, to: a.date_to,
+            });
         } else if (s.monthly_fee > 0) {
           const r = run(
-            `INSERT INTO charges (student_id, kind, period, amount, due_date, status, excused_by, created_by)
-             VALUES (:sid, 'monthly', :period, :fee, :due, 'waived', :aid, :user)`,
-            { sid: s.id, period, fee: s.monthly_fee, due: `${period}-${dueDay}`, aid: a.id, user: a.created_by }
+            `INSERT INTO charges (student_id, kind, period, amount, due_date, status, excused_by, absence_from, absence_to, created_by)
+             VALUES (:sid, 'monthly', :period, :fee, :due, 'waived', :aid, :from, :to, :user)`,
+            { sid: s.id, period, fee: s.monthly_fee, due: `${period}-${dueDay}`, aid: a.id, from: a.date_from, to: a.date_to, user: a.created_by }
           );
           created.push(Number(r.lastInsertRowid));
         }
@@ -395,6 +398,12 @@ function createService(db, { onWrite, getNotify } = {}) {
       }
     }
     run('UPDATE absences SET created_charges = :c, reduced_charges = :r WHERE id = :id', { id: a.id, c: JSON.stringify(created), r: JSON.stringify(reduced) });
+    // Every monthly fee of the months the application touches (paid ones too) shows its dates and opens it.
+    run(
+      `UPDATE charges SET absence_from = :from, absence_to = :to
+       WHERE student_id = :sid AND kind = 'monthly' AND absence_from IS NULL AND period BETWEEN :pf AND :pt`,
+      { sid: s.id, from: a.date_from, to: a.date_to, pf: a.date_from.slice(0, 7), pt: a.date_to.slice(0, 7) }
+    );
   }
 
   // Undoes an absence (its application was deleted).
@@ -408,7 +417,12 @@ function createService(db, { onWrite, getNotify } = {}) {
     // Halved fees get their amount back (if still unpaid); waived months are owed again.
     for (const [cid, amount] of Object.entries(JSON.parse(a.reduced_charges || '{}')))
       run(`UPDATE charges SET amount = :amount WHERE id = :cid AND status = 'unpaid'`, { cid: Number(cid), amount });
-    run(`UPDATE charges SET status = 'unpaid', excused_by = NULL WHERE excused_by = :id AND status = 'waived'`, { id: a.id });
+    run(`UPDATE charges SET status = 'unpaid', excused_by = NULL, absence_from = NULL, absence_to = NULL WHERE excused_by = :id AND status = 'waived'`, { id: a.id });
+    run(
+      `UPDATE charges SET absence_from = NULL, absence_to = NULL
+       WHERE student_id = :sid AND excused_by IS NULL AND absence_from = :from AND absence_to = :to`,
+      { sid: a.student_id, from: a.date_from, to: a.date_to }
+    );
     run(
       `UPDATE charges SET excused_by = NULL, absence_from = NULL, absence_to = NULL WHERE excused_by = :id AND status != 'waived'`,
       { id: a.id }
@@ -419,6 +433,57 @@ function createService(db, { onWrite, getNotify } = {}) {
       { sid: a.student_id, from: a.date_from, to: a.date_to, id: a.id }
     );
     run('DELETE FROM absences WHERE id = :id', { id: a.id });
+  }
+
+  // «Դիմում» — the same three things wherever it is made (the «Ստեղծել դիմում» button, a payment's
+  // «Խմբագրել», paying a month with «Դիմում»): the application document under the student's documents,
+  // the months it covers excused («Հարգելի») or halved, and the dates shown under those monthly fees.
+  function createApplication(ctx, p) {
+    const student = one(`SELECT s.*, g.name AS group_name FROM students s LEFT JOIN groups g ON g.id = s.group_id WHERE s.id = :id`, { id: p.studentId });
+    if (!student) throw new AppError('NOT_FOUND');
+    if (blank(p.from) || blank(p.to)) throw new AppError('PERIOD_REQUIRED');
+    if (String(p.to) < String(p.from)) throw new AppError('PERIOD_INVALID');
+    const contract = one(
+      `SELECT number, contract_date FROM contracts WHERE student_id = :id
+       ORDER BY IFNULL(contract_date, created_at) DESC, id DESC LIMIT 1`,
+      { id: p.studentId }
+    );
+    const date = str(p.date) || today();
+    const template = require('fs').readFileSync(require('path').join(__dirname, 'templates', 'absence-application.docx'));
+    const buf = word.fillTemplate(template, word.absenceValues(student, contract, { ...p, date }));
+    const name = `Բացակայության դիմում — ${student.first_name} ${student.last_name} — ${formatDate(str(p.from))}–${formatDate(str(p.to))}.docx`;
+    const fileId = Number(
+      run(
+        `INSERT INTO student_files (student_id, kind, file_name, mime, size, data, created_by)
+         VALUES (:studentId, 'absence', :name, :type, :size, :data, :user)`,
+        { studentId: p.studentId, name, type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', size: buf.length, data: buf, user: ctx.user || null }
+      ).lastInsertRowid
+    );
+    const absenceId = Number(
+      run(
+        `INSERT INTO absences (student_id, date_from, date_to, reason, file_id, created_by)
+         VALUES (:studentId, :from, :to, :reason, :fileId, :user)`,
+        { studentId: p.studentId, from: str(p.from), to: str(p.to), reason: str(p.reason), fileId, user: ctx.user || null }
+      ).lastInsertRowid
+    );
+    excuseAbsence(absenceId);
+    log(ctx, 'application.created', `${student.first_name} ${student.last_name} — ${formatDate(str(p.from))}–${formatDate(str(p.to))}`, p.studentId, {
+      absenceId, fileId, from: str(p.from), to: str(p.to), reason: str(p.reason),
+    });
+    return { fileId, absenceId, name, buf };
+  }
+  // The application with exactly these dates for the student, if there is one.
+  const applicationFor = (studentId, from, to) =>
+    from && to ? one('SELECT * FROM absences WHERE student_id = :sid AND date_from = :from AND date_to = :to ORDER BY id DESC LIMIT 1', { sid: studentId, from, to }) : null;
+  // An application taken back: the months it touched as they were, and its document deleted.
+  function dropApplication(a, ctx) {
+    if (!a) return;
+    removeAbsence(a.id);
+    if (a.file_id) {
+      const f = one('SELECT file_name FROM student_files WHERE id = :id', { id: a.file_id });
+      run('DELETE FROM student_files WHERE id = :id', { id: a.file_id });
+      if (f) log(ctx, 'file.deleted', `${studentName(a.student_id)} — ${f.file_name}`, a.student_id, { name: f.file_name, kind: 'absence' });
+    }
   }
 
   // ---------------------------------------------------------------- email / Telegram messages
@@ -903,8 +968,8 @@ function createService(db, { onWrite, getNotify } = {}) {
           ? all('SELECT weekday, start, end, pitch FROM schedule_base WHERE group_id = :g ORDER BY ((weekday + 6) % 7), start', { g: student.group_id })
           : [],
         charges: all(
-          `SELECT * FROM charges WHERE student_id = :id
-           ORDER BY CASE status WHEN 'unpaid' THEN 0 ELSE 1 END, IFNULL(due_date, created_at) DESC, id DESC`,
+          `SELECT c.*, (SELECT a.file_id FROM absences a WHERE a.student_id = c.student_id AND a.date_from = c.absence_from AND a.date_to = c.absence_to AND a.file_id IS NOT NULL ORDER BY a.id DESC LIMIT 1) AS absence_file_id FROM charges c WHERE c.student_id = :id
+           ORDER BY CASE c.status WHEN 'unpaid' THEN 0 ELSE 1 END, IFNULL(c.due_date, c.created_at) DESC, c.id DESC`,
           { id }
         ),
         attendance: all('SELECT date, status FROM attendance WHERE student_id = :id ORDER BY date DESC LIMIT 120', { id }),
@@ -1468,47 +1533,8 @@ function createService(db, { onWrite, getNotify } = {}) {
 
     // Absence application (Բացակայության դիմում): fills the club's form and keeps it under the student's documents.
     'applications.create': (p, ctx) => {
-      const student = one(
-        `SELECT s.*, g.name AS group_name FROM students s LEFT JOIN groups g ON g.id = s.group_id WHERE s.id = :id`,
-        { id: p.studentId }
-      );
-      if (!student) throw new AppError('NOT_FOUND');
-      if (blank(p.from) || blank(p.to)) throw new AppError('PERIOD_REQUIRED');
-      if (String(p.to) < String(p.from)) throw new AppError('PERIOD_INVALID');
-      const contract = one(
-        `SELECT number, contract_date FROM contracts WHERE student_id = :id
-         ORDER BY IFNULL(contract_date, created_at) DESC, id DESC LIMIT 1`,
-        { id: p.studentId }
-      );
-      const date = str(p.date) || today();
-      const template = require('fs').readFileSync(require('path').join(__dirname, 'templates', 'absence-application.docx'));
-      const buf = word.fillTemplate(template, word.absenceValues(student, contract, { ...p, date }));
-      const name = `Բացակայության դիմում — ${student.first_name} ${student.last_name} — ${formatDate(str(p.from))}–${formatDate(str(p.to))}.docx`;
-      const r = run(
-        `INSERT INTO student_files (student_id, kind, file_name, mime, size, data, created_by)
-         VALUES (:studentId, 'absence', :name, :type, :size, :data, :user)`,
-        {
-          studentId: p.studentId,
-          name,
-          type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-          size: buf.length,
-          data: buf,
-          user: ctx.user || null,
-        }
-      );
-      const fileId = Number(r.lastInsertRowid);
-      const absenceId = Number(
-        run(
-          `INSERT INTO absences (student_id, date_from, date_to, reason, file_id, created_by)
-           VALUES (:studentId, :from, :to, :reason, :fileId, :user)`,
-          { studentId: p.studentId, from: str(p.from), to: str(p.to), reason: str(p.reason), fileId, user: ctx.user || null }
-        ).lastInsertRowid
-      );
-      excuseAbsence(absenceId);
-      log(ctx, 'application.created', `${student.first_name} ${student.last_name} — ${formatDate(str(p.from))}–${formatDate(str(p.to))}`, p.studentId, {
-        absenceId, fileId, from: str(p.from), to: str(p.to), reason: str(p.reason),
-      });
-      return { id: fileId, fileName: name, data: buf.toString('base64') };
+      const a = createApplication(ctx, p);
+      return { id: a.fileId, fileName: a.name, data: a.buf.toString('base64') };
     },
 
     // ---------------------------------------------------------------- timetable (Դասացուցակ)
@@ -1655,7 +1681,8 @@ function createService(db, { onWrite, getNotify } = {}) {
     // ---------------------------------------------------------------- charges & payments
     'charges.list': (p = {}) => {
       const rows = all(
-        `SELECT c.*, s.first_name, s.last_name, s.group_id, g.name AS group_name, pr.name AS product_name
+        `SELECT c.*, s.first_name, s.last_name, s.group_id, s.category, g.name AS group_name, pr.name AS product_name,
+                (SELECT a.file_id FROM absences a WHERE a.student_id = c.student_id AND a.date_from = c.absence_from AND a.date_to = c.absence_to AND a.file_id IS NOT NULL ORDER BY a.id DESC LIMIT 1) AS absence_file_id
          FROM charges c
          JOIN students s ON s.id = c.student_id
          LEFT JOIN groups g ON g.id = s.group_id
@@ -1776,7 +1803,17 @@ function createService(db, { onWrite, getNotify } = {}) {
       );
       if (p.absenceFrom !== undefined) {
         const absence = absenceRange(p.absenceFrom, p.absenceTo);
-        run('UPDATE charges SET absence_from = :from, absence_to = :to WHERE id = :id', { id: p.id, ...absence });
+        if (absence.from !== (c.absence_from || null) || absence.to !== (c.absence_to || null)) {
+          // The old dates: their application goes (its document too); a payment without one just loses the dates.
+          const old = c.excused_by ? one('SELECT * FROM absences WHERE id = :id', { id: c.excused_by }) : applicationFor(c.student_id, c.absence_from, c.absence_to);
+          if (old) dropApplication(old, ctx);
+          run('UPDATE charges SET absence_from = NULL, absence_to = NULL WHERE id = :id', { id: p.id });
+          if (absence.from) {
+            createApplication(ctx, { studentId: c.student_id, from: absence.from, to: absence.to });
+            // A paid month keeps its amount; it shows the dates of its application.
+            run('UPDATE charges SET absence_from = :from, absence_to = :to WHERE id = :id AND absence_from IS NULL', { id: p.id, ...absence });
+          }
+        }
       }
       log(ctx, 'charge.updated', `${studentName(c.student_id)} — ${amount}`, c.student_id, { ...chargeMeta(p.id), before: { amount: c.amount, method: c.method, paidAt: c.paid_at, period: c.period } });
       return true;
@@ -1888,6 +1925,7 @@ function createService(db, { onWrite, getNotify } = {}) {
       }
       for (const id of done) log(ctx, 'charge.paid', `${studentName(studentId)} — ${total}`, studentId, chargeMeta(id));
       if (done.length) notifyPaid(studentId, done.map((id) => one('SELECT * FROM charges WHERE id = :id', { id })), paid.method, ctx);
+      if (done.length && absence.from && !applicationFor(studentId, absence.from, absence.to)) createApplication(ctx, { studentId, from: absence.from, to: absence.to });
       return { total, ids: done, periods: donePeriods };
     },
 

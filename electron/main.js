@@ -685,6 +685,11 @@ function registerIpc() {
       const safe = String(name || 'document').replace(/[\\/:*?"<>|]+/g, '_').slice(-120);
       const file = path.join(dir, `${Date.now()}-${safe}`);
       fs.writeFileSync(file, Buffer.from(data, 'base64'));
+      // Testing: the document is kept in that folder instead of being opened.
+      if (process.env.FC_EXPORT_DIR) {
+        fs.copyFileSync(file, path.join(process.env.FC_EXPORT_DIR, `opened-${safe}`));
+        return { ok: true };
+      }
       const err = await shell.openPath(file);
       return err ? { ok: false, error: 'OPEN_FAILED', detail: err } : { ok: true };
     } catch (err) {

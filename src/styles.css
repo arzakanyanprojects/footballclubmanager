@@ -696,6 +696,8 @@ table.table { width: 100%; border-collapse: collapse; }
 .import-review tr.warn td { background: color-mix(in srgb, var(--warn-soft) 70%, transparent); }
 
 .app-link { color: var(--info); font-weight: 600; }
+button.app-link.link { display: inline-flex; align-items: center; gap: 4px; background: none; border: 0; padding: 0; cursor: pointer; font-family: inherit; text-align: left; }
+button.app-link.link:hover { text-decoration: underline; }
 
 .span-full { grid-column: 1 / -1; }
 
