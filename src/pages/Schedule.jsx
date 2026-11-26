@@ -3,7 +3,7 @@ import {
   ChevronLeft, ChevronRight, Copy, Printer, FileSpreadsheet, CalendarPlus, MapPin, AlertTriangle, RotateCcw, Trash2, CalendarRange, Users, Pencil,
 } from 'lucide-react';
 import { useT } from '../i18n';
-import { useCan, useCanExcel } from '../components/Auth';
+import { useAuth, useCan } from '../components/Auth';
 import { useRpc, rpc, todayIso, weekday, fmtDate } from '../lib';
 import { Button, Empty, Field, Loading, Modal, Segmented, useAction, useClub, useConfirm, useToast } from '../components/ui';
 import { useEditLock } from '../components/Locks';
@@ -61,8 +61,11 @@ export default function Schedule() {
   const confirm = useConfirm();
   const toast = useToast();
   const club = useClub();
-  const canEdit = useCan('schedule');
+  const auth = useAuth();
   const [mode, setMode] = useState('week'); // week | base
+  // A cell: one date's change («schedule.day»), or the usual week («schedule.base»).
+  const canEdit = auth.can(mode === 'base' ? 'schedule.base' : 'schedule.day');
+  const canBase = auth.can('schedule.base');
   const [monday, setMonday] = useState(() => mondayOf(todayIso()));
   const [days, setDays] = useState(() => loadPref('fc.schedule.days', [6, 0]));
   const [editing, setEditing] = useState(null);
@@ -183,26 +186,28 @@ export default function Schedule() {
               <AlertTriangle size={15} /> {t('schedule.clashes', { n: clashCount })}
             </span>
           )}
-          {canEdit && (
+          {canBase && !auth.groups && (
             <Button icon={MapPin} onClick={() => setPitchesOpen(true)}>
               {t('schedule.pitches')}
             </Button>
           )}
-          {mode === 'week' && canEdit && (
+          {mode === 'week' && auth.can('schedule.copy') && (
             <Button icon={Copy} onClick={copyWeek} disabled={!data?.prevDays} title={data?.prevDays ? '' : t('schedule.copyNone')}>
               {t('schedule.copy')}
             </Button>
           )}
           {mode === 'week' && (
             <>
-              {canEdit && (
+              {auth.can('attendance.days') && (
                 <Button icon={CalendarPlus} onClick={toAttendance} disabled={!data}>
                   {t('schedule.toAttendance')}
                 </Button>
               )}
-              <Button variant="primary" icon={Printer} onClick={() => setPrintOpen(true)} disabled={!data}>
-                {t('schedule.print')}
-              </Button>
+              {auth.canAny('schedule.print', 'schedule.excel') && (
+                <Button variant="primary" icon={Printer} onClick={() => setPrintOpen(true)} disabled={!data}>
+                  {t('schedule.print')}
+                </Button>
+              )}
             </>
           )}
         </div>
@@ -244,10 +249,10 @@ export default function Schedule() {
                   {b.groups.map((g) => (
                     <tr key={g.id} style={{ '--b': b.fill }}>
                       <td className="sched-coach">
-                        <button className="sched-coach-btn" disabled={!canEdit} title={canEdit ? t('schedule.editCoaches') : ''} onClick={() => setCoachesFor(g)}>
+                        <button className="sched-coach-btn" disabled={!canBase} title={canBase ? t('schedule.editCoaches') : ''} onClick={() => setCoachesFor(g)}>
                           <span className="strong">{g.coach || <span className="muted">{t('groups.noCoach')}</span>}</span>
                           <span className="small muted">{g.assistant || '—'}</span>
-                          {canEdit && <Pencil size={13} className="sched-coach-edit" />}
+                          {canBase && <Pencil size={13} className="sched-coach-edit" />}
                         </button>
                       </td>
                       <td className="sched-group">
@@ -319,6 +324,7 @@ const peopleOf = (groups) =>
 
 function CellModal({ edit, mode, pitches, people, onClose }) {
   const t = useT();
+  const canBase = useCan('schedule.base'); // «every week» changes the usual week
   const act = useAction();
   const { group, date, weekday: wd, session, base } = edit;
   const lock = useEditLock(mode === 'base' ? 'schedule:base' : date ? `schedule:week:${mondayOf(date)}` : null);
@@ -431,7 +437,7 @@ function CellModal({ edit, mode, pitches, people, onClose }) {
                 </datalist>
               </div>
             )}
-            {!isBase && (
+            {!isBase && canBase && (
               <label className="check small">
                 <input type="checkbox" checked={f.permanent} onChange={set('permanent')} />
                 {t('schedule.permanent', { day: t(`weekday.${wd}`) })}
@@ -533,7 +539,8 @@ function PitchesModal({ pitches, onClose }) {
 // ---------------------------------------------------------------- print / Excel
 function PrintModal({ view, onClose }) {
   const t = useT();
-  const canExcel = useCanExcel('schedule');
+  const canExcel = useCan('schedule.excel');
+  const canPrint = useCan('schedule.print');
   const act = useAction();
   const [kind, setKind] = useState('grid');
   const { blocks, dates, sessionOf, club } = view;
@@ -582,10 +589,10 @@ function PrintModal({ view, onClose }) {
   };
 
   const print = () =>
-    act(() => window.fc.print({ html: kind === 'grid' ? gridHtml({ title, dates: dates.map(dateLabel), blocks: gridBlocks, t }) : coachHtml({ title, coaches: byCoach(), dateLabel, t }) }));
+    act(() => window.fc.print({ perm: 'schedule.print', html: kind === 'grid' ? gridHtml({ title, dates: dates.map(dateLabel), blocks: gridBlocks, t }) : coachHtml({ title, coaches: byCoach(), dateLabel, t }) }));
   const excel = () =>
     act(() =>
-      window.fc.saveXlsx({
+      window.fc.saveXlsx({ perm: 'schedule.excel', 
         kind: 'schedule',
         defaultName: `schedule-${dates[0] || todayIso()}.xlsx`,
         title,
@@ -608,7 +615,7 @@ function PrintModal({ view, onClose }) {
               Excel
             </Button>
           )}
-          <Button variant="primary" icon={Printer} onClick={print}>
+          <Button variant="primary" icon={Printer} onClick={print} disabled={!canPrint}>
             {t('schedule.print')}
           </Button>
         </>

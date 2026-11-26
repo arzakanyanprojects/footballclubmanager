@@ -14,9 +14,10 @@ export default function DataManagement({ appState, setAppState }) {
   const isHost = appState.config.mode === 'host';
   return (
     <>
-      {auth.can('students', 'edit') && <ImportCard />}
-      {auth.can('students', 'view') && auth.canExcel('students') && <TransferCard />}
-      {isHost && auth.can('settings', 'view') && <BackupsCard appState={appState} setAppState={setAppState} />}
+      {/* Club-wide: not for someone limited to some groups. */}
+      {auth.can('students.import') && !auth.groups && <ImportCard />}
+      {auth.can('settings.data') && !auth.groups && <TransferCard />}
+      {isHost && auth.can('settings.backups') && <BackupsCard appState={appState} setAppState={setAppState} />}
     </>
   );
 }
@@ -139,6 +140,7 @@ function TransferCard() {
 }
 
 function BackupsCard({ appState, setAppState }) {
+  const canRestore = useAuth().can('settings.restore'); // replaces all the data
   const t = useT();
   const confirm = useConfirm();
   const toast = useToast();
@@ -176,7 +178,7 @@ function BackupsCard({ appState, setAppState }) {
           <Button icon={FolderOpen} onClick={() => window.fc.backup.openFolder()}>
             {t('settings.openBackups')}
           </Button>
-          <Button
+          {canRestore && <Button
             icon={Upload}
             variant="danger"
             onClick={async () => {
@@ -189,7 +191,7 @@ function BackupsCard({ appState, setAppState }) {
             }}
           >
             {t('settings.restore')}
-          </Button>
+          </Button>}
         </div>
         {backups?.length > 0 && (
           <div className="table-wrap" style={{ maxHeight: 260 }}>
@@ -273,6 +275,7 @@ const gdriveError = (t, code, detail) => {
 };
 
 function GoogleDriveBackups({ initial, onRestored }) {
+  const canRestore = useAuth().can('settings.restore'); // replaces all the data
   const t = useT();
   const toast = useToast();
   const confirm = useConfirm();
@@ -431,9 +434,11 @@ function GoogleDriveBackups({ initial, onRestored }) {
                         <td className="small">{f.name}</td>
                         <td className="small muted num">{(Number(f.size || 0) / 1024).toFixed(0)} KB</td>
                         <td className="right">
-                          <Button size="sm" icon={HardDriveDownload} disabled={!!busy} onClick={() => restore(f)}>
-                            {t('settings.restore')}
-                          </Button>
+                          {canRestore && (
+                            <Button size="sm" icon={HardDriveDownload} disabled={!!busy} onClick={() => restore(f)}>
+                              {t('settings.restore')}
+                            </Button>
+                          )}
                         </td>
                       </tr>
                     ))}

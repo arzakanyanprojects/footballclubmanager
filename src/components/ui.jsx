@@ -288,6 +288,13 @@ export function ToastProvider({ children }) {
     setTimeout(() => setItems((l) => l.filter((x) => x.id !== id)), tone === 'bad' ? 6000 : 3000);
   }, []);
   const api = useMemo(() => ({ success: (t) => push('good', t), error: (t) => push('bad', t) }), [push]);
+  // A change of this computer's settings that was refused (no permission, main computer not reachable…).
+  const t = useT();
+  useEffect(() => {
+    const show = (e) => push('bad', t(`error.${e.detail}`) === `error.${e.detail}` ? String(e.detail) : t(`error.${e.detail}`));
+    window.addEventListener('fc-refused', show);
+    return () => window.removeEventListener('fc-refused', show);
+  }, [push, t]);
   return (
     <ToastCtx.Provider value={api}>
       {children}

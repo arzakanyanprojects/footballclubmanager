@@ -17,10 +17,11 @@ import { useEditLock } from '../components/Locks';
 
 export default function StudentProfile({ id, nav }) {
   const studentForm = useStudentForm();
-  const canEdit = useCan('students');
-  const canPay = useCan('payments');
-  const canContracts = useCan('contracts');
-  const seesPayments = useCan('payments', 'view');
+  const auth = useAuth();
+  const can = auth.can;
+  const canEdit = can('students.edit');
+  const seesPayments = can('payments.view');
+  const seesStudent = can('students.view'); // the details, documents, notes and history
   const t = useT();
   const act = useAction();
   const confirm = useConfirm();
@@ -43,7 +44,7 @@ export default function StudentProfile({ id, nav }) {
   if (!data) return <Loading />;
   const s = data.student;
   const st = data.attendanceStats;
-  const debtButton = canPay ? (
+  const debtButton = can('payments.charge') ? (
     <Button icon={Plus} onClick={() => setModal('debt')}>
       {t('debt.button')}
     </Button>
@@ -65,15 +66,15 @@ export default function StudentProfile({ id, nav }) {
           {t('nav.students')}
         </Button>
         <div className="spacer" />
+        {can('students.delete') && (
+          <Button icon={Trash2} variant="danger" onClick={remove}>
+            {t('common.delete')}
+          </Button>
+        )}
         {canEdit && (
-          <>
-            <Button icon={Trash2} variant="danger" onClick={remove}>
-              {t('common.delete')}
-            </Button>
-            <Button icon={Pencil} onClick={() => studentForm.open(s)}>
-              {t('common.edit')}
-            </Button>
-          </>
+          <Button icon={Pencil} onClick={() => studentForm.open(s)}>
+            {t('common.edit')}
+          </Button>
         )}
       </div>
 
@@ -110,7 +111,7 @@ export default function StudentProfile({ id, nav }) {
                   <Phone size={15} />
                   {s.parent_phone || s.phone}
                   {s.parent_name ? ` (${s.parent_name})` : ''}
-                  {canPay && <MessageButton studentIds={[s.id]} kind={totals.overdue > 0 ? 'reminder' : 'free'} variant="ghost" />}
+                  {can('payments.remind') && <MessageButton studentIds={[s.id]} kind={totals.overdue > 0 ? 'reminder' : 'free'} variant="ghost" />}
                 </span>
               )}
               <span>
@@ -119,19 +120,21 @@ export default function StudentProfile({ id, nav }) {
               </span>
             </div>
           </div>
-          {(canPay || canEdit) && (
+          {(can('payments.take') || can('students.absence') || can('students.terminate')) && (
             <div className="stack" style={{ gap: 8 }}>
-              {canPay && (
+              {can('payments.take') && (
                 <Button variant="primary" icon={Plus} onClick={() => setModal('charge')}>
                   {t('payments.newCharge')}
                 </Button>
               )}
-              {canEdit && (
+              {(can('students.absence') || (can('students.terminate') && s.status === 'active')) && (
                 <div className="row nowrap" style={{ gap: 8 }}>
-                  <Button icon={FilePlus2} onClick={() => setModal('absence')}>
-                    {t('absence.button')}
-                  </Button>
-                  {s.status === 'active' && (
+                  {can('students.absence') && (
+                    <Button icon={FilePlus2} onClick={() => setModal('absence')}>
+                      {t('absence.button')}
+                    </Button>
+                  )}
+                  {s.status === 'active' && can('students.terminate') && (
                     <Button variant="danger" icon={UserX} onClick={() => setModal('terminate')}>
                       {t('terminate.button')}
                     </Button>
@@ -141,7 +144,7 @@ export default function StudentProfile({ id, nav }) {
             </div>
           )}
         </div>
-        <div className="balance-strip">
+        {seesPayments && <div className="balance-strip">
           <div>
             <div className="label">{t('students.overdue')}</div>
             <div className="value" style={{ color: totals.overdue ? 'var(--bad)' : undefined }}>
@@ -156,24 +159,24 @@ export default function StudentProfile({ id, nav }) {
             <div className="label">{t('students.monthlyFee')}</div>
             <div className="value">{money(s.monthly_fee, currency)}</div>
           </div>
-        </div>
+        </div>}
       </div>
 
       <Tabs
         value={tab}
         onChange={setTab}
         tabs={[
-          { id: 'payments', label: t('nav.payments'), icon: Wallet, count: data.charges.filter((c) => c.status === 'unpaid').length || null },
+          seesPayments && { id: 'payments', label: t('nav.payments'), icon: Wallet, count: data.charges.filter((c) => c.status === 'unpaid').length || null },
           { id: 'info', label: t('students.details'), icon: IdCard },
-          { id: 'attendance', label: t('nav.attendance'), icon: CalendarCheck },
-          { id: 'contracts', label: t('files.tab'), icon: FolderOpen, count: data.contracts.length + (data.files || []).length || null },
-          { id: 'related', label: t('related.tab'), icon: Link2, count: (data.related || []).length || null },
-          { id: 'history', label: t('history.tab'), icon: History },
-          { id: 'notes', label: t('notes.tab'), icon: StickyNote, count: (data.notes || []).length || null },
-        ]}
+          can('attendance.view') && { id: 'attendance', label: t('nav.attendance'), icon: CalendarCheck },
+          (seesStudent || can('contracts.view')) && { id: 'contracts', label: t('files.tab'), icon: FolderOpen, count: data.contracts.length + (data.files || []).length || null },
+          seesStudent && { id: 'related', label: t('related.tab'), icon: Link2, count: (data.related || []).length || null },
+          seesStudent && { id: 'history', label: t('history.tab'), icon: History },
+          seesStudent && { id: 'notes', label: t('notes.tab'), icon: StickyNote, count: (data.notes || []).length || null },
+        ].filter(Boolean)}
       />
 
-      {tab === 'payments' &&
+      {tab === 'payments' && seesPayments &&
         (data.charges.length ? (
           <ChargesTable rows={data.charges} student={s} tools={debtButton} />
         ) : (
@@ -185,7 +188,7 @@ export default function StudentProfile({ id, nav }) {
           </>
         ))}
 
-      {tab === 'attendance' && (
+      {tab === 'attendance' && st && (
         <div className="stack" style={{ gap: 16 }}>
           <div className="stats" style={{ marginBottom: 0 }}>
             {['present', 'late', 'absent', 'excused'].map((k) => (
@@ -223,13 +226,13 @@ export default function StudentProfile({ id, nav }) {
 
       {tab === 'contracts' && (
         <>
-          <StudentFiles student={s} files={data.files || []} canEdit={canEdit} />
+          {seesStudent && <StudentFiles student={s} files={data.files || []} />}
           <div className="toolbar" style={{ marginTop: 18 }}>
             <h3 className="row" style={{ gap: 8, fontSize: 15 }}>
               <FileSignature size={17} /> {t('nav.contracts')}
             </h3>
             <div className="grow" />
-            {canContracts && (
+            {can('contracts.edit') && (
               <Button variant="primary" icon={FileSignature} onClick={() => setModal('contract')}>
                 {t('contracts.new')}
               </Button>
@@ -252,7 +255,7 @@ export default function StudentProfile({ id, nav }) {
                 </thead>
                 <tbody>
                   {data.contracts.map((c) => (
-                    <tr key={c.id} className="click" onClick={() => setModal({ contract: c.id })}>
+                    <tr key={c.id} className={can('contracts.view') ? 'click' : ''} onClick={() => can('contracts.view') && setModal({ contract: c.id })}>
                       <td className="strong">{c.number}</td>
                       <td>{c.title}</td>
                       <td className="nowrap">
@@ -320,8 +323,8 @@ export default function StudentProfile({ id, nav }) {
           <FormSection icon={Wallet} title={t('form.training')}>
             <div className="grid-3">
               <Ro label={t('students.group')} value={s.group_name} />
-              {canPay && <Ro label={t('students.monthlyFee')} value={money(s.monthly_fee, currency)} />}
-              {canPay && s.first_fee != null && <Ro label={t('students.firstFee')} value={money(s.first_fee, currency)} />}
+              {seesPayments && <Ro label={t('students.monthlyFee')} value={money(s.monthly_fee, currency)} />}
+              {seesPayments && s.first_fee != null && <Ro label={t('students.firstFee')} value={money(s.first_fee, currency)} />}
               <Ro label={t('students.joinDate')} value={fmtDate(s.join_date)} />
               <Ro label={t('students.service')} value={s.service} />
               <Ro label={t('students.category')} value={t(`category.${s.category || 'none'}`)} />
@@ -355,10 +358,11 @@ function NotesTab({ student, notes }) {
   const act = useAction();
   const confirm = useConfirm();
   const auth = useAuth();
-  const canEdit = useCan('students');
+  const canAdd = auth.can('students.notes');
   const [adding, setAdding] = useState(false);
   const [text, setText] = useState('');
-  const mayDelete = (n) => canEdit && (!auth.required || !!auth.user?.is_admin || (n.user_id && n.user_id === auth.user?.id));
+  // Anyone's note with «students.notesDelete»; one's own with «students.notes».
+  const mayDelete = (n) => auth.can('students.notesDelete') || (canAdd && (!auth.required || (n.user_id && n.user_id === auth.user?.id)));
   const cancel = () => {
     setAdding(false);
     setText('');
@@ -376,7 +380,7 @@ function NotesTab({ student, notes }) {
         <StickyNote size={17} />
         <h3>{t('notes.tab')}</h3>
         <div className="spacer" />
-        {canEdit && !adding && (
+        {canAdd && !adding && (
           <Button variant="primary" size="sm" icon={Plus} onClick={() => setAdding(true)}>
             {t('notes.add')}
           </Button>
@@ -475,8 +479,11 @@ function Ro({ label, value, className = '' }) {
 }
 
 // Documents uploaded for the student (medical certificate and others).
-function StudentFiles({ student, files, canEdit }) {
+function StudentFiles({ student, files }) {
   const t = useT();
+  const auth = useAuth();
+  const canUpload = auth.can('students.files');
+  const canPrint = auth.can('students.print'); // print and download
   const act = useAction();
   const confirm = useConfirm();
   const pickRef = useRef(null);
@@ -491,7 +498,7 @@ function StudentFiles({ student, files, canEdit }) {
   const download = (f) =>
     act(async () => {
       const r = await rpc('files.get', { id: f.id });
-      const res = await window.fc.saveBinary({ defaultName: r.fileName, data: r.data, filters: [] });
+      const res = await window.fc.saveBinary({ defaultName: r.fileName, data: r.data, filters: [], perm: 'students.print' });
       if (!res.ok && res.error !== 'CANCELLED') throw Object.assign(new Error(res.error), { code: res.error });
     });
   const remove = async (f) => {
@@ -506,7 +513,7 @@ function StudentFiles({ student, files, canEdit }) {
         <h3>{t('files.title')}</h3>
         <div className="spacer" />
         <Badge tone={student.medical_doc ? 'good' : 'warn'}>{t(student.medical_doc ? 'medicalDoc.provided' : 'medicalDoc.missing')}</Badge>
-        {canEdit && (
+        {canUpload && (
           <>
             <Button size="sm" icon={Upload} onClick={() => upload('medical')}>
               {t('files.uploadMedical')}
@@ -553,9 +560,9 @@ function StudentFiles({ student, files, canEdit }) {
                     <Button size="sm" icon={ExternalLink} onClick={() => open(f)}>
                       {t('files.open')}
                     </Button>
-                    <Button size="sm" icon={Printer} onClick={() => print(f)} title={t('absence.print')} />
-                    <Button size="sm" icon={Download} onClick={() => download(f)} title={t('files.save')} />
-                    {canEdit && <Button size="sm" variant="ghost" icon={Trash2} onClick={() => remove(f)} title={t('common.delete')} />}
+                    {canPrint && <Button size="sm" icon={Printer} onClick={() => print(f)} title={t('absence.print')} />}
+                    {canPrint && <Button size="sm" icon={Download} onClick={() => download(f)} title={t('files.save')} />}
+                    {auth.can('students.filesDelete') && <Button size="sm" variant="ghost" icon={Trash2} onClick={() => remove(f)} title={t('common.delete')} />}
                   </div>
                 </td>
               </tr>

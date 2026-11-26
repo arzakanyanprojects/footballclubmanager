@@ -16,16 +16,20 @@ import { Badge, BrandLogo, Button, Field, Loading, Segmented, Tabs, useAction, u
 export default function Settings({ route, nav, appState, setAppState }) {
   const t = useT();
   const auth = useAuth();
-  // Club, network and activity need the Settings right; Users is for admins (or anyone while sign-in is off).
+  // Each tab has its own tick (Settings → Users); Users is for admins (or anyone while sign-in is off).
   const tabs = [
-    auth.can('settings', 'view') && { id: 'club', label: t('settings.club'), icon: Building2 },
+    auth.can('settings.club') && { id: 'club', label: t('settings.club'), icon: Building2 },
     { id: 'pc', label: t('settings.thisPc'), icon: Monitor },
-    auth.can('payments') && { id: 'hdm', label: t('hdm.tab'), icon: Receipt },
-    auth.can('settings', 'view') && { id: 'network', label: t('settings.network'), icon: Network },
-    auth.can('settings', 'view') && { id: 'data', label: t('data.tab'), icon: Database },
-    auth.can('settings', 'view') && { id: 'notify', label: t('notify.tab'), icon: BellRing },
+    auth.can('settings.hdm') && { id: 'hdm', label: t('hdm.tab'), icon: Receipt },
+    auth.can('settings.network') && { id: 'network', label: t('settings.network'), icon: Network },
+    ((!auth.groups && auth.canAny('students.import', 'settings.data')) || (appState.config.mode === 'host' && auth.can('settings.backups'))) && {
+      id: 'data',
+      label: t('data.tab'),
+      icon: Database,
+    },
+    auth.can('settings.notify') && { id: 'notify', label: t('notify.tab'), icon: BellRing },
     (!auth.required || auth.user?.is_admin) && { id: 'users', label: t('users.tab'), icon: UserCog },
-    auth.can('settings', 'view') && { id: 'activity', label: t('settings.activity'), icon: History },
+    auth.can('settings.log') && { id: 'activity', label: t('settings.activity'), icon: History },
   ].filter(Boolean);
   const [picked, setTab] = useState(route.tab || tabs[0].id);
   const tab = tabs.some((x) => x.id === picked) ? picked : tabs[0].id;
@@ -154,7 +158,7 @@ function ClubSettings() {
 function ContractNumbering() {
   const t = useT();
   const act = useAction();
-  const canEdit = useAuth().can('settings', 'edit');
+  const canEdit = useAuth().can('settings.club');
   const { data: next, reload } = useRpc('students.contractNo.get');
   const [f, setF] = useState(null);
   useEffect(() => {
@@ -277,7 +281,7 @@ function PcSettings({ appState, setAppState }) {
         <UpdateSettings />
       </div>
     </div>
-    {auth.can('payments') && <div className="card settings-section">
+    {auth.can('settings.hdm') && <div className="card settings-section">
       <div className="card-head">
         <Printer size={17} />
         <h3>{t('thermal.section')}</h3>

@@ -169,7 +169,7 @@ export const useMessenger = () => useContext(Ctx);
 
 export function MessengerProvider({ children }) {
   const t = useT();
-  const canPay = useCan('payments', 'view');
+  const canPay = useCan('payments.view');
   const [modal, setModal] = useState(null); // { studentIds, kind }
   const [offer, setOffer] = useState(null); // { studentId, name } after a payment
   const timer = useRef(null);
@@ -243,7 +243,7 @@ export function MessengerTemplates({ bare = false }) {
   const lang = useLang();
   const club = useClub();
   const toast = useToast();
-  const canEdit = useCan('settings');
+  const canEdit = useCan('settings.notify');
   const [f, setF] = useState(() => Object.fromEntries(MESSAGE_KINDS.map((k) => [k, templateOf(club, lang, k)])));
   const [dirty, setDirty] = useState(false);
   const save = async () => {

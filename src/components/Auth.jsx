@@ -1,21 +1,49 @@
-import { createContext, useCallback, useContext, useEffect, useState } from 'react';
-import { Shield, LogIn, UserPlus, Pencil, Trash2, KeyRound, ShieldCheck, Lock } from 'lucide-react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { Shield, LogIn, UserPlus, Pencil, Trash2, KeyRound, ShieldCheck, Lock, ChevronDown, ChevronRight, Plus, Undo2, Users, Copy } from 'lucide-react';
 import { useT } from '../i18n';
-import { rpc, fmtDateTime } from '../lib';
+import { rpc, fmtDateTime, DataVersion } from '../lib';
 import { Badge, BrandLogo, Button, Field, Loading, Modal, Segmented, useAction, useClub, useConfirm, useToast } from './ui';
+import CATALOG from '../../electron/permissions.json';
 
-// Menus a right can be given for (same list as electron/auth.js).
-export const SECTIONS = ['students', 'payments', 'attendance', 'schedule', 'groups', 'contracts', 'reports', 'settings'];
-// Menus that have an Excel button («Excel» tick in the user's rights).
-export const EXCEL_SECTIONS = ['students', 'attendance', 'schedule', 'groups', 'reports', 'settings'];
-const LEVEL = { none: 0, view: 1, edit: 2 };
+// Every permission, by menu (the same list as electron/auth.js): «students.view», «payments.delete»…
+export const PERM_SECTIONS = CATALOG.sections.map((s) => ({ id: s.id, perms: s.perms.map((p) => `${s.id}.${p}`) }));
+export const ALL_PERMS = PERM_SECTIONS.flatMap((s) => s.perms);
+const VIEW_PERMS = new Set(CATALOG.view);
+// What a tick needs first: reports and settings ticks stand on their own; in the other menus, the menu's «view».
+export const requiresOf = (perm) => {
+  if (CATALOG.requires[perm]) return CATALOG.requires[perm];
+  const [s, p] = perm.split('.');
+  return s === 'reports' || s === 'settings' || p === 'view' ? [] : [`${s}.view`];
+};
+// Without the ticks whose requirement is missing.
+export function closePerms(set) {
+  const out = new Set(set);
+  for (let changed = true; changed; ) {
+    changed = false;
+    for (const p of [...out])
+      if (!requiresOf(p).every((r) => out.has(r))) {
+        out.delete(p);
+        changed = true;
+      }
+  }
+  return out;
+}
+// A tick and everything it needs.
+const withRequirements = (set, perm) => {
+  const out = new Set(set);
+  const add = (p) => {
+    if (out.has(p)) return;
+    out.add(p);
+    requiresOf(p).forEach(add);
+  };
+  add(perm);
+  return out;
+};
 
-const AuthCtx = createContext({ required: false, user: null, can: () => true });
+const AuthCtx = createContext({ required: false, user: null, can: () => true, canAny: () => true, groups: null });
 export const useAuth = () => useContext(AuthCtx);
-// True when the signed-in user may do this (always true while sign-in is off).
-export const useCan = (section, level = 'edit') => useAuth().can(section, level);
-// True when the signed-in user may export this menu's lists to Excel (Users → the «Excel» tick).
-export const useCanExcel = (section) => useAuth().canExcel(section);
+// True when the signed-in user has this tick (always true while sign-in is off), e.g. useCan('payments.delete').
+export const useCan = (perm) => useAuth().can(perm);
 
 // Shows the sign-in screen when the club has users and this PC isn't signed in.
 export function AuthGate({ children }) {
@@ -47,18 +75,29 @@ export function AuthGate({ children }) {
     return () => window.removeEventListener('fc-auth-lost', lost);
   }, [refresh]);
 
+  // Data changed on any computer (an admin may have changed this user's permissions): read them again.
+  const version = useContext(DataVersion);
+  useEffect(() => {
+    if (!version) return;
+    rpc('auth.status')
+      .then((s) => setState((prev) => (JSON.stringify(prev) === JSON.stringify(s) ? prev : s)))
+      .catch(() => {});
+  }, [version]);
+
   if (!state) return <Loading />;
   if (state.required && !state.user) return <LoginScreen onDone={refresh} />;
 
   const user = state.user;
+  const perms = new Set(user?.perms || []);
+  const can = (perm) => !state.required || !!user?.is_admin || perms.has(perm);
   const value = {
     required: state.required,
     user,
     refresh,
-    can: (section, level = 'edit') => !state.required || !!user?.is_admin || LEVEL[user?.rights?.[section]] >= LEVEL[level],
-    // May export this menu's lists to Excel: sees the menu and its «Excel» tick is on.
-    canExcel: (section) =>
-      !state.required || !!user?.is_admin || (LEVEL[user?.rights?.[section]] >= LEVEL.view && user?.rights?.excel?.[section] !== false),
+    can,
+    canAny: (...list) => list.some(can),
+    // The groups this user works with (null: all).
+    groups: state.required && !user?.is_admin ? user?.groups ?? null : null,
     signIn: async (token, remember) => {
       await window.fc.setAuthToken(token, remember);
       await refresh();
@@ -132,12 +171,23 @@ export function UsersSettings() {
   const act = useAction();
   const confirm = useConfirm();
   const [users, setUsers] = useState(null);
+  const [roles, setRoles] = useState([]);
+  const [groups, setGroups] = useState([]);
   const [editing, setEditing] = useState(null);
+  const [editingRole, setEditingRole] = useState(null);
 
-  const load = () => rpc('users.list').then(setUsers).catch(() => setUsers([]));
+  const load = () => {
+    rpc('users.list').then(setUsers).catch(() => setUsers([]));
+    if (auth.required) {
+      rpc('roles.list').then(setRoles).catch(() => setRoles([]));
+      rpc('groups.list').then(setGroups).catch(() => setGroups([]));
+    }
+  };
   useEffect(() => {
     load();
-  }, []);
+  }, [auth.required]);
+
+  const groupName = (id) => groups.find((g) => g.id === id)?.name || `#${id}`;
 
   if (!users) return <Loading />;
   return (
@@ -179,41 +229,111 @@ export function UsersSettings() {
                 </tr>
               </thead>
               <tbody>
-                {users.map((u) => (
-                  <tr key={u.id}>
-                    <td className="strong">
-                      {u.full_name || '—'} {!u.active && <Badge>{t('users.disabled')}</Badge>}
+                {users.map((u) => {
+                  const own = (u.rights?.grant?.length || 0) + (u.rights?.deny?.length || 0);
+                  return (
+                    <tr key={u.id}>
+                      <td className="strong">
+                        {u.full_name || '—'} {!u.active && <Badge>{t('users.disabled')}</Badge>}
+                      </td>
+                      <td>{u.username}</td>
+                      <td className="small">
+                        {u.is_admin ? (
+                          <Badge tone="good">{t('users.admin')}</Badge>
+                        ) : (
+                          <div className="stack" style={{ gap: 2 }}>
+                            <div>
+                              {u.role_name ? <Badge tone="info">{u.role_name}</Badge> : <span className="muted">{t('roles.none')}</span>}
+                              {u.role_name && own > 0 && <span className="muted"> · {t('roles.ownChanges', { n: own })}</span>}
+                              <span className="muted"> · {t('perm.count', { n: u.perms.length, total: ALL_PERMS.length })}</span>
+                            </div>
+                            {u.groups && (
+                              <div className="muted">
+                                {t('users.groupsOnly')}: {u.groups.map(groupName).join(', ') || '—'}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </td>
+                      <td className="small muted nowrap">{u.last_login_at ? fmtDateTime(u.last_login_at) : '—'}</td>
+                      <td className="actions">
+                        <div className="row" style={{ gap: 4, justifyContent: 'flex-end' }}>
+                          <Button size="sm" icon={Pencil} onClick={() => setEditing(u)}>
+                            {t('common.edit')}
+                          </Button>
+                          {u.id !== auth.user?.id && (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              icon={Trash2}
+                              onClick={async () => {
+                                if (!(await confirm({ title: t('users.deleteTitle'), text: t('users.deleteText', { name: u.full_name || u.username }), confirmLabel: t('common.delete'), danger: true }))) return;
+                                if (await act(() => rpc('users.delete', { id: u.id }), t('common.saved'))) load();
+                              }}
+                            />
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+      {auth.required && (
+        <div className="card settings-section">
+          <div className="card-head">
+            <Users size={17} />
+            <h3>{t('roles.title')}</h3>
+            <div className="spacer" />
+            <Button size="sm" icon={Plus} onClick={() => setEditingRole({ name: '', perms: [] })}>
+              {t('roles.add')}
+            </Button>
+          </div>
+          <div className="card-pad" style={{ paddingBottom: 0 }}>
+            <div className="small muted">{t('roles.text')}</div>
+          </div>
+          <div className="table-wrap" style={{ border: 0, borderRadius: 0 }}>
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>{t('roles.name')}</th>
+                  <th>{t('roles.perms')}</th>
+                  <th className="num">{t('roles.users')}</th>
+                  <th className="actions" />
+                </tr>
+              </thead>
+              <tbody>
+                {roles.length === 0 && (
+                  <tr>
+                    <td colSpan={4} className="muted small">
+                      {t('roles.empty')}
                     </td>
-                    <td>{u.username}</td>
-                    <td className="small">
-                      {u.is_admin ? (
-                        <Badge tone="good">{t('users.admin')}</Badge>
-                      ) : (
-                        SECTIONS.filter((s) => u.rights[s] !== 'none')
-                          .map((s) => {
-                            const notes = [u.rights[s] === 'view' && t('users.viewShort'), EXCEL_SECTIONS.includes(s) && u.rights.excel?.[s] === false && t('users.noExcelShort')].filter(Boolean);
-                            return `${t(`users.section_${s}`)}${notes.length ? ` (${notes.join(', ')})` : ''}`;
-                          })
-                          .join(', ') || <span className="muted">—</span>
-                      )}
-                    </td>
-                    <td className="small muted nowrap">{u.last_login_at ? fmtDateTime(u.last_login_at) : '—'}</td>
+                  </tr>
+                )}
+                {roles.map((r) => (
+                  <tr key={r.id}>
+                    <td className="strong">{r.name}</td>
+                    <td className="small muted">{sectionsSummary(t, new Set(r.perms))}</td>
+                    <td className="num">{r.user_count}</td>
                     <td className="actions">
                       <div className="row" style={{ gap: 4, justifyContent: 'flex-end' }}>
-                        <Button size="sm" icon={Pencil} onClick={() => setEditing(u)}>
+                        <Button size="sm" icon={Pencil} onClick={() => setEditingRole(r)}>
                           {t('common.edit')}
                         </Button>
-                        {u.id !== auth.user?.id && (
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            icon={Trash2}
-                            onClick={async () => {
-                              if (!(await confirm({ title: t('users.deleteTitle'), text: t('users.deleteText', { name: u.full_name || u.username }), confirmLabel: t('common.delete'), danger: true }))) return;
-                              if (await act(() => rpc('users.delete', { id: u.id }), t('common.saved'))) load();
-                            }}
-                          />
-                        )}
+                        <Button size="sm" variant="ghost" icon={Copy} title={t('roles.copy')} onClick={() => setEditingRole({ name: `${r.name} 2`, perms: r.perms })} />
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          icon={Trash2}
+                          title={t('common.delete')}
+                          onClick={async () => {
+                            if (!(await confirm({ title: t('roles.deleteTitle'), text: t('roles.deleteText', { name: r.name, n: r.user_count }), confirmLabel: t('common.delete'), danger: true }))) return;
+                            if (await act(() => rpc('roles.delete', { id: r.id }), t('common.deleted'))) load();
+                          }}
+                        />
                       </div>
                     </td>
                   </tr>
@@ -226,6 +346,8 @@ export function UsersSettings() {
       {editing && (
         <UserModal
           user={editing}
+          roles={roles}
+          groups={groups}
           onClose={() => setEditing(null)}
           onSaved={async (r) => {
             setEditing(null);
@@ -235,13 +357,29 @@ export function UsersSettings() {
           }}
         />
       )}
+      {editingRole && (
+        <RoleModal
+          role={editingRole}
+          onClose={() => setEditingRole(null)}
+          onSaved={() => {
+            setEditingRole(null);
+            load();
+          }}
+        />
+      )}
     </>
   );
 }
 
-const NO_RIGHTS = Object.fromEntries(SECTIONS.map((s) => [s, 'none']));
+// «Աշակերտներ 5/14 · Վճարումներ 3/15…» — the menus a set of ticks opens, with how many ticks in each.
+function sectionsSummary(t, set) {
+  const parts = PERM_SECTIONS.map((s) => [s, s.perms.filter((p) => set.has(p)).length])
+    .filter(([, n]) => n > 0)
+    .map(([s, n]) => `${t(`users.section_${s.id}`)} ${n}/${s.perms.length}`);
+  return parts.join(' · ') || '—';
+}
 
-function UserModal({ user, onClose, onSaved }) {
+function UserModal({ user, roles, groups, onClose, onSaved }) {
   const t = useT();
   const act = useAction();
   const isNew = !user.id;
@@ -252,14 +390,31 @@ function UserModal({ user, onClose, onSaved }) {
     is_admin: user.first ? true : !!user.is_admin,
     active: user.active !== false,
     notify_actions: !!user.notify_actions,
-    rights: { ...NO_RIGHTS, ...(user.is_admin ? {} : user.rights || {}), excel: { ...(user.is_admin ? {} : user.rights?.excel || {}) } },
+    role_id: user.is_admin ? null : user.role_id || null,
   });
+  const [perms, setPerms] = useState(() => new Set(user.is_admin ? [] : user.perms || []));
+  const [scope, setScope] = useState(() => (user.groups ? new Set(user.groups) : null)); // null: all groups
   const set = (k) => (e) => setF({ ...f, [k]: e?.target ? (e.target.type === 'checkbox' ? e.target.checked : e.target.value) : e });
-  const setRight = (s, v) => setF({ ...f, rights: { ...f.rights, [s]: v } });
-  const setExcel = (s, on) => setF({ ...f, rights: { ...f.rights, excel: { ...f.rights.excel, [s]: on } } });
+  const role = roles.find((r) => r.id === Number(f.role_id)) || null;
+  const base = useMemo(() => (role ? new Set(role.perms) : null), [role]);
+
+  const pickRole = (id) => {
+    const r = roles.find((x) => x.id === Number(id)) || null;
+    setF({ ...f, role_id: r ? r.id : null });
+    if (r) setPerms(new Set(r.perms)); // a new role: its ticks (the user's own changes start again)
+  };
 
   const save = async () => {
-    const r = await act(() => rpc('users.save', { id: user.id, ...f }), t('common.saved'));
+    const r = await act(
+      () =>
+        rpc('users.save', {
+          id: user.id,
+          ...f,
+          perms: [...perms],
+          groups: scope ? [...scope] : null,
+        }),
+      t('common.saved')
+    );
     if (r) onSaved(r);
   };
 
@@ -267,11 +422,11 @@ function UserModal({ user, onClose, onSaved }) {
     <Modal
       title={user.first ? t('users.createAdmin') : isNew ? t('users.add') : f.full_name || f.username}
       onClose={onClose}
-      width={720}
+      width={f.is_admin ? 640 : 920}
       footer={
         <>
           <Button onClick={onClose}>{t('common.cancel')}</Button>
-          <Button variant="primary" onClick={save} disabled={!f.username.trim() || (isNew && f.password.length < 4)}>
+          <Button variant="primary" onClick={save} disabled={!f.username.trim() || (isNew && f.password.length < 4) || (scope && scope.size === 0)}>
             {t('common.save')}
           </Button>
         </>
@@ -279,7 +434,7 @@ function UserModal({ user, onClose, onSaved }) {
     >
       <div className="stack">
         {user.first && <div className="small muted">{t('users.firstHint')}</div>}
-        <div className="grid-2">
+        <div className="grid-3">
           <Field label={t('users.name')}>
             <input className="input" autoFocus value={f.full_name} onChange={set('full_name')} />
           </Field>
@@ -311,34 +466,179 @@ function UserModal({ user, onClose, onSaved }) {
         {f.is_admin ? (
           <div className="small muted">{t('users.adminHint')}</div>
         ) : (
-          <div className="rights">
-            <div className="small muted" style={{ marginBottom: 4 }}>{t('users.rightsHint')}</div>
-            {SECTIONS.map((s) => (
-              <div key={s} className="rights-row">
-                <span>{t(`users.section_${s}`)}</span>
+          <>
+            <div className="grid-2">
+              <Field label={t('roles.role')} hint={t('roles.roleHint')}>
+                <select className="select" value={f.role_id || ''} onChange={(e) => pickRole(e.target.value)}>
+                  <option value="">{t('roles.none')}</option>
+                  {roles.map((r) => (
+                    <option key={r.id} value={r.id}>
+                      {r.name}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label={t('users.groups')} hint={t('users.groupsHint')}>
                 <Segmented
-                  value={f.rights[s]}
-                  onChange={(v) => setRight(s, v)}
-                  options={['none', 'view', 'edit'].map((v) => ({ value: v, label: t(`users.level_${v}`) }))}
+                  value={scope ? 'some' : 'all'}
+                  onChange={(v) => setScope(v === 'all' ? null : new Set())}
+                  options={[
+                    { value: 'all', label: t('users.groupsAll') },
+                    { value: 'some', label: t('users.groupsSome') },
+                  ]}
                 />
-                <label
-                    className={`check rights-excel ${EXCEL_SECTIONS.includes(s) ? '' : 'invisible'}`}
-                    title={t('users.excelHint')}
-                  >
+              </Field>
+            </div>
+            {scope && (
+              <div className="perm-groups">
+                {groups.filter((g) => !g.archived || scope.has(g.id)).map((g) => (
+                  <label key={g.id} className={`check perm-chip ${scope.has(g.id) ? 'on' : ''}`}>
                     <input
                       type="checkbox"
-                      disabled={f.rights[s] === 'none'}
-                      checked={f.rights[s] !== 'none' && f.rights.excel?.[s] !== false}
-                      onChange={(e) => setExcel(s, e.target.checked)}
+                      checked={scope.has(g.id)}
+                      onChange={(e) => {
+                        const n = new Set(scope);
+                        e.target.checked ? n.add(g.id) : n.delete(g.id);
+                        setScope(n);
+                      }}
                     />
-                    Excel
+                    {g.name}
                   </label>
+                ))}
+                {scope.size === 0 && <div className="small" style={{ color: 'var(--bad)' }}>{t('users.groupsPick')}</div>}
               </div>
-            ))}
-          </div>
+            )}
+            <PermsEditor value={perms} onChange={setPerms} base={base} />
+          </>
         )}
       </div>
     </Modal>
+  );
+}
+
+function RoleModal({ role, onClose, onSaved }) {
+  const t = useT();
+  const act = useAction();
+  const [name, setName] = useState(role.name || '');
+  const [perms, setPerms] = useState(() => new Set(role.perms || []));
+  const save = async () => {
+    if (await act(() => rpc('roles.save', { id: role.id, name, perms: [...perms] }), t('common.saved'))) onSaved();
+  };
+  return (
+    <Modal
+      title={role.id ? role.name : t('roles.add')}
+      onClose={onClose}
+      width={920}
+      footer={
+        <>
+          <Button onClick={onClose}>{t('common.cancel')}</Button>
+          <Button variant="primary" onClick={save} disabled={!name.trim()}>
+            {t('common.save')}
+          </Button>
+        </>
+      }
+    >
+      <div className="stack">
+        <div className="grid-2">
+          <Field label={t('roles.name')}>
+            <input className="input" autoFocus value={name} onChange={(e) => setName(e.target.value)} />
+          </Field>
+          {role.id > 0 && role.user_count > 0 && <div className="small muted" style={{ alignSelf: 'center' }}>{t('roles.usersHint', { n: role.user_count })}</div>}
+        </div>
+        <PermsEditor value={perms} onChange={setPerms} />
+      </div>
+    </Modal>
+  );
+}
+
+// The ticks, menu by menu: each menu opens to its ticks, with «All / View only / None» and how many are on.
+// base: the role's ticks — the user's own changes are marked, with «Back to the role».
+export function PermsEditor({ value, onChange, base }) {
+  const t = useT();
+  const [open, setOpen] = useState(() => new Set());
+  const toggleOpen = (id) =>
+    setOpen((o) => {
+      const n = new Set(o);
+      n.has(id) ? n.delete(id) : n.add(id);
+      return n;
+    });
+  const tick = (perm, on) => onChange(on ? withRequirements(value, perm) : closePerms(new Set([...value].filter((p) => p !== perm))));
+  const setSection = (sec, mode) => {
+    const n = new Set([...value].filter((p) => !sec.perms.includes(p)));
+    if (mode === 'all') sec.perms.forEach((p) => n.add(p));
+    if (mode === 'view') sec.perms.filter((p) => VIEW_PERMS.has(p)).forEach((p) => n.add(p));
+    onChange(closePerms(n));
+  };
+  const changed = base ? ALL_PERMS.filter((p) => value.has(p) !== base.has(p)) : [];
+  const label = (p) => t(`perm.${p}`);
+  const hint = (p) => {
+    const h = t(`perm.${p}.hint`);
+    return h === `perm.${p}.hint` ? '' : h;
+  };
+
+  return (
+    <div className="perms">
+      <div className="perms-head">
+        <span className="small muted">{t('perm.title')}</span>
+        <div className="spacer" />
+        {base && changed.length > 0 && (
+          <>
+            <span className="small perm-changed-note">{t('roles.ownChanges', { n: changed.length })}</span>
+            <Button size="sm" variant="ghost" icon={Undo2} onClick={() => onChange(new Set(base))}>
+              {t('roles.backToRole')}
+            </Button>
+          </>
+        )}
+      </div>
+      {PERM_SECTIONS.map((sec) => {
+        const on = sec.perms.filter((p) => value.has(p)).length;
+        const isOpen = open.has(sec.id);
+        const secChanged = changed.some((p) => sec.perms.includes(p));
+        return (
+          <div key={sec.id} className={`perm-section ${isOpen ? 'open' : ''}`}>
+            <div className="perm-section-head">
+              <button type="button" className="perm-section-title" onClick={() => toggleOpen(sec.id)}>
+                {isOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                <span className="strong">{t(`users.section_${sec.id}`)}</span>
+                <span className={`perm-count ${on === 0 ? 'none' : on === sec.perms.length ? 'all' : ''}`}>
+                  {on}/{sec.perms.length}
+                </span>
+                {secChanged && <span className="perm-dot" title={t('roles.changedHere')} />}
+              </button>
+              <Segmented
+                value={on === 0 ? 'none' : on === sec.perms.length ? 'all' : sec.perms.every((p) => value.has(p) === VIEW_PERMS.has(p)) ? 'view' : null}
+                onChange={(v) => setSection(sec, v)}
+                options={[
+                  { value: 'none', label: t('perm.none') },
+                  { value: 'view', label: t('perm.viewOnly') },
+                  { value: 'all', label: t('perm.all') },
+                ]}
+              />
+            </div>
+            {isOpen && (
+              <div className="perm-list">
+                {sec.perms.map((p) => {
+                  const needs = requiresOf(p).filter((r) => !value.has(r));
+                  const diff = base && value.has(p) !== base.has(p);
+                  return (
+                    <label key={p} className={`perm-item ${needs.length ? 'blocked' : ''} ${diff ? 'changed' : ''}`} title={needs.length ? t('perm.needs', { what: needs.map(label).join(', ') }) : ''}>
+                      <input type="checkbox" checked={value.has(p)} onChange={(e) => tick(p, e.target.checked)} />
+                      <span>
+                        <span className="perm-label">
+                          {label(p)}
+                          {diff && <span className="perm-dot" title={value.has(p) ? t('roles.addedHere') : t('roles.removedHere')} />}
+                        </span>
+                        {hint(p) && <span className="perm-hint">{hint(p)}</span>}
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
   );
 }
 

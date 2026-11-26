@@ -25,6 +25,8 @@ const DEFAULT_TEMPLATES = {
 
 // Used when a payment is recorded without a method (the UI always sends one).
 const DEFAULT_METHOD = 'easypay';
+// Only the methods the app knows (the screens offer these); anything else is taken as the default.
+const methodOf = (m) => (['card', 'easypay', 'transfer'].includes(String(m || '')) ? String(m) : DEFAULT_METHOD);
 
 const pad = (n) => String(n).padStart(2, '0');
 const today = () => {
@@ -76,6 +78,17 @@ function createService(db, { onWrite, getNotify } = {}) {
   const run = (sql, p) => stmt(sql).run(bind(sql, p));
 
   const settings = () => Object.fromEntries(all('SELECT key, value FROM settings').map((r) => [r.key, r.value]));
+
+  // Permissions (electron/auth.js). may(ctx, 'payments.fee'): the signed-in user has that tick (everyone,
+  // while sign-in is off). Queries keep to the groups a limited user works with through in_scope(group_id)
+  // (scopeNow: those group ids during a call; null = all groups).
+  const auth = createAuth({ all, one, run, AppError, log: (...a) => log(...a) });
+  const may = (ctx, perm) => !ctx?.account || auth.has(ctx.account, perm);
+  let scopeNow = null;
+  db.function('in_scope', (g) => (scopeNow === null || (g != null && scopeNow.has(Number(g))) ? 1 : 0));
+  db.function('scope_all', () => (scopeNow === null ? 1 : 0));
+  // A charges row's student is in scope (for queries on charges without the students table).
+  const IN_SCOPE_C = 'in_scope((SELECT group_id FROM students WHERE id = charges.student_id))';
   // studentId / meta: the student the action is about and its details (for the student's history).
   const log = (ctx, action, details, studentId = null, meta = null) => {
     run('INSERT INTO activity_log (user, action, details, student_id, meta) VALUES (:user, :action, :details, :studentId, :meta)', {
@@ -782,33 +795,40 @@ function createService(db, { onWrite, getNotify } = {}) {
     },
 
     // ---------------------------------------------------------------- dashboard
-    'dashboard.summary': () => {
+    'dashboard.summary': (_p, ctx) => {
       const t = today();
       const period = currentPeriod();
       const months = [];
       for (let i = 5; i >= 0; i--) months.push(addMonths(period, -i));
       const collectedRows = all(
         `SELECT substr(paid_at, 1, 7) AS period, SUM(amount) AS total
-         FROM charges WHERE status = 'paid' AND paid_at >= :from GROUP BY 1`,
+         FROM charges WHERE status = 'paid' AND paid_at >= :from AND ${IN_SCOPE_C} GROUP BY 1`,
         { from: `${months[0]}-01` }
       );
       const byPeriod = Object.fromEntries(collectedRows.map((r) => [r.period, r.total]));
 
       return {
-        activeStudents: one(`SELECT COUNT(*) AS n FROM students WHERE status = 'active'`).n,
-        newThisMonth: one(`SELECT COUNT(*) AS n FROM students WHERE substr(join_date, 1, 7) = :period`, { period }).n,
+        activeStudents: one(`SELECT COUNT(*) AS n FROM students WHERE status = 'active' AND in_scope(group_id)`).n,
+        // The active students of the training groups («Ուսումնամարզական») and of the championship teams («Առաջնություն»).
+        activeByKind: one(
+          `SELECT SUM(IFNULL(g.championship, 0) = 0 AND s.group_id IS NOT NULL) AS training, SUM(g.championship = 1) AS championship,
+                  SUM(s.group_id IS NULL) AS noGroup
+           FROM students s LEFT JOIN groups g ON g.id = s.group_id WHERE s.status = 'active' AND in_scope(s.group_id)`
+        ),
+        newThisMonth: one(`SELECT COUNT(*) AS n FROM students WHERE substr(join_date, 1, 7) = :period AND in_scope(group_id)`, { period }).n,
         collectedThisMonth: byPeriod[period] || 0,
         collectedLastMonth: byPeriod[addMonths(period, -1)] || 0,
         // Today's sales: the payments taken today, and how much of it went through the ՀԴՄ.
         today: one(
           `SELECT IFNULL(SUM(amount), 0) AS total, COUNT(*) AS count,
                   IFNULL(SUM(CASE WHEN hdm_receipt IS NOT NULL THEN amount END), 0) AS hdm
-           FROM charges WHERE status = 'paid' AND substr(paid_at, 1, 10) = :t`,
-          { t }
+           FROM charges WHERE status = 'paid' AND substr(paid_at, 1, 10) = :t AND ${IN_SCOPE_C} AND (:all = 1 OR paid_by = :user)`,
+          // Without «reports.salesAll»: what this user took today (as the card's list shows).
+          { t, all: may(ctx, 'reports.salesAll') || !ctx.user ? 1 : 0, user: ctx.user || null }
         ),
         overdue: one(
           `SELECT IFNULL(SUM(amount), 0) AS total, COUNT(DISTINCT student_id) AS students
-           FROM charges WHERE status = 'unpaid' AND due_date < :t`,
+           FROM charges WHERE status = 'unpaid' AND due_date < :t AND ${IN_SCOPE_C}`,
           { t }
         ),
         monthlyThisPeriod: one(
@@ -816,13 +836,13 @@ function createService(db, { onWrite, getNotify } = {}) {
                   IFNULL(SUM(CASE WHEN status = 'paid' THEN amount END), 0) AS paid,
                   COUNT(*) AS count,
                   SUM(CASE WHEN status = 'paid' THEN 1 ELSE 0 END) AS paidCount
-           FROM charges WHERE kind = 'monthly' AND period = :period AND status != 'waived'`,
+           FROM charges WHERE kind = 'monthly' AND period = :period AND status != 'waived' AND ${IN_SCOPE_C}`,
           { period }
         ),
         attendanceToday: one(
           `SELECT COUNT(*) AS marked,
                   SUM(CASE WHEN status IN ('present', 'late') THEN 1 ELSE 0 END) AS present
-           FROM attendance WHERE date = :t`,
+           FROM attendance WHERE date = :t AND in_scope((SELECT group_id FROM students WHERE id = attendance.student_id))`,
           { t }
         ),
         collections: months.map((m) => ({ period: m, total: byPeriod[m] || 0 })),
@@ -830,7 +850,7 @@ function createService(db, { onWrite, getNotify } = {}) {
         feesPaid: (() => {
           const rows = Object.fromEntries(
             all(
-              `SELECT period, SUM(amount) AS total FROM charges WHERE status = 'paid' AND kind = 'monthly' AND period >= :from GROUP BY period`,
+              `SELECT period, SUM(amount) AS total FROM charges WHERE status = 'paid' AND kind = 'monthly' AND period >= :from AND ${IN_SCOPE_C} GROUP BY period`,
               { from: months[0] }
             ).map((r) => [r.period, r.total])
           );
@@ -841,7 +861,7 @@ function createService(db, { onWrite, getNotify } = {}) {
                   MIN(c.due_date) AS oldest
            FROM charges c JOIN students s ON s.id = c.student_id
            LEFT JOIN groups g ON g.id = s.group_id
-           WHERE c.status = 'unpaid' AND c.due_date < :t
+           WHERE c.status = 'unpaid' AND c.due_date < :t AND in_scope(s.group_id)
            GROUP BY s.id ORDER BY debt DESC LIMIT 8`,
           { t }
         ),
@@ -849,16 +869,20 @@ function createService(db, { onWrite, getNotify } = {}) {
           `SELECT c.id, c.kind, c.period, c.description, c.amount, c.paid_at, c.method,
                   s.id AS student_id, s.first_name, s.last_name
            FROM charges c JOIN students s ON s.id = c.student_id
-           WHERE c.status = 'paid' ORDER BY c.paid_at DESC, c.id DESC LIMIT 8`
+           WHERE c.status = 'paid' AND in_scope(s.group_id) ORDER BY c.paid_at DESC, c.id DESC LIMIT 8`
         ),
         expiringContracts: all(
           `SELECT ct.id, ct.number, ct.end_date, s.first_name, s.last_name, s.id AS student_id
            FROM contracts ct JOIN students s ON s.id = ct.student_id
-           WHERE ct.status = 'signed' AND ct.end_date BETWEEN :t AND date(:t, '+30 days')
+           WHERE ct.status = 'signed' AND ct.end_date BETWEEN :t AND date(:t, '+30 days') AND in_scope(s.group_id)
            ORDER BY ct.end_date LIMIT 8`,
           { t }
         ),
-        activity: all('SELECT * FROM activity_log ORDER BY id DESC LIMIT 12'),
+        activity: all(
+          `SELECT * FROM activity_log
+           WHERE scope_all() OR (student_id IS NOT NULL AND in_scope((SELECT group_id FROM students WHERE id = activity_log.student_id)))
+           ORDER BY id DESC LIMIT 12`
+        ),
       };
     },
 
@@ -873,7 +897,7 @@ function createService(db, { onWrite, getNotify } = {}) {
                         WHERE l.action IN ('charge.paid', 'charge.created_paid') AND l.student_id = c.student_id
                           AND json_extract(l.meta, '$.chargeId') = c.id), c.hdm_at) AS taken_at
          FROM charges c JOIN students s ON s.id = c.student_id
-         WHERE c.status = 'paid' AND substr(c.paid_at, 1, 10) = :t AND (:mine = 0 OR c.paid_by = :user)
+         WHERE c.status = 'paid' AND substr(c.paid_at, 1, 10) = :t AND (:mine = 0 OR c.paid_by = :user) AND in_scope(s.group_id)
          ORDER BY IFNULL(taken_at, c.paid_at), c.id`,
         { t: today(), mine: onlyMine ? 1 : 0, user: ctx.user || null }
       );
@@ -890,7 +914,7 @@ function createService(db, { onWrite, getNotify } = {}) {
                 (SELECT COUNT(*) FROM training_days td WHERE td.group_id = g.id AND substr(td.date, 1, 7) = :period
                    AND EXISTS (SELECT 1 FROM attendance a JOIN students s ON s.id = a.student_id
                                WHERE s.group_id = g.id AND a.date = td.date)) AS days_filled
-         FROM groups g`,
+         FROM groups g WHERE in_scope(g.id)`,
         { period: currentPeriod() }
       ).sort((a, b) => a.archived - b.archived || a.name.localeCompare(b.name, 'hy', { numeric: true, sensitivity: 'base' })),
 
@@ -910,6 +934,11 @@ function createService(db, { onWrite, getNotify } = {}) {
       };
       if (p.id) {
         checkVersion('groups', p.id, p.version, null);
+        // The group's fee stays as it is for someone without «payments.fee».
+        if (!may(ctx, 'payments.fee')) {
+          const was = one('SELECT monthly_fee, championship FROM groups WHERE id = :id', { id: p.id });
+          if (was) Object.assign(row, { monthly_fee: was.monthly_fee, championship: was.championship });
+        }
         run(
           `UPDATE groups SET name = :name, coach = :coach, coach_phone = :coach_phone, assistant = :assistant,
                   assistant_phone = :assistant_phone, color = :color, archived = :archived,
@@ -941,7 +970,7 @@ function createService(db, { onWrite, getNotify } = {}) {
     'students.contractNo.get': () => ({ next: nextContractNo(false), prefix: settings().contract_prefix || '', from: settings().contract_next || '' }),
 
     'students.summary': () => one(
-      `SELECT SUM(status = 'active') AS active, SUM(status != 'active') AS inactive, COUNT(*) AS total FROM students`
+      `SELECT SUM(status = 'active') AS active, SUM(status != 'active') AS inactive, COUNT(*) AS total FROM students WHERE in_scope(group_id)`
     ),
 
     'students.list': (p = {}) =>
@@ -961,7 +990,7 @@ function createService(db, { onWrite, getNotify } = {}) {
                  FROM charges c WHERE c.student_id = s.id AND c.kind = 'monthly'
                    AND c.period BETWEEN :monthsFrom AND :monthsTo) AS months
          FROM students s LEFT JOIN groups g ON g.id = s.group_id
-         WHERE (:status IS NULL OR s.status = :status)
+         WHERE (:status IS NULL OR s.status = :status) AND in_scope(s.group_id)
            AND (:groupId IS NULL OR s.group_id = :groupId)
            AND (:search IS NULL OR ulower(s.first_name || ' ' || s.last_name || ' ' || IFNULL(s.patronymic, '') || ' ' || s.first_name || ' ' ||
                 IFNULL(s.phone, '') || ' ' || IFNULL(s.parent_name, '') || ' ' || IFNULL(s.parent_phone, '') || ' ' ||
@@ -1067,6 +1096,10 @@ function createService(db, { onWrite, getNotify } = {}) {
         const prev = one('SELECT status, monthly_fee, leave_date, billing_from FROM students WHERE id = :id', { id: p.id });
         const before = one('SELECT * FROM students WHERE id = :id', { id: p.id });
         if (!prev) throw new AppError('NOT_FOUND');
+        // What this user can't see or change stays as it is: personal data without «students.personal»,
+        // the fee and the discount status without «payments.fee».
+        if (!may(ctx, 'students.personal')) for (const f of auth.PERSONAL_FIELDS) row[f] = before[f];
+        if (!may(ctx, 'payments.fee')) Object.assign(row, { monthly_fee: before.monthly_fee, first_fee: before.first_fee, category: before.category });
         checkVersion('students', p.id, p.version, p.id);
         row.leave_date = prev.leave_date;
         row.billing_from = prev.billing_from;
@@ -1573,13 +1606,13 @@ function createService(db, { onWrite, getNotify } = {}) {
       const inDates = (arr) => (arr.length ? arr.map((d) => `'${d}'`).join(',') : "''");
       return {
         groups: all(
-          `SELECT id, name, color, coach, coach_phone, assistant, assistant_phone FROM groups WHERE archived = 0`
+          `SELECT id, name, color, coach, coach_phone, assistant, assistant_phone FROM groups WHERE archived = 0 AND in_scope(id)`
         ).sort((a, b) => a.name.localeCompare(b.name, 'hy', { numeric: true, sensitivity: 'base' })),
         pitches: all('SELECT name FROM pitches ORDER BY sort, name').map((p) => p.name),
-        base: all('SELECT group_id, weekday, start, end, pitch, note FROM schedule_base'),
-        days: all(`SELECT group_id, date, start, end, pitch, note, cancelled, coach, assistant FROM schedule_days WHERE date IN (${inDates(list)})`),
+        base: all('SELECT group_id, weekday, start, end, pitch, note FROM schedule_base WHERE in_scope(group_id)'),
+        days: all(`SELECT group_id, date, start, end, pitch, note, cancelled, coach, assistant FROM schedule_days WHERE date IN (${inDates(list)}) AND in_scope(group_id)`),
         // Last week's changes, for «copy from last week».
-        prevDays: all(`SELECT group_id, date FROM schedule_days WHERE date IN (${inDates(prev)})`).length,
+        prevDays: all(`SELECT group_id, date FROM schedule_days WHERE date IN (${inDates(prev)}) AND in_scope(group_id)`).length,
       };
     },
 
@@ -1630,8 +1663,9 @@ function createService(db, { onWrite, getNotify } = {}) {
       for (const date of dates) {
         if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
         const from = addDays(date, -7);
-        run('DELETE FROM schedule_days WHERE date = :date', { date });
-        for (const d of all('SELECT * FROM schedule_days WHERE date = :from', { from })) {
+        // A user limited to some groups copies only those groups' days.
+        run('DELETE FROM schedule_days WHERE date = :date AND in_scope(group_id)', { date });
+        for (const d of all('SELECT * FROM schedule_days WHERE date = :from AND in_scope(group_id)', { from })) {
           run(
             `INSERT INTO schedule_days (group_id, date, start, end, pitch, note, cancelled, coach, assistant, updated_by)
              VALUES (:group_id, :date, :start, :end, :pitch, :note, :cancelled, :coach, :assistant, :user)`,
@@ -1715,7 +1749,7 @@ function createService(db, { onWrite, getNotify } = {}) {
          JOIN students s ON s.id = c.student_id
          LEFT JOIN groups g ON g.id = s.group_id
          LEFT JOIN products pr ON pr.id = c.product_id
-         WHERE ${p.studentId ? 'c.student_id = :studentId AND' : ''} (:status IS NULL OR c.status = :status)
+         WHERE ${p.studentId ? 'c.student_id = :studentId AND' : ''} (:status IS NULL OR c.status = :status) AND in_scope(s.group_id)
            AND (:overdue = 0 OR (c.status = 'unpaid' AND c.due_date < :t))
            AND (:kind IS NULL OR c.kind = :kind)
            AND (:period IS NULL OR (CASE WHEN c.status = 'paid' AND :byPaid = 1
@@ -1764,6 +1798,18 @@ function createService(db, { onWrite, getNotify } = {}) {
       }
       if (amount <= 0) throw new AppError('AMOUNT_REQUIRED');
       const paid = !!p.paid;
+      // Taking less than the month's fee (or the product's price) is a discount: «payments.waive».
+      if (paid && !may(ctx, 'payments.waive')) {
+        const st = one('SELECT monthly_fee, join_date FROM students WHERE id = :id', { id: p.studentId });
+        const billed = kind === 'monthly' ? one(`SELECT amount FROM charges WHERE student_id = :sid AND kind = 'monthly' AND period = :period`, { sid: p.studentId, period: p.period }) : null;
+        const full =
+          kind === 'monthly'
+            ? billed?.amount ?? (st ? studentFee(st.monthly_fee, p.period, st.join_date) : 0)
+            : kind === 'product' && p.productId
+              ? (one('SELECT price FROM products WHERE id = :id', { id: p.productId })?.price || 0) * quantity
+              : 0;
+        if (amount < full) throw new AppError('FORBIDDEN');
+      }
       const r = run(
         `INSERT INTO charges (student_id, kind, period, product_id, description, quantity, amount, due_date,
                               status, paid_at, method, note, created_by, paid_by)
@@ -1782,7 +1828,7 @@ function createService(db, { onWrite, getNotify } = {}) {
             (kind === 'monthly' ? `${p.period}-${pad(int(settings().due_day, 10))}` : /^\d{4}-\d{2}$/.test(p.forPeriod || '') ? `${p.forPeriod}-${pad(int(settings().due_day, 10))}` : today()),
           status: paid ? 'paid' : 'unpaid',
           paidAt: paid ? str(p.paidAt) || today() : null,
-          method: paid ? str(p.method) || DEFAULT_METHOD : null,
+          method: paid ? methodOf(p.method) : null,
           note: str(p.note),
           user: ctx.user || null,
           paidBy: paid ? ctx.user || null : null,
@@ -1790,7 +1836,7 @@ function createService(db, { onWrite, getNotify } = {}) {
       );
       const newId = Number(r.lastInsertRowid);
       log(ctx, paid ? 'charge.created_paid' : 'charge.created', `${studentName(p.studentId)} — ${description || kind} — ${amount}`, p.studentId, chargeMeta(newId));
-      if (paid) notifyPaid(p.studentId, [one('SELECT * FROM charges WHERE id = :id', { id: newId })], str(p.method) || DEFAULT_METHOD, ctx);
+      if (paid) notifyPaid(p.studentId, [one('SELECT * FROM charges WHERE id = :id', { id: newId })], methodOf(p.method), ctx);
       return { id: newId };
     },
 
@@ -1826,7 +1872,7 @@ function createService(db, { onWrite, getNotify } = {}) {
           note: p.note === undefined ? c.note : str(p.note),
           quantity: Math.max(int(p.quantity, c.quantity), 1),
           paidAt: str(p.paidAt),
-          method: str(p.method),
+          method: ['card', 'easypay', 'transfer'].includes(p.method) ? p.method : null, // anything else: the method stays
         }
       );
       if (p.absenceFrom !== undefined) {
@@ -1859,7 +1905,7 @@ function createService(db, { onWrite, getNotify } = {}) {
         run(
           `UPDATE charges SET status = 'paid', amount = :amount, paid_at = :paidAt, method = :method, paid_by = :user
            WHERE id = :id`,
-          { id, amount, paidAt: str(paidAt) || today(), method: str(method) || DEFAULT_METHOD, user: ctx.user || null }
+          { id, amount, paidAt: str(paidAt) || today(), method: methodOf(method), user: ctx.user || null }
         );
         total += amount;
         done.push(id);
@@ -1872,7 +1918,7 @@ function createService(db, { onWrite, getNotify } = {}) {
         if (!byStudent.has(c.student_id)) byStudent.set(c.student_id, []);
         byStudent.get(c.student_id).push(c);
       }
-      for (const [sid, list] of byStudent) notifyPaid(sid, list, str(method) || DEFAULT_METHOD, ctx);
+      for (const [sid, list] of byStudent) notifyPaid(sid, list, methodOf(method), ctx);
       return { total, ids: done };
     },
 
@@ -1913,7 +1959,7 @@ function createService(db, { onWrite, getNotify } = {}) {
       const dueDay = pad(int(settings().due_day, 15));
       const absence = absenceRange(absenceFrom, absenceTo);
       const paid = {
-        paidAt: str(paidAt) || today(), method: str(method) || DEFAULT_METHOD, user: ctx.user || null, note: str(note), amount: fee,
+        paidAt: str(paidAt) || today(), method: methodOf(method), user: ctx.user || null, note: str(note), amount: fee,
         absFrom: absence.from, absTo: absence.to,
       };
       const shares = feeShares();
@@ -2237,7 +2283,7 @@ function createService(db, { onWrite, getNotify } = {}) {
                 s.id AS student_id, s.first_name, s.last_name, s.patronymic, g.name AS group_name
          FROM contracts ct JOIN students s ON s.id = ct.student_id
          LEFT JOIN groups g ON g.id = s.group_id
-         WHERE (:search IS NULL OR ulower(s.first_name || ' ' || s.last_name || ' ' || s.first_name || ' ' ||
+         WHERE in_scope(s.group_id) AND (:search IS NULL OR ulower(s.first_name || ' ' || s.last_name || ' ' || s.first_name || ' ' ||
                 IFNULL(ct.number, '') || ' ' || ct.title) LIKE '%' || ulower(:search) || '%')
            AND (:status IS NULL OR (CASE WHEN ct.status = 'signed' AND ct.end_date < :t THEN 'expired'
                                          ELSE ct.status END) = :status)
@@ -2340,7 +2386,7 @@ function createService(db, { onWrite, getNotify } = {}) {
          JOIN students s ON s.id = c.student_id
          LEFT JOIN groups g ON g.id = s.group_id
          LEFT JOIN products pr ON pr.id = c.product_id
-         WHERE c.status = 'paid' AND (:method IS NULL OR c.method = :method) AND c.paid_at BETWEEN :from AND :to
+         WHERE c.status = 'paid' AND (:method IS NULL OR c.method = :method) AND c.paid_at BETWEEN :from AND :to AND in_scope(s.group_id)
          ORDER BY c.paid_at, s.last_name COLLATE NOCASE, s.first_name COLLATE NOCASE`,
         { method: str(method), from: str(from) || '0000-00-00', to: str(to) || '9999-12-31' }
       ),
@@ -2356,7 +2402,7 @@ function createService(db, { onWrite, getNotify } = {}) {
       const gid = Number(groupId) || null;
       const student = `s.first_name || ' ' || s.last_name || IFNULL(' ' || s.patronymic, '')`;
       const byGroup = `ORDER BY g.name IS NULL, g.name COLLATE NOCASE, s.last_name COLLATE NOCASE, s.first_name COLLATE NOCASE`;
-      const groupFilter = gid ? 'AND s.group_id = :gid' : '';
+      const groupFilter = `${gid ? 'AND s.group_id = :gid' : ''} AND in_scope(s.group_id)`;
       switch (kind) {
         case 'debts':
           return all(
@@ -2460,7 +2506,7 @@ function createService(db, { onWrite, getNotify } = {}) {
                       WHERE s.group_id = g.id AND c.kind = 'monthly' AND c.period = :month AND c.status = 'paid') AS paid,
                     (SELECT IFNULL(SUM(c.amount), 0) FROM charges c JOIN students s ON s.id = c.student_id
                       WHERE s.group_id = g.id AND c.status = 'unpaid' AND c.due_date < :t) AS debt
-             FROM groups g WHERE g.archived = 0 ${gid ? 'AND g.id = :gid' : ''} ORDER BY g.name COLLATE NOCASE`,
+             FROM groups g WHERE g.archived = 0 AND in_scope(g.id) ${gid ? 'AND g.id = :gid' : ''} ORDER BY g.name COLLATE NOCASE`,
             { month, t, gid }
           );
         case 'missingDocs':
@@ -2491,10 +2537,10 @@ function createService(db, { onWrite, getNotify } = {}) {
         groups: ['group.%', 'schedule.%'],
         contracts: ['contract.%', 'template.%', 'file.%'],
         notes: ['note.%'],
-        users: ['auth.%', 'user.%'],
+        users: ['auth.%', 'user.%', 'role.%'],
         system: ['settings.%', 'data.%', 'demo.%'],
       };
-      const where = [];
+      const where = ['(scope_all() OR in_scope(s.group_id))'];
       const p = {};
       if (SECTIONS[section]) where.push(`(${SECTIONS[section].map((pat, i) => ((p[`s${i}`] = pat), `a.action LIKE :s${i}`)).join(' OR ')})`);
       if (str(user)) {
@@ -2547,8 +2593,123 @@ function createService(db, { onWrite, getNotify } = {}) {
   }
 
   const READ_ONLY = /\.(get|list|summary|sheet|month|preview|document|status|export|history)$/;
-  const auth = createAuth({ all, one, run, AppError, log });
   Object.assign(methods, auth.methods);
+  auth.verify(Object.keys(methods)); // every method has its permission rule
+
+  // ---------------------------------------------------------------- groups a user is limited to
+  // The students and groups a call works on: a user limited to some groups (Settings → Users) may only work
+  // with those groups' students. false: the call is about the whole club (not for a limited user).
+  function inScope(method, p) {
+    if (scopeNow === null) return true;
+    const students = [];
+    const groups = [];
+    const studentOf = (table, id) => {
+      const r = id == null ? null : one(`SELECT student_id FROM ${table} WHERE id = :id`, { id });
+      students.push(r ? r.student_id : null);
+    };
+    switch (method) {
+      case 'students.get':
+      case 'students.history':
+      case 'students.terminate':
+      case 'students.delete':
+        students.push(p.id);
+        break;
+      case 'students.save':
+        if (p.id) students.push(p.id);
+        groups.push(p.group_id ? Number(p.group_id) : null);
+        break;
+      case 'students.link':
+      case 'students.unlink':
+        students.push(p.id, p.otherId);
+        break;
+      case 'notes.add':
+      case 'files.list':
+      case 'files.upload':
+      case 'applications.create':
+      case 'charges.create':
+      case 'charges.payMonths':
+      case 'notify.messenger':
+      case 'contracts.create':
+      case 'attendance.mark':
+        students.push(p.studentId);
+        break;
+      case 'charges.list':
+        if (p.studentId) students.push(p.studentId);
+        break;
+      case 'notes.delete':
+        studentOf('student_notes', p.id);
+        break;
+      case 'files.get':
+      case 'files.delete':
+        studentOf('student_files', p.id);
+        break;
+      case 'charges.update':
+      case 'charges.markUnpaid':
+      case 'charges.waive':
+      case 'charges.delete':
+        studentOf('charges', p.id);
+        break;
+      case 'charges.markPaid':
+      case 'charges.setReceipt':
+        for (const id of p.ids || []) studentOf('charges', id);
+        break;
+      case 'charges.receiptReturned':
+        for (const r of all(`SELECT student_id FROM charges WHERE hdm_receipt = :receipt AND IFNULL(hdm_crn, '') = IFNULL(:crn, '')`, {
+          receipt: str(p.receipt),
+          crn: str(p.crn),
+        }))
+          students.push(r.student_id);
+        break;
+      case 'contracts.get':
+      case 'contracts.save':
+      case 'contracts.delete':
+      case 'contracts.document':
+        studentOf('contracts', p.id);
+        break;
+      case 'notify.remind':
+        if (!(p.studentIds || []).length) return false;
+        students.push(...p.studentIds);
+        break;
+      case 'attendance.save':
+      case 'training.ensure':
+      case 'training.month':
+      case 'training.submit':
+      case 'training.addDay':
+      case 'training.clearMonth':
+      case 'schedule.saveBase':
+      case 'schedule.setDay':
+      case 'schedule.resetDay':
+      case 'schedule.setCoaches':
+        groups.push(p.groupId);
+        break;
+      case 'training.moveDay':
+      case 'training.removeDay':
+        groups.push(one('SELECT group_id FROM training_days WHERE id = :id', { id: p.id })?.group_id ?? null);
+        break;
+      case 'schedule.toAttendance':
+        for (const s of p.sessions || []) groups.push(s.groupId);
+        break;
+      case 'groups.save':
+        if (!p.id) return false;
+        groups.push(p.id);
+        break;
+      case 'groups.delete':
+        groups.push(p.id);
+        break;
+      case 'students.import':
+      case 'students.importFull':
+      case 'students.export':
+      case 'schedule.savePitches':
+        return false;
+      default:
+        return true;
+    }
+    const groupOk = (g) => g != null && scopeNow.has(Number(g));
+    return (
+      groups.every(groupOk) &&
+      students.every((id) => id != null && groupOk(one('SELECT group_id FROM students WHERE id = :id', { id })?.group_id ?? null))
+    );
+  }
 
   // Single entry point used by both the local IPC bridge and the LAN server.
   // ctx: { user (name from the calling PC), token (sign-in session) }
@@ -2565,9 +2726,12 @@ function createService(db, { onWrite, getNotify } = {}) {
     const write = !READ_ONLY.test(method);
     try {
       const pc = ctx.pc || ctx.user || null;
-      const gate = auth.check(method, write, ctx);
+      const gate = auth.check(method, write, ctx, params || {});
       if (gate.error) return { ok: false, error: gate.error };
       ctx = gate.ctx;
+      const limited = ctx.account && !ctx.account.is_admin && ctx.account.groups;
+      scopeNow = limited ? new Set(ctx.account.groups.map(Number)) : null;
+      if (!method.startsWith('locks.') && !inScope(method, params || {})) return { ok: false, error: 'OUT_OF_SCOPE' };
       // Edit locks: kept in memory only (no transaction, other computers don't need a data refresh).
       if (method.startsWith('locks.')) {
         const owner = ctx.owner || pc || 'local';
@@ -2623,6 +2787,8 @@ function createService(db, { onWrite, getNotify } = {}) {
       if (err instanceof AppError) return { ok: false, error: err.message, ...(err.detail ? { detail: err.detail } : {}) };
       console.error(`[service] ${method} failed:`, err);
       return { ok: false, error: 'INTERNAL', detail: err.message };
+    } finally {
+      scopeNow = null;
     }
   }
 

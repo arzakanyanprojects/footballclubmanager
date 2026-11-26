@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Users, Wallet, AlertTriangle, CalendarCheck, Plus, ChevronRight, FileClock, FileSpreadsheet, MessageCircle, Banknote } from 'lucide-react';
 import { useT, monthName } from '../i18n';
-import { useCan, useCanExcel } from '../components/Auth';
+import { useCan } from '../components/Auth';
 import { MessageButton, useMessenger } from '../components/Messenger';
 import { useRpc, rpc, compactMoney, fmtDate, fmtDateTime, money, todayIso } from '../lib';
 import { Avatar, Button, Empty, Loading, Modal, Money, Segmented, useClub } from '../components/ui';
@@ -15,7 +15,8 @@ export default function Dashboard({ nav }) {
   const [exporting, setExporting] = useState(false);
   const [chartMode, setChartMode] = useState('paid'); // 'paid': by payment date · 'fees': by the month the fee is for
   const [showToday, setShowToday] = useState(false);
-  const canExcel = useCanExcel('reports');
+  const canExcel = useCan('reports.view'); // «Հաշվետվություններ» (the reports to Excel)
+  const canRemind = useCan('payments.remind'); // messages to the debtors' parents
   if (!data) return <Loading />;
 
   const m = data.monthlyThisPeriod;
@@ -48,6 +49,23 @@ export default function Dashboard({ nav }) {
             </div>
           </div>
           <div className="stat-value">{data.activeStudents.toLocaleString('en-US')}</div>
+          {/* By kind of group: training groups and championship teams (and anyone without a group). */}
+          <div className="stat-split">
+            <div>
+              <span title={t('dash.activeTraining')}>{t('dash.activeTraining')}</span>
+              <b>{Number(data.activeByKind?.training || 0).toLocaleString('en-US')}</b>
+            </div>
+            <div>
+              <span title={t('dash.activeChampionship')}>{t('dash.activeChampionship')}</span>
+              <b>{Number(data.activeByKind?.championship || 0).toLocaleString('en-US')}</b>
+            </div>
+            {data.activeByKind?.noGroup > 0 && (
+              <div className="muted">
+                <span>{t('students.noGroup')}</span>
+                <b>{Number(data.activeByKind.noGroup).toLocaleString('en-US')}</b>
+              </div>
+            )}
+          </div>
           <div className="stat-sub">{t('dash.newThisMonth', { n: data.newThisMonth })}</div>
         </div>
         <div className="card stat">
@@ -171,7 +189,7 @@ export default function Dashboard({ nav }) {
             <div className="card-head">
               <h3>{t('dash.debtors')}</h3>
               <div className="spacer" />
-              {data.debtors.length > 0 && <DebtorsMessageButton />}
+              {data.debtors.length > 0 && canRemind && <DebtorsMessageButton />}
               <Button size="sm" variant="ghost" onClick={() => nav('students', { debtOnly: true })}>
                 {t('common.viewAll')} <ChevronRight size={15} />
               </Button>
@@ -194,7 +212,7 @@ export default function Dashboard({ nav }) {
                     <span className="strong num" style={{ color: 'var(--bad)' }}>
                       {money(d.debt, currency)}
                     </span>
-                    <MessageButton studentIds={[d.id]} kind="reminder" variant="ghost" label="" />
+                    {canRemind && <MessageButton studentIds={[d.id]} kind="reminder" variant="ghost" label="" />}
                   </div>
                 ))}
               </div>
@@ -367,6 +385,7 @@ function TodaySalesModal({ nav, onClose }) {
   const t = useT();
   const { currency } = useClub();
   const [mine, setMine] = useState(true);
+  const canAll = useCan('reports.salesAll'); // everyone's sales, not only one's own
   const { data } = useRpc('dashboard.today.list', { mine });
   const rows = data?.rows || [];
   const total = rows.reduce((sum, r) => sum + (r.amount || 0), 0);
@@ -392,7 +411,7 @@ function TodaySalesModal({ nav, onClose }) {
         </>
       }
     >
-      {data?.signedIn && (
+      {data?.signedIn && canAll && (
         <div className="row" style={{ marginBottom: 12 }}>
           <Segmented
             value={mine}

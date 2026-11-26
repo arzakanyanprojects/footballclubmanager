@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useRef, useState } from 'react';
 import { Plus, FileSignature, FileText, Printer, FileDown, Trash2, Save, Download, Upload, Pencil, AlertTriangle, ExternalLink, CheckCircle2 } from 'lucide-react';
 import { useT } from '../i18n';
-import { useCan } from '../components/Auth';
+import { useAuth, useCan } from '../components/Auth';
 import { useColumns } from '../components/Columns';
 import { ContractsUploadModal } from '../components/ContractsUpload';
 import { useRpc, rpc, fmtDate, fmtDateTime, todayIso, contractBodyHtml, contractDocument } from '../lib';
@@ -45,7 +45,7 @@ const fileToBase64 = (file) =>
   });
 
 async function saveBase64(defaultName, data) {
-  const r = await window.fc.saveBinary({ defaultName, data, filters: [{ name: 'Word', extensions: ['docx'] }] });
+  const r = await window.fc.saveBinary({ perm: 'contracts.print', defaultName, data, filters: [{ name: 'Word', extensions: ['docx'] }] });
   if (!r.ok && r.error !== 'CANCELLED') throw Object.assign(new Error(r.error), { code: r.error, detail: r.detail });
   return r.ok;
 }
@@ -58,12 +58,12 @@ export async function downloadContract(id) {
 // The same filled Word file in Word's print screen (preview, printer, copies) / opened in Word.
 export async function printContract(id) {
   const doc = await rpc('contracts.document', { id });
-  const r = await window.fc.printDialog({ name: doc.fileName, data: doc.data });
+  const r = await window.fc.printDialog({ perm: 'contracts.print', name: doc.fileName, data: doc.data });
   if (!r.ok) throw Object.assign(new Error(r.error), { code: r.error, detail: r.detail, showDetail: true });
 }
 export async function openContract(id) {
   const doc = await rpc('contracts.document', { id });
-  const r = await window.fc.openTemp({ name: doc.fileName, data: doc.data });
+  const r = await window.fc.openTemp({ perm: 'contracts.print', name: doc.fileName, data: doc.data });
   if (!r.ok) throw Object.assign(new Error(r.error), { code: r.error, detail: r.detail, showDetail: true });
 }
 
@@ -71,6 +71,7 @@ export async function openContract(id) {
 export function ContractReadyModal({ contractId, studentName, number, onClose }) {
   const t = useT();
   const act = useAction();
+  const canPrint = useCan('contracts.print');
   return (
     <Modal
       title={t('contracts.readyTitle')}
@@ -78,15 +79,21 @@ export function ContractReadyModal({ contractId, studentName, number, onClose })
       width={560}
       footer={
         <>
-          <Button icon={FileDown} onClick={() => act(() => downloadContract(contractId))}>
-            {t('contracts.downloadWord')}
-          </Button>
-          <Button icon={ExternalLink} onClick={() => act(() => openContract(contractId))}>
-            {t('contracts.openWord')}
-          </Button>
-          <Button variant="primary" icon={Printer} onClick={() => act(() => printContract(contractId), t('contracts.printing'))}>
-            {t('contracts.print')}
-          </Button>
+          {canPrint && (
+            <Button icon={FileDown} onClick={() => act(() => downloadContract(contractId))}>
+              {t('contracts.downloadWord')}
+            </Button>
+          )}
+          {canPrint && (
+            <Button icon={ExternalLink} onClick={() => act(() => openContract(contractId))}>
+              {t('contracts.openWord')}
+            </Button>
+          )}
+          {canPrint && (
+            <Button variant="primary" icon={Printer} onClick={() => act(() => printContract(contractId), t('contracts.printing'))}>
+              {t('contracts.print')}
+            </Button>
+          )}
         </>
       }
     >
@@ -102,7 +109,8 @@ export function ContractReadyModal({ contractId, studentName, number, onClose })
 
 export default function Contracts({ route }) {
   const t = useT();
-  const canUpload = useCan('students');
+  const auth = useAuth();
+  const canUpload = auth.canAny('students.files', 'contracts.edit'); // signed contracts' scans
   const [tab, setTab] = useState('contracts');
   const [uploading, setUploading] = useState(false); // «Ներբեռնել պայմանագրեր»
   return (
@@ -134,7 +142,7 @@ export default function Contracts({ route }) {
 }
 
 function ContractList({ openId }) {
-  const canEdit = useCan('contracts');
+  const canEdit = useCan('contracts.edit');
   const t = useT();
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState(null);
@@ -351,7 +359,9 @@ export function NewContractModal({ studentId: fixed, onClose, onCreated }) {
 }
 
 export function ContractModal({ id, onClose }) {
-  const canEdit = useCan('contracts');
+  const auth = useAuth();
+  const canEdit = auth.can('contracts.edit');
+  const canPrint = auth.can('contracts.print');
   const t = useT();
   const act = useAction();
   const confirm = useConfirm();
@@ -386,36 +396,44 @@ export function ContractModal({ id, onClose }) {
       width={isWord ? 640 : 920}
       footer={
         <>
-          {canEdit && (
+          {auth.can('contracts.delete') && (
             <Button className="left" variant="danger" icon={Trash2} onClick={remove}>
               {t('common.delete')}
             </Button>
           )}
           {isWord ? (
             <>
-              <Button icon={FileDown} onClick={() => act(() => downloadContract(id))}>
-                {t('contracts.downloadWord')}
-              </Button>
-              <Button icon={ExternalLink} onClick={() => act(() => openContract(id))}>
-                {t('contracts.openWord')}
-              </Button>
-              <Button icon={Printer} onClick={() => act(() => printContract(id), t('contracts.printing'))}>
-                {t('contracts.print')}
-              </Button>
+              {canPrint && (
+                <Button icon={FileDown} onClick={() => act(() => downloadContract(id))}>
+                  {t('contracts.downloadWord')}
+                </Button>
+              )}
+              {canPrint && (
+                <Button icon={ExternalLink} onClick={() => act(() => openContract(id))}>
+                  {t('contracts.openWord')}
+                </Button>
+              )}
+              {canPrint && (
+                <Button icon={Printer} onClick={() => act(() => printContract(id), t('contracts.printing'))}>
+                  {t('contracts.print')}
+                </Button>
+              )}
             </>
           ) : (
-            <>
-              <Button icon={Printer} onClick={() => act(() => window.fc.print({ html: html() }))}>
+            canPrint && <>
+              <Button icon={Printer} onClick={() => act(() => window.fc.print({ perm: 'contracts.print', html: html() }))}>
                 {t('contracts.print')}
               </Button>
-              <Button icon={FileDown} onClick={() => act(() => window.fc.exportPdf({ html: html(), defaultName: pdfName }))}>
+              <Button icon={FileDown} onClick={() => act(() => window.fc.exportPdf({ perm: 'contracts.print', html: html(), defaultName: pdfName }))}>
                 {t('contracts.exportPdf')}
               </Button>
             </>
           )}
-          <Button variant="primary" icon={Save} onClick={save} disabled={!dirty}>
-            {t('common.save')}
-          </Button>
+          {canEdit && (
+            <Button variant="primary" icon={Save} onClick={save} disabled={!dirty}>
+              {t('common.save')}
+            </Button>
+          )}
         </>
       }
     >
@@ -466,6 +484,8 @@ export function ContractModal({ id, onClose }) {
 // ------------------------------------------------------------------ Word templates
 function Templates() {
   const t = useT();
+  const auth = useAuth();
+  const canChange = auth.can('contracts.templates');
   const act = useAction();
   const confirm = useConfirm();
   const { data, loading } = useRpc('docTemplates.list');
@@ -491,9 +511,11 @@ function Templates() {
     <>
       <div className="toolbar">
         <div className="muted grow">{t('templates.wordIntro')}</div>
-        <Button variant="primary" icon={Upload} onClick={() => uploadRef.current.click()}>
-          {t('templates.upload')}
-        </Button>
+        {canChange && (
+          <Button variant="primary" icon={Upload} onClick={() => uploadRef.current.click()}>
+            {t('templates.upload')}
+          </Button>
+        )}
         <input
           ref={uploadRef}
           type="file"
@@ -549,12 +571,14 @@ function Templates() {
                   <td className="small muted nowrap">{fmtDateTime(tp.updated_at || tp.created_at)}</td>
                   <td className="actions">
                     <div className="row" style={{ gap: 4, justifyContent: 'flex-end' }}>
-                      <Button size="sm" icon={Download} onClick={() => download(tp)}>
-                        {t('templates.download')}
-                      </Button>
-                      <RowMenu
+                      {auth.can('contracts.print') && (
+                        <Button size="sm" icon={Download} onClick={() => download(tp)}>
+                          {t('templates.download')}
+                        </Button>
+                      )}
+                      {(canChange || auth.can('contracts.templatesDelete')) && <RowMenu
                         items={[
-                          {
+                          canChange && {
                             label: t('templates.replace'),
                             icon: Upload,
                             onClick: () => {
@@ -562,9 +586,9 @@ function Templates() {
                               replaceRef.current.click();
                             },
                           },
-                          { label: t('templates.rename'), icon: Pencil, onClick: () => setNaming({ id: tp.id, name: tp.name }) },
-                          '-',
-                          {
+                          canChange && { label: t('templates.rename'), icon: Pencil, onClick: () => setNaming({ id: tp.id, name: tp.name }) },
+                          canChange && auth.can('contracts.templatesDelete') && '-',
+                          auth.can('contracts.templatesDelete') && {
                             label: t('common.delete'),
                             icon: Trash2,
                             danger: true,
@@ -572,8 +596,8 @@ function Templates() {
                               (await confirm({ text: t('templates.deleteConfirm', { name: tp.name }), confirmLabel: t('common.delete') })) &&
                               act(() => rpc('docTemplates.delete', { id: tp.id }), t('common.deleted')),
                           },
-                        ]}
-                      />
+                        ].filter(Boolean)}
+                      />}
                     </div>
                   </td>
                 </tr>

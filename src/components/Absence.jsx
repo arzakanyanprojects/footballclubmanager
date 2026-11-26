@@ -4,18 +4,20 @@ import { useT } from '../i18n';
 import { rpc, todayIso, readFileBase64 } from '../lib';
 import { Button, Field, Modal, useAction } from './ui';
 import { useEditLock } from './Locks';
+import { useCan } from './Auth';
 
 const REASONS = ['agreed', 'illness', 'other'];
 
 // Prints / opens a stored document by its file id.
 export async function printStoredFile(id) {
   const f = await rpc('files.get', { id });
-  const r = await window.fc.printFile({ name: f.fileName, data: f.data });
+  const r = await window.fc.printFile({ name: f.fileName, data: f.data, perm: 'students.print' });
   if (!r.ok) throw Object.assign(new Error(r.error), { code: r.error, detail: r.detail, showDetail: true });
 }
-export async function openStoredFile(id) {
+// perm: the tick it is opened with (seeing the student, their payments, or the absence application just made).
+export async function openStoredFile(id, perm = 'students.view') {
   const f = await rpc('files.get', { id });
-  const r = await window.fc.openTemp({ name: f.fileName, data: f.data });
+  const r = await window.fc.openTemp({ name: f.fileName, data: f.data, perm });
   if (!r.ok) throw Object.assign(new Error(r.error), { code: r.error, detail: r.detail, showDetail: true });
 }
 
@@ -23,6 +25,8 @@ export async function openStoredFile(id) {
 export function AbsenceModal({ student, onClose }) {
   const t = useT();
   const act = useAction();
+  const canPrint = useCan('students.print');
+  const canUpload = useCan('students.files'); // the attached scans are kept under the student's documents
   const lock = useEditLock(`student:${student.id}`);
   const [f, setF] = useState({
     from: todayIso(),
@@ -44,8 +48,8 @@ export function AbsenceModal({ student, onClose }) {
     const r = await act(async () => {
       const res = await rpc('applications.create', { studentId: student.id, ...f });
       // Attached files go to the student's documents too.
-      if (f.attachMedical && files.medical) await rpc('files.upload', { studentId: student.id, kind: 'medical', ...files.medical });
-      if (f.attachOther && files.other) await rpc('files.upload', { studentId: student.id, kind: 'other', ...files.other });
+      if (canUpload && f.attachMedical && files.medical) await rpc('files.upload', { studentId: student.id, kind: 'medical', ...files.medical });
+      if (canUpload && f.attachOther && files.other) await rpc('files.upload', { studentId: student.id, kind: 'other', ...files.other });
       return res;
     }, t('absence.saved'));
     if (r) setDone(r);
@@ -81,12 +85,14 @@ export function AbsenceModal({ student, onClose }) {
         width={520}
         footer={
           <>
-            <Button icon={ExternalLink} onClick={() => act(() => openStoredFile(done.id))}>
+            <Button icon={ExternalLink} onClick={() => act(() => openStoredFile(done.id, 'students.absence'))}>
               {t('absence.openWord')}
             </Button>
-            <Button icon={Printer} onClick={() => act(() => printStoredFile(done.id), t('absence.printing'))}>
-              {t('absence.print')}
-            </Button>
+            {canPrint && (
+              <Button icon={Printer} onClick={() => act(() => printStoredFile(done.id), t('absence.printing'))}>
+                {t('absence.print')}
+              </Button>
+            )}
             <Button variant="primary" onClick={onClose}>
               {t('hdm.done')}
             </Button>
@@ -153,7 +159,7 @@ export function AbsenceModal({ student, onClose }) {
                 <input type="checkbox" checked={f.attachMedical} onChange={set('attachMedical')} />
                 {t('absence.attachMedical')}
               </label>
-              {f.attachMedical && fileChip('medical', medRef)}
+              {f.attachMedical && canUpload && fileChip('medical', medRef)}
             </div>
             <div className="row wrap" style={{ gap: 12 }}>
               <label className="check">

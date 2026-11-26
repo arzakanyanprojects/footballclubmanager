@@ -5,7 +5,7 @@ import { dictionaries } from '../locales';
 import { rpc, fmtDateTime, todayIso, money } from '../lib';
 import { Button, Empty, Loading, SearchBox, useAction, useClub } from './ui';
 import { HistoryRow, historyText } from './StudentExtras';
-import { useCanExcel } from './Auth';
+import { useCan } from './Auth';
 
 const PAGE = 100;
 export const LOG_SECTIONS = ['students', 'payments', 'attendance', 'groups', 'contracts', 'notes', 'users', 'system'];
@@ -17,7 +17,7 @@ let kept = EMPTY;
 // what changed, action names), filter by section, user and dates, page through it, export what is found.
 export default function ActivityLog({ nav }) {
   const t = useT();
-  const canExcel = useCanExcel('settings');
+  const canExcel = useCan('settings.logExcel');
   const lang = useLang();
   const act = useAction();
   const club = useClub();
@@ -66,7 +66,7 @@ export default function ActivityLog({ nav }) {
   const exportFile = () =>
     act(async () => {
       const all = await rpc('activity.list', params(0, 20000));
-      const r = await window.fc.saveXlsx({
+      const r = await window.fc.saveXlsx({ perm: 'settings.logExcel', 
         kind: 'table',
         defaultName: `${t('activity.log')} ${todayIso()}.xlsx`.replace(/[\\/:*?"<>|]/g, '_'),
         sheetName: t('activity.log'),

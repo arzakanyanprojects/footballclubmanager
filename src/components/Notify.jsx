@@ -16,7 +16,7 @@ export function NotifySettings() {
   const t = useT();
   const toast = useToast();
   const act = useAction();
-  const canEdit = useCan('settings');
+  const canEdit = useCan('settings.notify');
   const [state, setState] = useState(null);
   const [f, setF] = useState(null);
   const [testTo, setTestTo] = useState('');

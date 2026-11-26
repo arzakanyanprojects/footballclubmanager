@@ -123,8 +123,9 @@ export function toCsv(rows) {
   return '﻿' + rows.map((r) => r.map(esc).join(',')).join('\r\n');
 }
 
-export async function saveCsv(name, rows) {
-  return window.fc.saveFile({ defaultName: name, content: toCsv(rows), filters: [{ name: 'CSV', extensions: ['csv'] }] });
+// perm: the user's tick that allows this export (e.g. 'payments.excel').
+export async function saveCsv(name, perm, rows) {
+  return window.fc.saveFile({ defaultName: name, content: toCsv(rows), filters: [{ name: 'CSV', extensions: ['csv'] }], perm });
 }
 
 export function resizeImage(file, size = 320) {

@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { Plus, Users, Paperclip, Camera, Trash2, UserRound, FileText, Wallet, StickyNote, FilterX, FileSignature, FileSpreadsheet } from 'lucide-react';
 import { useT, monthName } from '../i18n';
-import { useCan, useCanExcel } from '../components/Auth';
+import { useAuth, useCan } from '../components/Auth';
 import { useColumns } from '../components/Columns';
 import { FilterButton, FilterMenu, applyColumnFilters, columnValues } from '../components/ColumnFilter';
 import { ConflictBanner, EditingMark, useEditLock, useLocks } from '../components/Locks';
@@ -43,9 +43,10 @@ let keptList = LIST_DEFAULTS;
 
 export default function Students({ nav, route }) {
   const act = useAction();
-  const canEdit = useCan('students');
-  const canPay = useCan('payments');
-  const canExcel = useCanExcel('students');
+  const canAdd = useCan('students.add');
+  const canPay = useCan('payments.view');
+  const canTake = useCan('payments.take');
+  const canExcel = useCan('students.excel');
   const t = useT();
   const [start] = useState(() =>
     route.groupId || route.debtOnly
@@ -291,7 +292,7 @@ export default function Students({ nav, route }) {
               : m
                 ? `${monthName(t, p)} · ${money(m.amount, currency)} · ${t(`chargeStatus.${st}`)}`
                 : monthName(t, p);
-          const payable = canPay && (st === 'overdue' || st === 'unpaid');
+          const payable = canTake && (st === 'overdue' || st === 'unpaid');
           return (
             <td key={p} className="mcol">
               <span
@@ -360,7 +361,7 @@ export default function Students({ nav, route }) {
           <Button icon={FileSpreadsheet} onClick={() => setExportAll(true)} title={t('groupsExport.allButton')} aria-label={t('groupsExport.allButton')} />
         )}
 
-        {canEdit && (
+        {canAdd && (
           <Button variant="primary" icon={Plus} onClick={addStudent}>
             {t('students.add')}
           </Button>
@@ -429,7 +430,7 @@ export default function Students({ nav, route }) {
                   {t('students.clearFilters')}
                 </Button>
               ) : (
-                canEdit && <Button variant="primary" icon={Plus} onClick={addStudent}>{t('students.add')}</Button>
+                canAdd && <Button variant="primary" icon={Plus} onClick={addStudent}>{t('students.add')}</Button>
               )
             }
           />
@@ -478,7 +479,7 @@ export default function Students({ nav, route }) {
         />
       )}
 
-      {exportAll && <GroupsExportModal flat onClose={() => setExportAll(false)} />}
+      {exportAll && <GroupsExportModal flat perm="students.excel" onClose={() => setExportAll(false)} />}
 
       {paying && <PayModal charges={paying} onClose={() => setPaying(null)} onDone={() => setPaying(null)} />}
 
@@ -531,6 +532,11 @@ export function StudentForm({ student, onClose, onSaved, minimized, onMinimize, 
     notes: '',
   });
   const [f, setF] = useState(() => init(student));
+  // An existing student's personal data stays hidden (and unchanged) without «students.personal»; their fee and
+  // discount status without «payments.fee».
+  const auth = useAuth();
+  const hidePersonal = !!student.id && !auth.can('students.personal');
+  const lockFee = !!student.id && !auth.can('payments.fee');
   // The name for the minimized form's bar.
   useEffect(() => onDraft?.([f.first_name, f.last_name, f.patronymic].filter(Boolean).join(' ')), [f.first_name, f.last_name, f.patronymic]);
   // The latest saved data (after someone else's change), replacing what is in the form.
@@ -570,7 +576,7 @@ export function StudentForm({ student, onClose, onSaved, minimized, onMinimize, 
   };
 
   // A new student is saved together with their contract (filled from the Word template, ready to print).
-  const canContracts = useCan('contracts');
+  const canContracts = useCan('contracts.edit');
   const { data: templates } = useRpc('docTemplates.list', {}, { skip: !!student.id || !canContracts });
   const withContract = !student.id && canContracts && templates?.length > 0;
   const [templateId, setTemplateId] = useState(() => {
@@ -691,7 +697,7 @@ export function StudentForm({ student, onClose, onSaved, minimized, onMinimize, 
         <FormSection icon={FileText} title={t('form.documents')}>
           <div className="grid-3">
             <Field label={t('students.documentNo')}>
-              <input className={cls('input', 'document_no')} value={f.document_no} onChange={set('document_no')} />
+              <input className={cls('input', 'document_no')} value={f.document_no} onChange={set('document_no')} disabled={hidePersonal} />
             </Field>
             <Field label={t('students.contractNo')}>
               <input
@@ -745,28 +751,28 @@ export function StudentForm({ student, onClose, onSaved, minimized, onMinimize, 
               <input className={cls('input', 'parent_last_name')} value={f.parent_last_name} onChange={set('parent_last_name')} />
             </Field>
             <Field label={t('parent.ssn')}>
-              <input className={cls('input', 'parent_ssn')} value={f.parent_ssn} onChange={set('parent_ssn')} />
+              <input className={cls('input', 'parent_ssn')} value={f.parent_ssn} onChange={set('parent_ssn')} disabled={hidePersonal} />
             </Field>
             <Field label={t('parent.docNo')}>
-              <input className={cls('input', 'parent_doc_no')} value={f.parent_doc_no} onChange={set('parent_doc_no')} />
+              <input className={cls('input', 'parent_doc_no')} value={f.parent_doc_no} onChange={set('parent_doc_no')} disabled={hidePersonal} />
             </Field>
             <Field label={t('parent.docIssuer')}>
-              <input className={cls('input', 'parent_doc_issuer')} value={f.parent_doc_issuer} onChange={set('parent_doc_issuer')} />
+              <input className={cls('input', 'parent_doc_issuer')} value={f.parent_doc_issuer} onChange={set('parent_doc_issuer')} disabled={hidePersonal} />
             </Field>
             <Field label={t('parent.docDate')}>
-              <input className={cls('input', 'parent_doc_date')} type="date" value={f.parent_doc_date} onChange={set('parent_doc_date')} />
+              <input className={cls('input', 'parent_doc_date')} type="date" value={f.parent_doc_date} onChange={set('parent_doc_date')} disabled={hidePersonal} />
             </Field>
             <Field label={t('parent.phone')}>
-              <input className={cls('input', 'parent_phone')} value={f.parent_phone} onChange={set('parent_phone')} />
+              <input className={cls('input', 'parent_phone')} value={f.parent_phone} onChange={set('parent_phone')} disabled={hidePersonal} />
             </Field>
             <Field label={t('parent.messenger')}>
-              <input className={cls('input', 'parent_messenger')} value={f.parent_messenger} onChange={set('parent_messenger')} />
+              <input className={cls('input', 'parent_messenger')} value={f.parent_messenger} onChange={set('parent_messenger')} disabled={hidePersonal} />
             </Field>
             <Field label={t('parent.email')}>
-              <input className={cls('input', 'parent_email')} value={f.parent_email} onChange={set('parent_email')} />
+              <input className={cls('input', 'parent_email')} value={f.parent_email} onChange={set('parent_email')} disabled={hidePersonal} />
             </Field>
             <Field label={t('parent.address')} className="span-3">
-              <input className={cls('input', 'parent_address')} value={f.parent_address} onChange={set('parent_address')} />
+              <input className={cls('input', 'parent_address')} value={f.parent_address} onChange={set('parent_address')} disabled={hidePersonal} />
             </Field>
           </div>
         </FormSection>
@@ -790,6 +796,7 @@ export function StudentForm({ student, onClose, onSaved, minimized, onMinimize, 
                 min="0"
                 step="500"
                 value={f.monthly_fee}
+                disabled={lockFee}
                 placeholder={t('students.feeZero')}
                 title={t('students.monthlyFeeHint')}
                 onChange={set('monthly_fee')}
@@ -803,6 +810,7 @@ export function StudentForm({ student, onClose, onSaved, minimized, onMinimize, 
                   min="0"
                   step="500"
                   value={f.first_fee}
+                disabled={lockFee}
                   placeholder={t('students.feeZero')}
                   title={t('students.firstFeeHint')}
                   onChange={set('first_fee')}
@@ -824,7 +832,7 @@ export function StudentForm({ student, onClose, onSaved, minimized, onMinimize, 
               </select>
             </Field>
             <Field label={t('students.category')}>
-              <select className={cls('select', 'category')} value={f.category || ''} onChange={set('category')}>
+              <select className={cls('select', 'category')} value={f.category || ''} onChange={set('category')} disabled={lockFee}>
                 {!f.category && <option value="">{t('form.choose')}</option>}
                 <option value="none">{t('category.none')}</option>
                 {CATEGORIES.map((c) => (
@@ -835,7 +843,7 @@ export function StudentForm({ student, onClose, onSaved, minimized, onMinimize, 
               </select>
             </Field>
             <Field label={t('students.status')}>
-              <select className={cls('select', 'status')} value={f.status} onChange={set('status')}>
+              <select className={cls('select', 'status')} value={f.status} onChange={set('status')} disabled={!!student.id && !auth.can('students.terminate')}>
                 <option value="active">{t('status.active')}</option>
                 <option value="inactive">{t('status.inactive')}</option>
               </select>

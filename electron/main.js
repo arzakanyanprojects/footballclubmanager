@@ -397,8 +397,117 @@ async function receiptImage(html, widthMm, px) {
 
 // ------------------------------------------------------------------ IPC
 function registerIpc() {
-  ipcMain.handle('auth:setToken', (_e, token, remember) => {
+  // ---------------------------------------------------------------- what the signed-in user may do here
+  // This computer's own actions (printing, Excel, ՀԴՄ, backups…) need the same ticks as on screen
+  // (Settings → Users), checked with the user's permissions from the main computer. Printing and Excel calls
+  // name their tick (e.g. { perm: 'schedule.print' }); a call without one is for admins only.
+  let access = { token: undefined, at: 0, value: null };
+  const currentAccess = async () => {
+    if (access.token === authToken && Date.now() - access.at < 10000) return access.value;
+    let value = null;
+    try {
+      const r =
+        config.mode === 'host' && service
+          ? service.call('auth.status', {}, { token: authToken })
+          : config.mode === 'client' && remote
+            ? await remote.call('auth.status', {})
+            : null;
+      if (r?.ok) value = r.result;
+    } catch {
+      value = null;
+    }
+    access = { token: authToken, at: Date.now(), value };
+    return value;
+  };
+  // offline: allowed when the permissions can't be read (no data yet, or the main computer is off) — only for
+  // setting up this computer's connection.
+  const allowed = async (perms, { offline = false } = {}) => {
+    const st = await currentAccess();
+    if (!st) return offline;
+    if (!st.required) return true;
+    const u = st.user;
+    if (!u) return false;
+    return !!u.is_admin || [].concat(perms).some((p) => (u.perms || []).includes(p));
+  };
+  // open: a document opened in its program (Word, a PDF viewer…) — it can be printed from there too.
+  const OUTPUT = {
+    excel: /^[a-z]+\.(excel|logExcel)$/,
+    print: /^([a-z]+\.print|payments\.receipt)$/,
+    open: /^([a-z]+\.print|payments\.receipt|students\.view|payments\.view|students\.absence)$/,
+  };
+  const allowedOut = (perm, kind) => allowed(perm && OUTPUT[kind].test(perm) ? [perm] : []);
+  const backups = () => allowed('settings.backups');
+  const GATES = {
+    'app:setup': () => allowed('settings.network', { offline: true }),
+    'app:resetMode': () => allowed('settings.network', { offline: true }),
+    'app:updateLocal': (patch) => (patch && (patch.hdm || patch.thermal) ? allowed('settings.hdm') : true),
+    'host:newKey': () => allowed('settings.network'),
+    'hdm:print': (r) => allowed(r?.practice ? ['settings.hdm'] : ['payments.take', 'payments.hdm']),
+    'hdm:test': () => allowed('settings.hdm'),
+    'hdm:action': (req) =>
+      allowed(req?.kind === 'return' ? ['payments.hdmReturn'] : req?.kind === 'lastCopy' ? ['payments.take', 'payments.hdm', 'settings.hdm'] : ['settings.hdm']),
+    'backup:create': backups,
+    'backup:list': backups,
+    'backup:cloudSet': backups,
+    'backup:cloudPick': backups,
+    'backup:cloudOpen': backups,
+    'backup:openFolder': backups,
+    'gdrive:set': backups,
+    'gdrive:connect': backups,
+    'gdrive:disconnect': backups,
+    'gdrive:uploadNow': backups,
+    'gdrive:list': backups,
+    'backup:restore': () => allowed('settings.restore'),
+    'gdrive:restore': () => allowed('settings.restore'),
+    'notify:set': () => allowed('settings.notify'),
+    'notify:testEmail': () => allowed('settings.notify'),
+    'notify:testTelegram': () => allowed('settings.notify'),
+    'notify:findChats': () => allowed('settings.notify'),
+    'notify:run': () => allowed('settings.notify'),
+    'import:read': () => allowed('students.import'),
+    'transfer:save': () => allowed('settings.data'),
+    'xlsx:save': (r) => allowedOut(r?.perm, 'excel'),
+    'file:save': (o) => allowedOut(o?.perm, 'excel'),
+    print: (o) => allowedOut(o?.perm, 'print'),
+    'pdf:export': (o) => allowedOut(o?.perm, 'print'),
+    'file:print': (o) => allowedOut(o?.perm, 'print'),
+    'file:printDialog': (o) => allowedOut(o?.perm, 'print'),
+    'file:saveBinary': (o) => allowedOut(o?.perm, 'print'),
+    'file:openTemp': (o) => allowedOut(o?.perm, 'open'),
+    'notify:get': () => allowed('settings.notify'), // holds the Telegram token
+    'thermal:print': () => allowed(['payments.take', 'payments.receipt', 'settings.hdm']),
+  };
+  const DENIED = { 'backup:list': [] };
+  // This computer's settings as the screens get them: without the secrets the signed-in user has no tick for
+  // (or anyone, signed out). Never: the sign-in token, e-mail / Telegram (their own tab reads them with
+  // «settings.notify»), Google Drive's keys. ՀԴՄ passwords: «settings.hdm». The network access code: «settings.network».
+  const forScreens = async (s) => {
+    const st = await currentAccess();
+    // Permissions unknown (main computer not reachable, or not set up): no secrets.
+    const may = (p) => !!st && (!st.required || (!!st.user && (st.user.is_admin || (st.user.perms || []).includes(p))));
+    const { authToken: _t, notify: _n, gdrive: _g, ...cfg } = s.config || {};
+    if (!may('settings.hdm') && cfg.hdm) {
+      const { hdmPassword: _h, password: _p, ...hdmRest } = cfg.hdm;
+      cfg.hdm = hdmRest;
+    }
+    const net = may('settings.network');
+    if (!net) delete cfg.accessKey;
+    return { ...s, config: cfg, host: s.host ? { ...s.host, ...(net ? {} : { accessKey: undefined }) } : s.host };
+  };
+  const isState = (r) => r && typeof r === 'object' && r.config && 'version' in r;
+  const handle = (channel, fn) =>
+    ipcMain.handle(channel, async (e, ...args) => {
+      const gate = GATES[channel];
+      if (gate && !(await gate(...args))) return channel in DENIED ? DENIED[channel] : { ok: false, error: 'FORBIDDEN' };
+      const r = await fn(e, ...args);
+      if (isState(r)) return forScreens(r);
+      if (r && isState(r.result)) return { ...r, result: await forScreens(r.result) };
+      return r;
+    });
+
+  handle('auth:setToken', (_e, token, remember) => {
     authToken = token || null;
+    access.at = 0;
     if (remember && token) config.authToken = token;
     else delete config.authToken;
     saveConfig();
@@ -407,8 +516,8 @@ function registerIpc() {
 
   // ---------------------------------------------------------------- email / Telegram (host PC)
   const notifyState = () => ({ isHost: config.mode === 'host', config: notifyCfg(), defaults: DEFAULT_TEMPLATES });
-  ipcMain.handle('notify:get', () => notifyState());
-  ipcMain.handle('notify:set', (_e, patch) => {
+  handle('notify:get', () => notifyState());
+  handle('notify:set', (_e, patch) => {
     if (config.mode !== 'host') return notifyState();
     const before = notifyCfg();
     const next = notify.merge(before, patch);
@@ -428,7 +537,7 @@ function registerIpc() {
       return { ok: false, error: 'SEND_FAILED', detail: err.message };
     }
   };
-  ipcMain.handle('notify:testEmail', (_e, to) =>
+  handle('notify:testEmail', (_e, to) =>
     attempt(() =>
       notify.sendEmail(notifyCfg(), {
         to,
@@ -437,7 +546,7 @@ function registerIpc() {
       })
     )
   );
-  ipcMain.handle('notify:testTelegram', () =>
+  handle('notify:testTelegram', () =>
     attempt(async () => {
       const cfg = notifyCfg();
       const chats = (cfg.telegram.chats || []).filter((c) => c.on !== false);
@@ -446,8 +555,8 @@ function registerIpc() {
       return chats.length;
     })
   );
-  ipcMain.handle('notify:findChats', () => attempt(() => notify.findChats(notifyCfg())));
-  ipcMain.handle('notify:run', (_e, kind) =>
+  handle('notify:findChats', () => attempt(() => notify.findChats(notifyCfg())));
+  handle('notify:run', (_e, kind) =>
     attempt(() => {
       if (!service) throw new Error('Only on the main computer');
       const now = new Date();
@@ -465,27 +574,28 @@ function registerIpc() {
     })
   );
 
-  ipcMain.handle('update:status', () => updater.getStatus());
-  ipcMain.handle('update:check', () => updater.check());
-  ipcMain.handle('update:install', () => {
+  handle('update:status', () => updater.getStatus());
+  handle('update:check', () => updater.check());
+  handle('update:install', () => {
     quitting = true;
     updater.install();
   });
 
   // The user confirmed "Quit" in the app's own window.
-  ipcMain.handle('app:confirmClose', () => {
+  handle('app:confirmClose', () => {
     quitting = true;
     app.quit();
   });
-  ipcMain.handle('rpc', async (_e, method, params) => {
+  handle('rpc', async (_e, method, params) => {
+    if (/^(users|roles)\./.test(method)) access.at = 0; // someone's permissions may change
     if (config.mode === 'host' && service) return service.call(method, params, { user: config.operator || 'host', pc: config.operator || 'host', owner: INSTANCE_ID, token: authToken });
     if (config.mode === 'client' && remote) return remote.call(method, params);
     return { ok: false, error: 'NOT_CONFIGURED' };
   });
 
-  ipcMain.handle('app:state', () => appState());
+  handle('app:state', () => appState());
 
-  ipcMain.handle('app:setup', async (_e, opts) => {
+  handle('app:setup', async (_e, opts) => {
     if (opts.mode === 'host') {
       config.mode = 'host';
       config.port = Number(opts.port) || DEFAULT_PORT;
@@ -506,7 +616,7 @@ function registerIpc() {
     return { ok: true, result: appState() };
   });
 
-  ipcMain.handle('app:resetMode', async () => {
+  handle('app:resetMode', async () => {
     stopBackend();
     config.mode = null;
     authToken = null;
@@ -515,7 +625,7 @@ function registerIpc() {
     return appState();
   });
 
-  ipcMain.handle('app:updateLocal', (_e, patch) => {
+  handle('app:updateLocal', (_e, patch) => {
     for (const k of ['language', 'theme', 'operator', 'autoStart']) if (patch[k] !== undefined) config[k] = patch[k];
     if (patch.autoStart !== undefined) applyAutoStart();
     if (patch.language !== undefined && tray) {
@@ -528,34 +638,34 @@ function registerIpc() {
     return appState();
   });
 
-  ipcMain.handle('host:newKey', () => {
+  handle('host:newKey', () => {
     config.accessKey = newAccessKey();
     saveConfig();
     return appState();
   });
 
-  ipcMain.handle('hdm:print', (_e, receipt) =>
+  handle('hdm:print', (_e, receipt) =>
     hdm.printReceipt({ ...hdm.DEFAULTS, ...config.hdm }, receipt, () => {
       config.hdm = { ...hdm.DEFAULTS, ...config.hdm, testCounter: (config.hdm?.testCounter || 0) + 1 };
       saveConfig();
       return config.hdm.testCounter;
     })
   );
-  ipcMain.handle('hdm:test', (_e, settings) => hdm.testConnection({ ...hdm.DEFAULTS, ...config.hdm, ...(settings || {}) }));
-  ipcMain.handle('hdm:action', (_e, req) => hdm.action({ ...hdm.DEFAULTS, ...config.hdm }, req || {}));
+  handle('hdm:test', (_e, settings) => hdm.testConnection({ ...hdm.DEFAULTS, ...config.hdm, ...(settings || {}) }));
+  handle('hdm:action', (_e, req) => hdm.action({ ...hdm.DEFAULTS, ...config.hdm }, req || {}));
 
-  ipcMain.handle('net:discover', () => network.discoverHosts());
-  ipcMain.handle('net:test', (_e, o) => network.testHost({ host: o.hostAddress, port: o.hostPort, key: o.accessKey }));
+  handle('net:discover', () => network.discoverHosts());
+  handle('net:test', (_e, o) => network.testHost({ host: o.hostAddress, port: o.hostPort, key: o.accessKey }));
 
-  ipcMain.handle('backup:create', () => {
+  handle('backup:create', () => {
     try {
       return { ok: true, result: createBackup('manual') };
     } catch (err) {
       return { ok: false, error: err.message };
     }
   });
-  ipcMain.handle('backup:list', () => listBackups());
-  ipcMain.handle('backup:cloudSet', (_e, patch) => {
+  handle('backup:list', () => listBackups());
+  handle('backup:cloudSet', (_e, patch) => {
     const was = !!config.cloud?.enabled;
     config.cloud = { ...config.cloud, ...patch };
     saveConfig();
@@ -567,21 +677,21 @@ function registerIpc() {
     }
     return appState();
   });
-  ipcMain.handle('backup:cloudPick', async () => {
+  handle('backup:cloudPick', async () => {
     const r = await dialog.showOpenDialog(win, { defaultPath: cloudFolder() || undefined, properties: ['openDirectory', 'createDirectory'] });
     return r.canceled ? null : r.filePaths[0] || null;
   });
-  ipcMain.handle('backup:cloudOpen', () => {
+  handle('backup:cloudOpen', () => {
     const folder = cloudFolder();
     if (!folder) return;
     fs.mkdirSync(folder, { recursive: true });
     shell.openPath(folder);
   });
-  ipcMain.handle('backup:openFolder', () => {
+  handle('backup:openFolder', () => {
     fs.mkdirSync(backupDir(), { recursive: true });
     shell.openPath(backupDir());
   });
-  ipcMain.handle('backup:restore', async () => {
+  handle('backup:restore', async () => {
     if (config.mode !== 'host') return { ok: false, error: 'HOST_ONLY' };
     const pick = await dialog.showOpenDialog(win, {
       defaultPath: backupDir(),
@@ -611,8 +721,8 @@ function registerIpc() {
       return { ok: false, error: err.code || 'GDRIVE_API', detail: err.message };
     }
   };
-  ipcMain.handle('gdrive:status', () => gdrive.status());
-  ipcMain.handle('gdrive:set', (_e, patch) =>
+  handle('gdrive:status', () => gdrive.status());
+  handle('gdrive:set', (_e, patch) =>
     gdriveCall(async () => {
       const keys = ['clientId', 'clientSecret', 'enabled'];
       const next = Object.fromEntries(Object.entries(patch || {}).filter(([k]) => keys.includes(k)));
@@ -631,10 +741,10 @@ function registerIpc() {
       return gdrive.status();
     })
   );
-  ipcMain.handle('gdrive:connect', () => gdriveCall(() => gdrive.connect()));
-  ipcMain.handle('gdrive:disconnect', () => gdriveCall(() => gdrive.disconnect().then(() => gdrive.status())));
+  handle('gdrive:connect', () => gdriveCall(() => gdrive.connect()));
+  handle('gdrive:disconnect', () => gdriveCall(() => gdrive.disconnect().then(() => gdrive.status())));
   // A fresh backup, sent now (also when automatic sending is off).
-  ipcMain.handle('gdrive:uploadNow', () =>
+  handle('gdrive:uploadNow', () =>
     gdriveCall(async () => {
       const file = createBackup('manual', { drive: false });
       await gdrive.upload(file, { force: true });
@@ -642,9 +752,9 @@ function registerIpc() {
       return gdrive.status();
     })
   );
-  ipcMain.handle('gdrive:list', () => gdriveCall(() => gdrive.list()));
+  handle('gdrive:list', () => gdriveCall(() => gdrive.list()));
   // Puts a backup from Drive back: downloaded next to the local backups, then restored like one of them.
-  ipcMain.handle('gdrive:restore', (_e, { id, name }) =>
+  handle('gdrive:restore', (_e, { id, name }) =>
     gdriveCall(async () => {
       if (!/^fcmanager-[\w.-]+\.db$/.test(String(name))) throw Object.assign(new Error('bad name'), { code: 'GDRIVE_API' });
       fs.mkdirSync(backupDir(), { recursive: true });
@@ -655,7 +765,7 @@ function registerIpc() {
     })
   );
 
-  ipcMain.handle('file:save', async (_e, { defaultName, content, filters }) => {
+  handle('file:save', async (_e, { defaultName, content, filters }) => {
     const r = await dialog.showSaveDialog(win, { defaultPath: defaultName, filters });
     if (r.canceled || !r.filePath) return { ok: false, error: 'CANCELLED' };
     fs.writeFileSync(r.filePath, content, 'utf8');
@@ -663,7 +773,7 @@ function registerIpc() {
   });
 
   // Saves a file the renderer already has as base64 (e.g. a filled Word contract) and opens it.
-  ipcMain.handle('file:saveBinary', async (_e, { defaultName, data, filters }) => {
+  handle('file:saveBinary', async (_e, { defaultName, data, filters }) => {
     const r = process.env.FC_EXPORT_DIR
       ? { filePath: path.join(process.env.FC_EXPORT_DIR, defaultName) }
       : await dialog.showSaveDialog(win, { defaultPath: defaultName, filters });
@@ -678,7 +788,7 @@ function registerIpc() {
   });
 
   // Opens a stored document (e.g. a student's medical certificate) with its usual program.
-  ipcMain.handle('file:openTemp', async (_e, { name, data }) => {
+  handle('file:openTemp', async (_e, { name, data }) => {
     try {
       const dir = path.join(app.getPath('temp'), 'FC Manager');
       fs.mkdirSync(dir, { recursive: true });
@@ -698,13 +808,18 @@ function registerIpc() {
   });
 
   // Prints a stored document (e.g. an absence application) on the default printer with its usual program.
-  ipcMain.handle('file:print', async (_e, { name, data }) => {
+  handle('file:print', async (_e, { name, data }) => {
     try {
       const dir = path.join(app.getPath('temp'), 'FC Manager');
       fs.mkdirSync(dir, { recursive: true });
       const safe = String(name || 'document').replace(/[\\/:*?"<>|]+/g, '_').slice(-120);
       const file = path.join(dir, `${Date.now()}-${safe}`);
       fs.writeFileSync(file, Buffer.from(data, 'base64'));
+      // Testing (FC_EXPORT_DIR): keep the file there instead of sending it to the printer.
+      if (process.env.FC_EXPORT_DIR) {
+        fs.copyFileSync(file, path.join(process.env.FC_EXPORT_DIR, `print-file-${safe}`));
+        return { ok: true };
+      }
       await new Promise((resolve, reject) =>
         require('child_process').execFile(
           'powershell.exe',
@@ -721,7 +836,7 @@ function registerIpc() {
 
   // A Word file with Word's own print screen (preview, printer, copies) instead of printing straight away.
   // Without Word, the file just opens in its usual program.
-  ipcMain.handle('file:printDialog', async (_e, { name, data }) => {
+  handle('file:printDialog', async (_e, { name, data }) => {
     const dir = path.join(app.getPath('temp'), 'FC Manager');
     fs.mkdirSync(dir, { recursive: true });
     const safe = String(name || 'document.docx').replace(/[\\/:*?"<>|]+/g, '_').slice(-120);
@@ -763,7 +878,7 @@ function registerIpc() {
   });
 
   // Import from another program: pick one or more Excel/CSV files (e.g. one per team) and read them as rows of text.
-  ipcMain.handle('import:read', async () => {
+  handle('import:read', async () => {
     // FC_IMPORT_FILE (testing, several separated by "|"): read without the file dialog.
     let paths = process.env.FC_IMPORT_FILE ? process.env.FC_IMPORT_FILE.split('|') : null;
     if (!paths) {
@@ -790,7 +905,7 @@ function registerIpc() {
 
   // «Արտահանել տեղափոխման համար»: a zip with transfer.json (all the data), the uploaded documents in files/,
   // and students.xlsx (the same students as a readable table, also importable on its own).
-  ipcMain.handle('transfer:save', async (_e, { defaultName, data, xlsx }) => {
+  handle('transfer:save', async (_e, { defaultName, data, xlsx }) => {
     const r = process.env.FC_EXPORT_DIR
       ? { filePath: path.join(process.env.FC_EXPORT_DIR, defaultName) }
       : await dialog.showSaveDialog(win, { defaultPath: defaultName, filters: [{ name: 'FC Manager', extensions: ['zip'] }] });
@@ -821,7 +936,7 @@ function registerIpc() {
     return { ok: true, result: r.filePath };
   });
 
-  ipcMain.handle('xlsx:save', async (_e, report) => {
+  handle('xlsx:save', async (_e, report) => {
     // FC_EXPORT_DIR (testing) saves straight into that folder without asking.
     const r = process.env.FC_EXPORT_DIR
       ? { filePath: path.join(process.env.FC_EXPORT_DIR, report.defaultName) }
@@ -838,7 +953,7 @@ function registerIpc() {
     return { ok: true, result: r.filePath };
   });
 
-  ipcMain.handle('pdf:export', async (_e, { html, defaultName }) => {
+  handle('pdf:export', async (_e, { html, defaultName }) => {
     const r = await dialog.showSaveDialog(win, { defaultPath: defaultName, filters: [{ name: 'PDF', extensions: ['pdf'] }] });
     if (r.canceled || !r.filePath) return { ok: false, error: 'CANCELLED' };
     const w = await renderHtmlWindow(html);
@@ -855,7 +970,7 @@ function registerIpc() {
   // Printing: the page is made into a PDF and opened in the computer's PDF viewer (Edge, Acrobat…), which
   // shows it and prints it with a real preview, printer choice and copies. (Electron's own print window says
   // the app doesn't support a preview.) Without a PDF viewer, the print window as before.
-  ipcMain.handle('print', async (_e, { html }) => {
+  handle('print', async (_e, { html }) => {
     const w = await renderHtmlWindow(html);
     // A page that sizes itself to fit (e.g. the attendance form: the whole group on one page) does it now.
     await w.webContents
@@ -896,8 +1011,8 @@ function registerIpc() {
 
   // The printers installed in Windows (for choosing the receipt printer).
   // The network address of a Windows printer (for the direct network mode).
-  ipcMain.handle('printers:address', (_e, name) => escpos.printerAddress(name));
-  ipcMain.handle('printers:list', async () =>
+  handle('printers:address', (_e, name) => escpos.printerAddress(name));
+  handle('printers:list', async () =>
     (await win.webContents.getPrintersAsync()).map((p) => ({ name: p.name, displayName: p.displayName || p.name, isDefault: !!p.isDefault }))
   );
 
@@ -910,7 +1025,7 @@ function registerIpc() {
   //            that swap in their own fonts, which have no Armenian letters and print blank paper)
   //   imageA — the same picture on the driver's own paper size (drivers that ignore a custom page size)
   //   text   — the receipt as text on a roll-long page (the first way; sharpest where the driver allows it)
-  ipcMain.handle('thermal:print', async (_e, { html }) => {
+  handle('thermal:print', async (_e, { html }) => {
     const t = config.thermal || {};
     if (!t.printer && !t.host && !process.env.FC_EXPORT_DIR) return { ok: false, error: 'THERMAL_NOT_SET' };
     const widthMm = Number(t.width) || 80;
@@ -923,7 +1038,11 @@ function registerIpc() {
       if (!addr) return { ok: false, error: 'THERMAL_NO_HOST' };
       try {
         const img = await receiptImage(html, widthMm, escpos.headDots(widthMm));
-        if (process.env.FC_EXPORT_DIR) fs.writeFileSync(path.join(process.env.FC_EXPORT_DIR, `thermal-${stamp}.png`), img.png);
+        // Testing (FC_EXPORT_DIR): the picture is kept there and nothing goes to the printer.
+        if (process.env.FC_EXPORT_DIR) {
+          fs.writeFileSync(path.join(process.env.FC_EXPORT_DIR, `thermal-${stamp}.png`), img.png);
+          return { ok: true, mode };
+        }
         await escpos.sendRaw(addr.host, addr.port, escpos.rasterJob(img, { cut: t.cut !== false }));
         return { ok: true, mode };
       } catch (err) {
@@ -960,11 +1079,11 @@ function registerIpc() {
     }
   });
 
-  ipcMain.handle('shell:openPath', (_e, p) => shell.openPath(p));
+  handle('shell:openPath', (_e, p) => shell.openPath(p));
 
   // WhatsApp / Viber: opens the parent's chat in the app installed on this PC.
   // WhatsApp gets the text in the box; Viber links can't carry text, so it goes to the clipboard to paste.
-  ipcMain.handle('messenger:open', async (_e, { app: which, phone, text }) => {
+  handle('messenger:open', async (_e, { app: which, phone, text }) => {
     const digits = String(phone || '').replace(/\D/g, '');
     if (digits.length < 8) return { ok: false, error: 'NO_PHONE' };
     // Testing (FC_EXPORT_DIR): write the link that would open instead of opening it.

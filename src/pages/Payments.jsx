@@ -2,7 +2,7 @@ import { Fragment, useEffect, useMemo, useState } from 'react';
 import { Plus, Download, Wallet, CheckCircle2, Pencil, Ban, RotateCcw, Trash2, Printer, Package, Receipt, Undo2, FileText } from 'lucide-react';
 import { useT, monthName } from '../i18n';
 import { feeShares as holidayShares, freeHalves, parseHolidays } from '../holidays';
-import { useCan } from '../components/Auth';
+import { useAuth, useCan } from '../components/Auth';
 import { useColumns } from '../components/Columns';
 import { SendRemindersButton } from '../components/Notify';
 import { useHdm, fullPrices } from '../components/Hdm';
@@ -39,12 +39,13 @@ function PaidAtField({ value, onChange, discount, onDiscount, lines = [] }) {
   const t = useT();
   const hdm = useHdm();
   const club = useClub();
+  const otherDays = useCan('payments.past'); // without it, payments are dated today
   const pcts = [...new Set(lines.map((l) => pctOff(l.full, l.paid)))];
   const first = lines.find((l) => pctOff(l.full, l.paid) > 0);
   return (
     <Field label={t('payments.paidAt')}>
       <div className="row nowrap" style={{ gap: 12 }}>
-        <input className="input" type="date" value={value} onChange={(e) => onChange(e.target.value)} style={{ width: 160 }} />
+        <input className="input" type="date" value={value} disabled={!otherDays} title={otherDays ? '' : t('perm.payments.past.hint')} onChange={(e) => onChange(e.target.value)} style={{ width: 160 }} />
         {hdm.enabled && (
           <label className="check nowrap" title={t('payments.discountPayHint')}>
             <input type="checkbox" checked={discount.on} onChange={(e) => onDiscount({ ...discount, on: e.target.checked })} />
@@ -116,7 +117,7 @@ export default function Payments({ route, nav }) {
 }
 
 function ChargesView({ preset, nav }) {
-  const canEdit = useCan('payments');
+  const auth = useAuth();
   const t = useT();
   const [status, setStatus] = useState(preset || 'all');
   const [kind, setKind] = useState('');
@@ -137,7 +138,7 @@ function ChargesView({ preset, nav }) {
   const total = rows.reduce((s, c) => s + c.amount, 0);
 
   const exportCsv = () =>
-    saveCsv(`payments-${todayIso()}.csv`, [
+    saveCsv(`payments-${todayIso()}.csv`, 'payments.excel', [
       [t('payments.student'), t('students.group'), t('payments.description'), t('payments.dueDate'), t('payments.amount'),
         t('payments.status'), t('payments.paidAt'), t('payments.method')],
       ...rows.map((c) => [`${c.first_name} ${c.last_name}`, c.group_name, chargeLabel(t, c), fmtDate(c.due_date), c.amount,
@@ -153,11 +154,13 @@ function ChargesView({ preset, nav }) {
           options={['all', 'unpaid', 'overdue', 'paid', 'waived'].map((v) => ({ value: v, label: t(`chargeStatus.${v}`) }))}
         />
         <div className="grow" />
-        {canEdit && status === 'overdue' && rows.length > 0 && <SendRemindersButton />}
-        <Button icon={Download} onClick={exportCsv} disabled={!rows.length}>
-          {t('common.exportCsv')}
-        </Button>
-        {canEdit && (
+        {auth.can('payments.remind') && status === 'overdue' && rows.length > 0 && <SendRemindersButton />}
+        {auth.can('payments.excel') && (
+          <Button icon={Download} onClick={exportCsv} disabled={!rows.length}>
+            {t('common.exportCsv')}
+          </Button>
+        )}
+        {auth.canAny('payments.charge', 'payments.take') && (
           <Button variant="primary" icon={Plus} onClick={() => setCreating(true)}>
             {t('payments.newCharge')}
           </Button>
@@ -214,7 +217,11 @@ function ChargesView({ preset, nav }) {
 }
 
 export function ChargesTable({ rows, showStudent, selectable, onOpenStudent, student, tools }) {
-  const canEdit = useCan('payments');
+  const auth = useAuth();
+  const canTake = auth.can('payments.take');
+  // The payment's window holds changing, cancelling, waiving, deleting and its receipts.
+  const canOpen = auth.canAny('payments.edit', 'payments.cancel', 'payments.waive', 'payments.delete', 'payments.hdm', 'payments.hdmReturn', 'payments.receipt');
+  const canDelete = (c) => auth.can('payments.delete') && (!isPastPaid(c) || auth.can('payments.past'));
   const t = useT();
   const act = useAction();
   const confirm = useConfirm();
@@ -242,7 +249,7 @@ export function ChargesTable({ rows, showStudent, selectable, onOpenStudent, stu
       id: 'select',
       label: '',
       fixed: true,
-      available: !!selectable && canEdit,
+      available: !!selectable && canTake,
       head: () => (
         <th style={{ width: 36 }}>
           <input
@@ -312,7 +319,7 @@ export function ChargesTable({ rows, showStudent, selectable, onOpenStudent, stu
                 title={t('payments.openApplication')}
                 onClick={(e) => {
                   e.stopPropagation();
-                  act(() => openStoredFile(c.absence_file_id));
+                  act(() => openStoredFile(c.absence_file_id, 'payments.view'));
                 }}
               >
                 <FileText size={13} /> {applicationLabel(t, c.absence_from, c.absence_to)}
@@ -386,20 +393,22 @@ export function ChargesTable({ rows, showStudent, selectable, onOpenStudent, stu
       id: 'actions',
       label: '',
       fixed: true,
-      available: canEdit,
+      available: canTake || canOpen,
       head: () => <th className="actions" />,
       cell: (c) => (
         <td className="actions">
           <div className="row" style={{ gap: 4, justifyContent: 'flex-end' }}>
-            {c.status === 'unpaid' && (
+            {c.status === 'unpaid' && canTake && (
               <Button size="sm" icon={CheckCircle2} onClick={() => setPaying([c])}>
                 {t('payments.pay')}
               </Button>
             )}
-            <Button size="sm" icon={Pencil} onClick={() => setEditing(c)}>
-              {t('common.edit')}
-            </Button>
-            <Button size="sm" variant="ghost" icon={Trash2} title={t('common.delete')} onClick={() => removeCharge(c)} />
+            {canOpen && (
+              <Button size="sm" icon={Pencil} onClick={() => setEditing(c)}>
+                {auth.can('payments.edit') && (!isPastPaid(c) || auth.can('payments.past')) ? t('common.edit') : t('common.open')}
+              </Button>
+            )}
+            {canDelete(c) && <Button size="sm" variant="ghost" icon={Trash2} title={t('common.delete')} onClick={() => removeCharge(c)} />}
           </div>
         </td>
       ),
@@ -413,12 +422,12 @@ export function ChargesTable({ rows, showStudent, selectable, onOpenStudent, stu
 
   const printReceipt = (c) => {
     const name = student ? `${student.first_name} ${student.last_name}` : `${c.first_name} ${c.last_name}`;
-    window.fc.print({ html: receiptHtml(t, club, c, name) });
+    window.fc.print({ html: receiptHtml(t, club, c, name), perm: 'payments.receipt' });
   };
 
   return (
     <>
-      {canEdit && selectable && selRows.length > 0 && (
+      {canTake && selectable && selRows.length > 0 && (
         <div className="card card-pad row" style={{ marginBottom: 12, padding: '10px 16px', background: 'var(--accent-soft)' }}>
           <span className="strong">{t('payments.selected', { n: selRows.length })}</span>
           <Money value={selRows.reduce((s, r) => s + r.amount, 0)} className="strong" />
@@ -561,7 +570,8 @@ export function PayModal({ charges, student, onClose, onDone }) {
   // The amount actually received for each charge; starts at the amount due and can be changed.
   const [amounts, setAmounts] = useState(() => Object.fromEntries(charges.map((c) => [c.id, String(c.amount)])));
   const total = charges.reduce((s, c) => s + (Number(amounts[c.id]) || 0), 0);
-  const valid = charges.every((c) => Number(amounts[c.id]) > 0);
+  const canDiscount = useCan('payments.waive'); // taking less than owed
+  const valid = charges.every((c) => Number(amounts[c.id]) > 0 && (canDiscount || Number(amounts[c.id]) >= c.amount));
   const nameOf = (c) => (c.first_name ? `${c.first_name} ${c.last_name}` : student ? `${student.first_name} ${student.last_name}` : '');
   const pay = async () => {
     // Real ՀԴՄ: one receipt per student first; that student's payment is saved only when the ՀԴՄ confirms.
@@ -666,6 +676,8 @@ export function PayModal({ charges, student, onClose, onDone }) {
                   step="500"
                   style={{ width: 130, textAlign: 'right', fontWeight: 600 }}
                   value={amounts[c.id]}
+                  title={canDiscount ? '' : t('perm.payments.waive.hint')}
+                  min={canDiscount ? 0 : c.amount}
                   autoFocus={charges.length === 1}
                   onFocus={(e) => e.target.select()}
                   onChange={(e) => setAmounts({ ...amounts, [c.id]: e.target.value })}
@@ -706,7 +718,11 @@ export function ChargeModal({ studentId: fixedStudent, onClose }) {
   const [description, setDescription] = useState('');
   const [period, setPeriod] = useState(currentPeriod());
   const [dueDate, setDueDate] = useState(todayIso());
-  const [paid, setPaid] = useState(true);
+  const auth = useAuth();
+  const mayTake = auth.can('payments.take');
+  const mayCharge = auth.can('payments.charge');
+  const mayDiscount = auth.can('payments.waive');
+  const [paid, setPaid] = useState(mayTake);
   const [method, setMethod] = useState(PAYMENT_METHODS[0]);
   const [note, setNote] = useState('');
   const hdm = useHdm();
@@ -766,7 +782,11 @@ export function ChargeModal({ studentId: fixedStudent, onClose }) {
       footer={
         <>
           <Button onClick={onClose}>{t('common.cancel')}</Button>
-          <Button variant="primary" onClick={save} disabled={!studentId || !(Number(amount) > 0)}>
+          <Button
+            variant="primary"
+            onClick={save}
+            disabled={!studentId || !(Number(amount) > 0) || (paid && kind === 'monthly' && !mayDiscount && student && Number(amount) < studentMonthFee(student.monthly_fee, period, club, student.join_date))}
+          >
             {t('common.save')}
           </Button>
         </>
@@ -838,10 +858,12 @@ export function ChargeModal({ studentId: fixedStudent, onClose }) {
           )}
         </div>
 
-        <label className="check">
-          <input type="checkbox" checked={paid} onChange={(e) => setPaid(e.target.checked)} />
-          {t('payments.alreadyPaid')}
-        </label>
+        {mayTake && mayCharge && (
+          <label className="check">
+            <input type="checkbox" checked={paid} onChange={(e) => setPaid(e.target.checked)} />
+            {t('payments.alreadyPaid')}
+          </label>
+        )}
         {paid && <MethodPicker value={method} onChange={setMethod} />}
         <Field label={t('payments.note')}>
           <input className="input" value={note} onChange={(e) => setNote(e.target.value)} />
@@ -923,6 +945,10 @@ function EditChargeModal({ charge, onClose, onPrint }) {
   const confirm = useConfirm();
   const monthly = charge.kind === 'monthly';
   const lock = useEditLock(`student:${charge.student_id}`);
+  const auth = useAuth();
+  // An earlier day's payment needs «payments.past» as well.
+  const dayOk = !isPastPaid(charge) || auth.can('payments.past');
+  const canEdit = auth.can('payments.edit') && dayOk;
   const [f, setF] = useState({
     amount: charge.amount,
     description: charge.description || '',
@@ -962,7 +988,7 @@ function EditChargeModal({ charge, onClose, onPrint }) {
       footer={
         <>
           <div className="left row" style={{ gap: 6 }}>
-            {charge.status === 'paid' && hdm.enabled && !charge.hdm_receipt && (
+            {charge.status === 'paid' && hdm.enabled && !charge.hdm_receipt && auth.can('payments.hdm') && (
               <Button
                 icon={Receipt}
                 onClick={() => {
@@ -979,7 +1005,7 @@ function EditChargeModal({ charge, onClose, onPrint }) {
                 {t('hdm.printNow')}
               </Button>
             )}
-            {charge.status === 'paid' && hdm.device && charge.hdm_receipt && (
+            {charge.status === 'paid' && hdm.device && charge.hdm_receipt && auth.can('payments.hdmReturn') && (
               <Button
                 icon={Undo2}
                 onClick={async () => {
@@ -989,7 +1015,7 @@ function EditChargeModal({ charge, onClose, onPrint }) {
                 {t('hdm.return')}
               </Button>
             )}
-            {charge.status === 'paid' && receipt.available && (
+            {charge.status === 'paid' && receipt.available && auth.can('payments.receipt') && (
               <Button
                 icon={Printer}
                 onClick={() =>
@@ -1005,12 +1031,12 @@ function EditChargeModal({ charge, onClose, onPrint }) {
                 {t('thermal.print')}
               </Button>
             )}
-            {charge.status === 'paid' && (
+            {charge.status === 'paid' && auth.can('payments.receipt') && (
               <Button icon={Printer} onClick={() => onPrint(charge)}>
                 {t('payments.printReceipt')}
               </Button>
             )}
-            {charge.status === 'paid' && (
+            {charge.status === 'paid' && auth.can('payments.cancel') && dayOk && (
               <Button
                 icon={RotateCcw}
                 onClick={async () =>
@@ -1021,17 +1047,17 @@ function EditChargeModal({ charge, onClose, onPrint }) {
                 {t('payments.markUnpaid')}
               </Button>
             )}
-            {charge.status === 'unpaid' && (
+            {charge.status === 'unpaid' && auth.can('payments.waive') && (
               <Button icon={Ban} onClick={() => run(() => rpc('charges.waive', { id: charge.id }), t('common.saved'))}>
                 {t('payments.waive')}
               </Button>
             )}
-            {charge.status === 'waived' && (
+            {charge.status === 'waived' && auth.can('payments.waive') && (
               <Button icon={RotateCcw} onClick={() => run(() => rpc('charges.markUnpaid', { id: charge.id }), t('common.saved'))}>
                 {t('payments.restore')}
               </Button>
             )}
-            <Button
+            {auth.can('payments.delete') && dayOk && <Button
               variant="danger"
               icon={Trash2}
               onClick={async () =>
@@ -1043,28 +1069,34 @@ function EditChargeModal({ charge, onClose, onPrint }) {
               }
             >
               {t('common.delete')}
-            </Button>
+            </Button>}
           </div>
           <div className="row nowrap" style={{ gap: 10, marginLeft: 'auto' }}>
-            <Button onClick={onClose}>{t('common.cancel')}</Button>
-            <Button variant="primary" onClick={save} disabled={!(Number(f.amount) > 0) || !absenceOk(f.absence)}>
-              {t('common.save')}
-            </Button>
+            <Button onClick={onClose}>{canEdit ? t('common.cancel') : t('common.close')}</Button>
+            {canEdit && (
+              <Button variant="primary" onClick={save} disabled={!(Number(f.amount) > 0) || !absenceOk(f.absence)}>
+                {t('common.save')}
+              </Button>
+            )}
           </div>
         </>
       }
     >
-      <div className="stack">
+      <fieldset className="stack plain-fieldset" disabled={!canEdit}>
         <div className="grid-2">
           <Field label={t('payments.amount')}>
             <input className="input" type="number" min="0" value={f.amount} onChange={set('amount')} />
           </Field>
           {charge.status === 'paid' && (
             <Field label={t('payments.paidAt')}>
-              <input className="input" type="date" value={f.paidAt} onChange={set('paidAt')} />
+              <input className="input" type="date" value={f.paidAt} disabled={!auth.can('payments.past')} onChange={set('paidAt')} />
             </Field>
           )}
-          <AbsencePicker value={f.absence} month={f.period || (charge.due_date || '').slice(0, 7)} onChange={(v) => setF({ ...f, absence: v })} />
+          {(auth.can('payments.waive') || f.absence) && (
+            <fieldset className="plain-fieldset span-full" disabled={!auth.can('payments.waive')}>
+              <AbsencePicker value={f.absence} month={f.period || (charge.due_date || '').slice(0, 7)} onChange={(v) => setF({ ...f, absence: v })} />
+            </fieldset>
+          )}
           {!monthly && (
             <Field label={t('payments.description')} className="span-2">
               <input className="input" value={f.description} onChange={set('description')} />
@@ -1103,10 +1135,13 @@ function EditChargeModal({ charge, onClose, onPrint }) {
             <input className="input" value={f.note} onChange={set('note')} />
           </Field>
         </div>
-      </div>
+      </fieldset>
     </Modal>
   );
 }
+
+// A payment taken on an earlier day (changing, cancelling or deleting it needs «payments.past»).
+const isPastPaid = (c) => c.status === 'paid' && !!c.paid_at && String(c.paid_at).slice(0, 10) < todayIso();
 
 // ------------------------------------------------------------------ receipt
 function receiptHtml(t, club, c, studentName) {
@@ -1157,6 +1192,7 @@ export function MonthlyPaymentModal({ student, charges, onClose }) {
   const [paidAt, setPaidAt] = useState(todayIso());
   const [note, setNote] = useState('');
   const [absence, setAbsence] = useState(null);
+  const canDiscount = useCan('payments.waive');
   const [discount, setDiscount] = useState(() => ({ on: !!CATEGORY_DISCOUNT[student.category] }));
   const groupOf = useGroupOf();
   const group = groupOf(student.group_id);
@@ -1219,7 +1255,12 @@ export function MonthlyPaymentModal({ student, charges, onClose }) {
       footer={
         <>
           <Button onClick={onClose}>{t('common.cancel')}</Button>
-          <Button variant="primary" icon={CheckCircle2} onClick={save} disabled={!selected.length || !(Number(amount) > 0) || !absenceOk(absence)}>
+          <Button
+            variant="primary"
+            icon={CheckCircle2}
+            onClick={save}
+            disabled={!selected.length || !(Number(amount) > 0) || !absenceOk(absence) || (!canDiscount && Number(amount) < Number(student.monthly_fee))}
+          >
             {t('payments.confirmPaid')} <Money value={total} />
           </Button>
         </>
@@ -1249,7 +1290,16 @@ export function MonthlyPaymentModal({ student, charges, onClose }) {
         <div className="grid-2">
           <div className="span-2 row" style={{ gap: 16, alignItems: 'flex-start' }}>
             <Field label={t('payments.amountPerMonth')}>
-              <input className="input" type="number" min="0" step="500" style={{ width: 150 }} value={amount} onChange={(e) => setAmount(e.target.value)} />
+              <input
+                className="input"
+                type="number"
+                min={canDiscount ? 0 : student.monthly_fee}
+                step="500"
+                style={{ width: 150 }}
+                value={amount}
+                title={canDiscount ? '' : t('perm.payments.waive.hint')}
+                onChange={(e) => setAmount(e.target.value)}
+              />
             </Field>
             <PaidAtField
               value={paidAt}
@@ -1269,7 +1319,7 @@ export function MonthlyPaymentModal({ student, charges, onClose }) {
               {holidays.map((p) => t('payments.holidayShare', { month: monthName(t, p), n: shares[p] }) + ` — ${money(amountOf(p), club.currency)}`).join(' · ')}
             </div>
           )}
-          <AbsencePicker value={absence} month={selected[0]} onChange={setAbsence} />
+          {canDiscount && <AbsencePicker value={absence} month={selected[0]} onChange={setAbsence} />}
           <Field label={t('payments.method')} className="span-2">
             <MethodPicker value={method} onChange={setMethod} />
           </Field>

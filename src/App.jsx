@@ -33,19 +33,25 @@ import { StudentFormHost } from './components/StudentFormHost';
 import { UpdateNotice, UpdateScreen, useUpdateStatus } from './components/Updates';
 import { AuthGate, useAuth } from './components/Auth';
 
-// section: the right needed to see the menu (see Settings → Users). Settings is always shown (This computer tab).
+// perm: the tick needed to see the menu (see Settings → Users). Settings is always shown (This computer tab).
+// Students opens for anyone who sees students, payments, attendance or contracts (their lists start there).
 const NAV = [
-  { id: 'students', icon: Users, section: 'students' },
-  { id: 'dashboard', icon: LayoutDashboard, section: 'reports' },
-  { id: 'groups', icon: Shapes, section: 'groups' },
-  { id: 'attendance', icon: CalendarCheck, section: 'attendance' },
-  { id: 'schedule', icon: CalendarClock, section: 'schedule' },
-  { id: 'contracts', icon: FileSignature, section: 'contracts' },
+  { id: 'students', icon: Users, perms: ['students.view', 'payments.view'] },
+  { id: 'dashboard', icon: LayoutDashboard, perms: ['reports.dashboard'] },
+  { id: 'groups', icon: Shapes, perms: ['groups.view'] },
+  { id: 'attendance', icon: CalendarCheck, perms: ['attendance.view'] },
+  { id: 'schedule', icon: CalendarClock, perms: ['schedule.view'] },
+  { id: 'contracts', icon: FileSignature, perms: ['contracts.view'] },
   { id: 'settings', icon: SettingsIcon },
 ];
 
 export default function App() {
-  const [appState, setAppState] = useState(null);
+  const [appState, setState] = useState(null);
+  // Only a real state is kept: a refused change (e.g. { ok: false, error: 'FORBIDDEN' }) leaves the screen as it was.
+  const setAppState = (s) => {
+    if (s && s.config) return setState(s);
+    if (s && s.error) window.dispatchEvent(new CustomEvent('fc-refused', { detail: s.error }));
+  };
 
   useEffect(() => {
     window.fc.state().then(setAppState);
@@ -141,7 +147,7 @@ function Shell({ appState, setAppState }) {
 
 function SignedIn({ appState, setAppState, route, nav, online }) {
   const auth = useAuth();
-  const allowed = NAV.filter((n) => !n.section || auth.can(n.section, 'view'));
+  const allowed = NAV.filter((n) => !n.perms || auth.canAny(...n.perms));
   // A page this user can't open (e.g. after signing in as someone else) falls back to the first allowed one.
   const shown = allowed.some((n) => n.id === route.page) ? route : { page: allowed[0].id };
   const operator = auth.user ? auth.user.full_name || auth.user.username : appState.config.operator;

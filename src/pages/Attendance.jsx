@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, ChevronLeft, ChevronRight, CheckCheck, Plus, Trash2, Users, UserRound, Shapes, Save, CalendarCheck, Printer, FileSpreadsheet, FilterX } from 'lucide-react';
 import { useT, monthName } from '../i18n';
-import { useCan, useCanExcel } from '../components/Auth';
+import { useAuth, useCan } from '../components/Auth';
 import { useRpc, rpc, todayIso, currentPeriod, addMonths, daysInMonth, weekday, fmtDate, fmtDateTime, money } from '../lib';
 import { Badge, Button, Empty, Field, Loading, Modal, Money, SearchBox, Segmented, useAction, useClub, useConfirm } from '../components/ui';
 import { EditingMark, useEditLock, useLocks } from '../components/Locks';
@@ -150,7 +150,11 @@ function GroupCards({ nav }) {
 }
 
 function GroupSheet({ groupId, nav }) {
-  const canEdit = useCan('attendance');
+  const auth = useAuth();
+  const canEdit = auth.can('attendance.mark'); // marks
+  const canDays = auth.can('attendance.days'); // add / move training days
+  const canRemove = auth.can('attendance.deleteDays'); // remove days, clear the month
+  const changesSheet = canEdit || canDays || canRemove;
   const t = useT();
   const act = useAction();
   const confirm = useConfirm();
@@ -179,7 +183,7 @@ function GroupSheet({ groupId, nav }) {
   // One person marks a group's month at a time: taken at the first mark, kept while there are unsaved
   // marks, given back after 5 minutes without changes.
   const draftRef = useRef(0);
-  const lock = useEditLock(canEdit ? `attendance:${groupId}:${month}` : null, {
+  const lock = useEditLock(changesSheet ? `attendance:${groupId}:${month}` : null, {
     lazy: true,
     idleMs: 5 * 60 * 1000,
     keepWhile: () => draftRef.current > 0,
@@ -241,7 +245,7 @@ function GroupSheet({ groupId, nav }) {
   };
 
   const openMenu = async (e, payload) => {
-    if (!canEdit) return;
+    if (payload.add ? !canDays : !changesSheet) return;
     const r = e.currentTarget.getBoundingClientRect();
     if (!(await lock.ensure())) return;
     setMenu({ ...payload, x: Math.min(r.left, window.innerWidth - 250), y: r.bottom + 6 });
@@ -268,10 +272,12 @@ function GroupSheet({ groupId, nav }) {
         </div>
         <div className="spacer" />
         {lock.banner && <div style={{ flexBasis: '100%', order: 10 }}>{lock.banner}</div>}
-        <Button icon={Printer} onClick={() => setExporting(true)} disabled={!days.length || !students.length}>
-          {t('sheet.export')}
-        </Button>
-        {canEdit && (
+        {auth.canAny('attendance.print', 'attendance.excel') && (
+          <Button icon={Printer} onClick={() => setExporting(true)} disabled={!days.length || !students.length}>
+            {t('sheet.export')}
+          </Button>
+        )}
+        {canRemove && (
           <Button variant="danger" icon={Trash2} onClick={clearDays} disabled={!days.length}>
             {t('sheet.clearDays')}
           </Button>
@@ -336,11 +342,13 @@ function GroupSheet({ groupId, nav }) {
                       </button>
                     </th>
                   ))}
-                  <th className="day-col">
-                    <button className="day-btn add" onClick={(e) => openMenu(e, { add: true })} title={t('sheet.addDay')}>
-                      <Plus size={16} />
-                    </button>
-                  </th>
+                  {canDays && (
+                    <th className="day-col">
+                      <button className="day-btn add" onClick={(e) => openMenu(e, { add: true })} title={t('sheet.addDay')}>
+                        <Plus size={16} />
+                      </button>
+                    </th>
+                  )}
                 </tr>
               </thead>
               <tbody>
@@ -410,6 +418,7 @@ function GroupSheet({ groupId, nav }) {
           menu={menu}
           month={month}
           groupId={groupId}
+          can={{ mark: canEdit, days: canDays, remove: canRemove }}
           onAllPresent={(date) => setDraft((d) => ({ ...d, ...Object.fromEntries(students.map((s) => [`${s.id}|${date}`, 'present'])) }))}
           onClose={() => setMenu(null)}
         />
@@ -419,7 +428,8 @@ function GroupSheet({ groupId, nav }) {
 }
 
 // Popup for a training day (change date, everyone present, remove) or for adding a day.
-function DayMenu({ menu, month, groupId, onAllPresent, onClose }) {
+// can: { mark, days, remove } — what this user may do here (attendance ticks).
+function DayMenu({ menu, month, groupId, can, onAllPresent, onClose }) {
   const t = useT();
   const act = useAction();
   const confirm = useConfirm();
@@ -444,7 +454,7 @@ function DayMenu({ menu, month, groupId, onAllPresent, onClose }) {
 
   return (
     <div ref={ref} className="menu day-menu" style={{ position: 'fixed', left: menu.x, top: menu.y }}>
-      <div className="stack" style={{ gap: 8, padding: 8 }}>
+      {can.days && <div className="stack" style={{ gap: 8, padding: 8 }}>
         <label className="small muted">{menu.add ? t('sheet.addDay') : t('sheet.changeDate')}</label>
         <div className="row" style={{ gap: 6 }}>
           <input className="input" type="date" {...range} value={date} onChange={(e) => setDate(e.target.value)} />
@@ -459,11 +469,11 @@ function DayMenu({ menu, month, groupId, onAllPresent, onClose }) {
             {menu.add ? t('sheet.add') : t('common.save')}
           </Button>
         </div>
-      </div>
+      </div>}
       {menu.day && (
         <>
-          <hr />
-          <button
+          {can.days && (can.mark || can.remove) && <hr />}
+          {can.mark && <button
             onClick={() => {
               onAllPresent(menu.day.date);
               onClose();
@@ -471,8 +481,8 @@ function DayMenu({ menu, month, groupId, onAllPresent, onClose }) {
           >
             <CheckCheck size={15} />
             {t('att.allPresent')}
-          </button>
-          <button
+          </button>}
+          {can.remove && <button
             className="danger"
             onClick={async () => {
               const ok = await confirm({
@@ -484,7 +494,7 @@ function DayMenu({ menu, month, groupId, onAllPresent, onClose }) {
           >
             <Trash2 size={15} />
             {t('sheet.removeDay')}
-          </button>
+          </button>}
         </>
       )}
     </div>
@@ -494,7 +504,8 @@ function DayMenu({ menu, month, groupId, onAllPresent, onClose }) {
 // The coaches' paper form: chosen training days as empty columns to fill in Ներկա / Բացակա by hand.
 function ExportModal({ group, month, days, students, filled, onClose }) {
   const t = useT();
-  const canExcel = useCanExcel('attendance');
+  const canExcel = useCan('attendance.excel');
+  const canPrint = useCan('attendance.print');
   const act = useAction();
   const club = useClub();
   const today = todayIso();
@@ -522,7 +533,7 @@ function ExportModal({ group, month, days, students, filled, onClose }) {
 
   const excel = () =>
     act(async () => {
-      const r = await window.fc.saveXlsx({
+      const r = await window.fc.saveXlsx({ perm: 'attendance.excel', 
         kind: 'form',
         defaultName: `${group.name} ${dates.map((d) => fmtDate(d)).join(' ')}.xlsx`.replace(/[\\/:*?"<>|]/g, '_'),
         sheetName: group.name,
@@ -541,7 +552,7 @@ function ExportModal({ group, month, days, students, filled, onClose }) {
       return r;
     }, t('reports.saved'));
 
-  const print = () => act(() => window.fc.print({ html: formHtml({ title, lines, dates, rows, t, currency: club.currency, logo: club.club_logo }) }));
+  const print = () => act(() => window.fc.print({ perm: 'attendance.print', html: formHtml({ title, lines, dates, rows, t, currency: club.currency, logo: club.club_logo }) }));
 
   return (
     <Modal
@@ -556,9 +567,11 @@ function ExportModal({ group, month, days, students, filled, onClose }) {
               Excel
             </Button>
           )}
-          <Button variant="primary" icon={Printer} onClick={print} disabled={!dates.length}>
-            {t('sheet.print')}
-          </Button>
+          {canPrint && (
+            <Button variant="primary" icon={Printer} onClick={print} disabled={!dates.length}>
+              {t('sheet.print')}
+            </Button>
+          )}
         </>
       }
     >

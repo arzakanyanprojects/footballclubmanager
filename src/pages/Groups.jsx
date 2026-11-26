@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Plus, Shapes, Users, Pencil, Trash2, LayoutGrid, List, CalendarCheck, FileSpreadsheet } from 'lucide-react';
 import { GroupsExportModal } from '../components/GroupsExport';
 import { useT } from '../i18n';
-import { useCan, useCanExcel } from '../components/Auth';
+import { useAuth, useCan } from '../components/Auth';
 import { useRpc, rpc } from '../lib';
 import { Badge, Button, Empty, Field, Loading, Modal, Money, RowMenu, SearchBox, useAction, useConfirm, useToast } from '../components/ui';
 import { EditingMark, useEditLock, useLocks } from '../components/Locks';
@@ -10,8 +10,11 @@ import { EditingMark, useEditLock, useLocks } from '../components/Locks';
 const COLORS = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#6250d6', '#e34948'];
 
 export default function Groups({ nav }) {
-  const canEdit = useCan('groups');
-  const canExcel = useCanExcel('groups');
+  const auth = useAuth();
+  const canEdit = auth.can('groups.edit');
+  const canDelete = auth.can('groups.delete');
+  const canAdd = canEdit && !auth.groups; // someone limited to some groups doesn't make new ones
+  const canExcel = auth.can('groups.excel');
   const t = useT();
   const locks = useLocks();
   const act = useAction();
@@ -45,11 +48,11 @@ export default function Groups({ nav }) {
   const totalStudents = active.reduce((s, g) => s + g.student_count, 0);
 
   const menu = (g) =>
-    canEdit && (
+    (canEdit || canDelete) && (
       <RowMenu
         items={[
-          { label: t('common.edit'), icon: Pencil, onClick: () => setEditing(g) },
-          {
+          canEdit && { label: t('common.edit'), icon: Pencil, onClick: () => setEditing(g) },
+          canDelete && {
             label: t('common.delete'),
             icon: Trash2,
             danger: true,
@@ -57,7 +60,7 @@ export default function Groups({ nav }) {
               (await confirm({ text: t('groups.deleteConfirm', { name: g.name }), confirmLabel: t('common.delete') })) &&
               act(() => rpc('groups.delete', { id: g.id }), t('common.deleted')),
           },
-        ]}
+        ].filter(Boolean)}
       />
     );
   const copyPhone = (phone) => {
@@ -84,7 +87,7 @@ export default function Groups({ nav }) {
             {t('groupsExport.button')}
           </Button>
         )}
-        {canEdit && (
+        {canAdd && (
           <Button variant="primary" icon={Plus} onClick={() => setEditing({})}>
             {t('groups.add')}
           </Button>
@@ -118,7 +121,7 @@ export default function Groups({ nav }) {
             icon={Shapes}
             title={t('groups.empty')}
             text={t('groups.emptyText')}
-            action={canEdit && <Button variant="primary" icon={Plus} onClick={() => setEditing({})}>{t('groups.add')}</Button>}
+            action={canAdd && <Button variant="primary" icon={Plus} onClick={() => setEditing({})}>{t('groups.add')}</Button>}
           />
         </div>
       ) : rows.length === 0 ? (
@@ -302,6 +305,8 @@ function Progress({ done, total }) {
 
 function GroupModal({ group, onClose }) {
   const t = useT();
+  const mayFee = useCan('payments.fee');
+  const lockFee = !!group.id && !mayFee; // the group's fee and championship flag
   const act = useAction();
   const lock = useEditLock(group.id ? `group:${group.id}` : null);
   const [f, setF] = useState({ name: '', coach: '', coach_phone: '', assistant: '', assistant_phone: '', color: COLORS[0], archived: 0, monthly_fee: '', championship: 0, ...group });
@@ -342,11 +347,11 @@ function GroupModal({ group, onClose }) {
             <input className="input" value={f.assistant_phone || ''} onChange={set('assistant_phone')} />
           </Field>
           <Field label={t('groups.fullFee')} hint={t('groups.fullFeeHint')}>
-            <input className="input" type="number" min="0" step="500" value={f.monthly_fee || ''} onChange={set('monthly_fee')} />
+            <input className="input" type="number" min="0" step="500" value={f.monthly_fee || ''} onChange={set('monthly_fee')} disabled={lockFee} />
           </Field>
           <Field label=" ">
             <label className="check" style={{ height: 38 }} title={t('groups.championshipHint')}>
-              <input type="checkbox" checked={!!f.championship} onChange={(e) => set('championship')(e.target.checked)} />
+              <input type="checkbox" checked={!!f.championship} disabled={lockFee} onChange={(e) => set('championship')(e.target.checked)} />
               {t('groups.championship')}
             </label>
           </Field>

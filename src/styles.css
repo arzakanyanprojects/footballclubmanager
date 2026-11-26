@@ -925,3 +925,39 @@ fieldset:disabled .switch { cursor: default; opacity: 0.6; }
 .update-progress { width: 100%; display: flex; flex-direction: column; gap: 8px; }
 .update-progress .progress { height: 8px; border-radius: 99px; background: var(--surface-2); overflow: hidden; }
 .update-progress .progress > div { height: 100%; background: var(--accent); transition: width .3s; }
+
+/* Users → permissions: menu by menu, each opening to its ticks */
+.perms { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.perms-head { display: flex; align-items: center; gap: 10px; padding: 8px 14px; border-bottom: 1px solid var(--border); min-height: 42px; }
+.perm-changed-note { color: var(--warn); font-weight: 500; }
+.perm-section + .perm-section { border-top: 1px solid var(--border); }
+.perm-section-head { display: flex; align-items: center; gap: 12px; padding: 6px 14px 6px 8px; }
+.perm-section.open .perm-section-head { background: var(--surface-hover); }
+.perm-section-title { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; padding: 6px; border: 0; background: none; color: var(--text); font: inherit; cursor: pointer; text-align: left; border-radius: var(--radius-sm); }
+.perm-section-title:hover { background: var(--surface-hover); }
+.perm-count { font-size: 12px; padding: 1px 8px; border-radius: 99px; background: var(--neutral-soft); color: var(--text); font-variant-numeric: tabular-nums; }
+.perm-count.all { background: var(--good-soft); color: var(--good); }
+.perm-count.none { opacity: 0.6; }
+.perm-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--warn); margin-left: 6px; vertical-align: middle; }
+.perm-section-head .seg button { padding: 4px 10px; font-size: 12px; }
+.perm-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2px 18px; padding: 8px 14px 12px 40px; }
+.perm-item { display: flex; align-items: flex-start; gap: 9px; padding: 6px 8px; border-radius: var(--radius-sm); cursor: pointer; }
+.perm-item:hover { background: var(--surface-hover); }
+.perm-item input { margin-top: 3px; flex: none; }
+.perm-item.blocked .perm-label { opacity: 0.55; }
+.perm-item.changed { box-shadow: inset 3px 0 0 var(--warn); }
+.perm-label { display: block; font-size: 13.5px; }
+.perm-hint { display: block; font-size: 12px; opacity: 0.65; margin-top: 1px; line-height: 1.35; }
+.perm-groups { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.perm-chip { padding: 4px 10px; border: 1px solid var(--border); border-radius: 99px; font-size: 13px; }
+.perm-chip.on { border-color: var(--accent); background: var(--accent-soft); }
+@media (max-width: 760px) { .perm-list { grid-template-columns: 1fr; padding-left: 14px; } }
+/* Activity log: a user's / role's ticks added and taken away */
+.history-changes .perm-added { color: var(--good); }
+.history-changes .perm-removed { color: var(--bad); }
+/* Dashboard «Ակտիվ սաներ»: the training groups' and championship teams' students */
+.stat-split { display: flex; flex-direction: column; gap: 2px; margin: 4px 0 2px; font-size: 13px; }
+.stat-split > div { display: flex; justify-content: space-between; gap: 8px; min-width: 0; }
+/* «Ուսումնամարզական» is one long word: on a narrow card it is cut with «…», the number always shows. */
+.stat-split span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stat-split b { flex-shrink: 0; font-variant-numeric: tabular-nums; }

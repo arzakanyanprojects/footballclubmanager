@@ -453,6 +453,43 @@ const MIGRATIONS = [
   ALTER TABLE charges ADD COLUMN hdm_unit TEXT;
   ALTER TABLE charges ADD COLUMN hdm_full INTEGER;
   `,
+  // v37: permissions per action (electron/permissions.json): roles (named sets of ticks) and, per user, a role,
+  // their own changes on top of it and the groups they work with (NULL = all). Users' old rights
+  // (none / view / edit per menu) become the same ticks, so nobody gains or loses anything.
+  (db) => {
+    db.exec(`
+      CREATE TABLE roles (
+        id         INTEGER PRIMARY KEY,
+        name       TEXT NOT NULL,
+        perms      TEXT NOT NULL DEFAULT '[]',
+        created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+      );
+      ALTER TABLE users ADD COLUMN role_id INTEGER REFERENCES roles(id) ON DELETE SET NULL;
+      ALTER TABLE users ADD COLUMN group_ids TEXT;
+    `);
+    const { fromLegacy, ALL_PERMS } = require('./auth');
+    const update = db.prepare('UPDATE users SET rights = ? WHERE id = ?');
+    for (const u of db.prepare('SELECT id, rights FROM users').all()) {
+      let r = {};
+      try {
+        r = JSON.parse(u.rights || '{}') || {};
+      } catch {
+        r = {};
+      }
+      if (r.v !== 2) update.run(JSON.stringify({ v: 2, grant: fromLegacy(r), deny: [] }), u.id);
+    }
+    // Ready-made roles, to change or add to in Settings → Users.
+    const section = (...ids) => ALL_PERMS.filter((p) => ids.includes(p.split('.')[0]));
+    const roles = [
+      ['Մարզիչ', ['students.view', 'groups.view', 'attendance.view', 'attendance.mark', 'attendance.days', 'attendance.print', 'schedule.view', 'schedule.print']],
+      ['Գանձապահ', ['students.view', 'students.personal', 'groups.view', 'payments.view', 'payments.take', 'payments.charge', 'payments.hdm', 'payments.receipt',
+        'payments.remind', 'payments.excel', 'reports.dashboard']],
+      ['Մենեջեր', [...section('students', 'payments', 'attendance', 'schedule', 'groups', 'contracts', 'reports'), 'settings.club', 'settings.notify',
+        'settings.log', 'settings.logExcel']],
+    ];
+    const add = db.prepare('INSERT INTO roles (name, perms) VALUES (?, ?)');
+    for (const [name, perms] of roles) add.run(name, JSON.stringify(perms));
+  },
 ];
 
 function seed(db) {

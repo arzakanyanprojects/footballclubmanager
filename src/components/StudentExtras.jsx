@@ -16,8 +16,8 @@ export function RelatedTab({ student, related, nav }) {
   const t = useT();
   const act = useAction();
   const confirm = useConfirm();
-  const canEdit = useCan('students');
-  const canPay = useCan('payments');
+  const canEdit = useCan('students.link');
+  const canPay = useCan('payments.view');
   const [modal, setModal] = useState(null); // 'link'
   const studentForm = useStudentForm();
 
@@ -278,7 +278,21 @@ export function historyText(t, e, fmtMoney) {
   if (e.student_name && detail.startsWith(e.student_name)) detail = detail.slice(e.student_name.length).replace(/^\s*[—·-]\s*/, '');
   const label = t(`history.${e.action}`) === `history.${e.action}` ? t(`activity.${e.action}`) : t(`history.${e.action}`);
   const changes = e.action === 'student.updated' && Array.isArray(m.changes) ? m.changes.map(([k, a, b]) => [field(k), value(k, a), value(k, b)]) : [];
-  return { label, detail, changes: changes.map(([f, a, b]) => `${f}: ${a} → ${b}`), changeParts: changes };
+  // A user's or a role's permissions: the ticks added (+) and taken away (−), the role, the groups.
+  const lines = [];
+  if (/^(user|role)\.(create|update)$/.test(e.action)) {
+    const tick = (p) => `${t(`users.section_${p.split('.')[0]}`)} · ${t(`perm.${p}`)}`;
+    if (m.renamed) lines.push(`${m.renamed} → ${e.details || ''}`);
+    if (m.name) lines.push(`${t('users.name')}: ${m.name[0] || '—'} → ${m.name[1] || '—'}`);
+    if (m.admin !== undefined) lines.push(`${t('users.admin')}: ${m.admin ? '✓' : '✕'}`);
+    if (m.active !== undefined) lines.push(`${t('users.active')}: ${m.active ? '✓' : '✕'}`);
+    if (m.password) lines.push(t('users.newPassword'));
+    if ('role' in m) lines.push(`${t('roles.role')}: ${m.role || t('roles.none')}`);
+    if ('groups' in m) lines.push(`${t('users.groups')}: ${m.groups ? m.groups.join(', ') : t('users.groupsAll')}`);
+    (m.added || []).forEach((p) => lines.push(`+ ${tick(p)}`));
+    (m.removed || []).forEach((p) => lines.push(`− ${tick(p)}`));
+  }
+  return { label, detail, changes: [...changes.map(([f, a, b]) => `${f}: ${a} → ${b}`), ...lines], changeParts: changes, lines };
 }
 
 export function HistoryRow({ e, studentCell }) {
@@ -299,6 +313,15 @@ export function HistoryRow({ e, studentCell }) {
             {h.changeParts.map(([f, a, b], i) => (
               <div key={i}>
                 {f}: <span className="muted">{a}</span> → <span className="strong">{b}</span>
+              </div>
+            ))}
+          </div>
+        )}
+        {h.lines.length > 0 && (
+          <div className="history-changes">
+            {h.lines.map((l, i) => (
+              <div key={i} className={l.startsWith('+') ? 'perm-added' : l.startsWith('−') ? 'perm-removed' : ''}>
+                {l}
               </div>
             ))}
           </div>

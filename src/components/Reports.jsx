@@ -10,6 +10,7 @@ import { Button, Field, Modal, Segmented, useAction, useClub } from './ui';
 import { chargeLabel } from '../pages/Payments';
 import ReportExport from './ReportExport';
 import { GroupsExportModal } from './GroupsExport';
+import { useAuth } from './Auth';
 
 // params: 'period' (a month) · 'range' (from – to) · null. open: one of the existing export windows.
 const REPORTS = [
@@ -117,6 +118,7 @@ function sheetOf(kind, rows, t, club) {
 
 function ReportOptions({ report, onBack, onDone }) {
   const t = useT();
+  const canExport = useAuth().can('reports.excel');
   const act = useAction();
   const club = useClub();
   const [period, setPeriod] = useState(currentPeriod());
@@ -142,7 +144,7 @@ function ReportOptions({ report, onBack, onDone }) {
     if (report.id === 'salesAnalysis') {
       const yy = (d) => d.split('-').reverse().map((x, i) => (i === 2 ? x.slice(2) : x)).join('/');
       const res = await act(async () => {
-        const r = await window.fc.saveXlsx({
+        const r = await window.fc.saveXlsx({ perm: 'reports.excel', 
           kind: 'salesAnalysis',
           defaultName: `SalesAnalysis ${from} - ${to}${groupName ? ` ${groupName}` : ''}.xlsx`.replace(/[\\/:*?"<>|]/g, '_'),
           title: `Վաճառքների վերլուծություն ${yy(from)} - ${yy(to)}`,
@@ -156,7 +158,7 @@ function ReportOptions({ report, onBack, onDone }) {
     }
     const sheet = sheetOf(report.id, rows || [], t, club);
     const res = await act(async () => {
-      const r = await window.fc.saveXlsx({
+      const r = await window.fc.saveXlsx({ perm: 'reports.excel', 
         kind: 'table',
         defaultName: `${title} ${report.params === 'period' ? period : report.params === 'range' ? `${from} - ${to}` : todayIso()}${groupName ? ` ${groupName}` : ''}.xlsx`.replace(/[\\/:*?"<>|]/g, '_'),
         sheetName: title,
@@ -227,7 +229,7 @@ function ReportOptions({ report, onBack, onDone }) {
         <div className="card card-pad row" style={{ background: 'var(--surface-2)' }}>
           <FileSpreadsheet size={20} style={{ color: 'var(--accent-text)' }} />
           <div className="grow small">{loading && !rows ? '…' : t('reportsx.rowsReady', { n: rows?.length || 0 })}</div>
-          <Button variant="primary" icon={FileSpreadsheet} onClick={exportFile} disabled={!rows?.length || (report.params === 'range' && from > to)}>
+          <Button variant="primary" icon={FileSpreadsheet} onClick={exportFile} disabled={!canExport || !rows?.length || (report.params === 'range' && from > to)}>
             {t('reports.exportButton')}
           </Button>
         </div>
@@ -238,19 +240,20 @@ function ReportOptions({ report, onBack, onDone }) {
 
 export function ReportsModal({ onClose }) {
   const t = useT();
+  const auth = useAuth();
   const [picked, setPicked] = useState(null);
   const [open, setOpen] = useState(null); // an existing export window
   const { data: groups } = useRpc('groups.list');
   if (open === 'payments') return <ReportExport onClose={onClose} />;
-  if (open === 'groups') return <GroupsExportModal groups={groups || []} onClose={onClose} />;
-  if (open === 'allStudents') return <GroupsExportModal flat onClose={onClose} />;
+  if (open === 'groups') return <GroupsExportModal groups={groups || []} perm="reports.excel" onClose={onClose} />;
+  if (open === 'allStudents') return <GroupsExportModal flat perm="reports.excel" onClose={onClose} />;
   return (
     <Modal title={t('reportsx.title')} onClose={onClose} width={760}>
       {picked ? (
         <ReportOptions report={picked} onBack={() => setPicked(null)} onDone={onClose} />
       ) : (
         <div className="reports-grid">
-          {REPORTS.map((r) => (
+          {REPORTS.filter((r) => r.id !== 'salesAnalysis' || auth.can('reports.sales')).map((r) => (
             <button key={r.id} className="reports-item" onClick={() => (r.open ? setOpen(r.open) : setPicked(r))}>
               <r.icon size={20} />
               <span>

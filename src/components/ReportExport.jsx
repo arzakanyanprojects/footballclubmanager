@@ -4,6 +4,7 @@ import { useT, monthName } from '../i18n';
 import { useRpc, todayIso, currentPeriod, addMonths, daysInMonth, fmtDate, money } from '../lib';
 import { Button, Field, Modal, Segmented, useAction, useClub } from './ui';
 import { chargeLabel, PAYMENT_METHODS } from '../pages/Payments';
+import { useCan } from './Auth';
 
 // Each report lists the payments received with one payment method, or all of them.
 export const REPORTS = [
@@ -24,6 +25,7 @@ function presetRange(preset) {
 
 export default function ReportExport({ onClose }) {
   const t = useT();
+  const canExport = useCan('reports.excel');
   const act = useAction();
   const club = useClub();
   const [reportId, setReportId] = useState(REPORTS[0].id);
@@ -67,7 +69,7 @@ export default function ReportExport({ onClose }) {
     // A subtotal per payment type, then the grand total.
     const totals = PAYMENT_METHODS.map((m) => ({ label: t('reports.totalFor', { name: t(`method.${m}`) }), key: 'method_name', value: t(`method.${m}`) }));
     const res = await act(async () => {
-      const r = await window.fc.saveXlsx({
+      const r = await window.fc.saveXlsx({ perm: 'reports.excel', 
         defaultName: `${name} ${from} - ${to}.xlsx`.replace(/[\\/:*?"<>|]/g, '_'),
         sheetName: name,
         title: `${club.club_name || 'FC Manager'} — ${report.method ? t('reports.title', { name }) : t('reports.allTitle')}`,
@@ -97,7 +99,7 @@ export default function ReportExport({ onClose }) {
       footer={
         <>
           <Button onClick={onClose}>{t('common.cancel')}</Button>
-          <Button variant="primary" icon={FileSpreadsheet} onClick={exportFile} disabled={!rows?.length || from > to}>
+          <Button variant="primary" icon={FileSpreadsheet} onClick={exportFile} disabled={!canExport || !rows?.length || from > to}>
             {t('reports.exportButton')}
           </Button>
         </>

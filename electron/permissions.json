@@ -1,0 +1,31 @@
+{
+  "comment": "Every permission a user can be given, by menu (shared by electron/auth.js and src/components/Auth.jsx). Labels: locales perm.<key>, hints perm.<key>.hint. view: the ticks «Միայն դիտում» gives. requires: a tick that needs another (by default every tick of a menu needs its «view»).",
+  "sections": [
+    { "id": "students", "perms": ["view", "personal", "add", "edit", "terminate", "absence", "link", "notes", "notesDelete", "files", "filesDelete", "delete", "import", "print", "excel"] },
+    { "id": "payments", "perms": ["view", "take", "charge", "edit", "fee", "waive", "cancel", "delete", "past", "hdm", "hdmReturn", "receipt", "remind", "products", "excel"] },
+    { "id": "attendance", "perms": ["view", "mark", "days", "deleteDays", "print", "excel"] },
+    { "id": "schedule", "perms": ["view", "day", "base", "copy", "print", "excel"] },
+    { "id": "groups", "perms": ["view", "edit", "delete", "excel"] },
+    { "id": "contracts", "perms": ["view", "edit", "delete", "print", "templates", "templatesDelete"] },
+    { "id": "reports", "perms": ["dashboard", "salesAll", "view", "sales", "excel"] },
+    { "id": "settings", "perms": ["club", "hdm", "notify", "network", "data", "backups", "restore", "log", "logExcel"] }
+  ],
+  "view": [
+    "students.view", "students.personal",
+    "payments.view",
+    "attendance.view",
+    "schedule.view",
+    "groups.view",
+    "contracts.view",
+    "reports.dashboard", "reports.view",
+    "settings.log"
+  ],
+  "requires": {
+    "reports.salesAll": ["reports.dashboard"],
+    "reports.view": ["reports.dashboard"],
+    "reports.sales": ["reports.view"],
+    "reports.excel": ["reports.view"],
+    "settings.restore": ["settings.backups"],
+    "settings.logExcel": ["settings.log"]
+  }
+}

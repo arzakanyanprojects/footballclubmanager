@@ -131,6 +131,7 @@ function ReceiptModal({ job, test, operator, onClose }) {
       cashier: operator,
       // Printing for a payment already recorded: it was paid already, don't ask the ՀԴՄ terminal for a card.
       paidElsewhere: !job.before && !test,
+      practice: !!job.practice, // a test receipt from Settings (needs «settings.hdm», not a payment's ticks)
     });
     if (!r.ok) {
       setError(r);

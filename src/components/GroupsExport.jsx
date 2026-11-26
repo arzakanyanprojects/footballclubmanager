@@ -15,7 +15,7 @@ const SHEET_COLORS = ['FF1BAF7A', 'FF2A78D6', 'FFEB6834', 'FF6250D6', 'FFEDA100'
 
 function useColumnDefs(flat) {
   const t = useT();
-  const canPay = useCan('payments');
+  const canPay = useCan('payments.view');
   const parent = (k) => `${t('students.parent')} · ${t(k)}`;
   return [
     { id: 'index', label: '№', type: 'index', width: 5, on: true },
@@ -57,7 +57,9 @@ function loadPref(key) {
 }
 
 // flat: «Բոլոր սաները» — everyone on one sheet, sorted by group and name (instead of a sheet per year).
-export function GroupsExportModal({ groups, onClose, flat = false }) {
+// perm: the tick that allows this export (the groups' Excel, the students' or the reports').
+export function GroupsExportModal({ groups, onClose, flat = false, perm = 'groups.excel' }) {
+  const canExport = useCan(perm);
   const t = useT();
   const act = useAction();
   const { currency } = useClub();
@@ -155,7 +157,7 @@ export function GroupsExportModal({ groups, onClose, flat = false }) {
       const sheets = flat
         ? [{ name: t('nav.students'), color: SHEET_COLORS[0], groups: [block(t('groupsExport.allTitle', { n: everyone.length, date: todayIso().split('-').reverse().join('/') }), everyone)] }]
         : names.map((name, i) => ({ name, color: SHEET_COLORS[i % SHEET_COLORS.length], groups: bySheet.get(name) }));
-      const r = await window.fc.saveXlsx({
+      const r = await window.fc.saveXlsx({ perm: perm, 
         kind: 'groups',
         defaultName: `${flat ? 'students' : 'groups'}-${todayIso()}.xlsx`,
         currencySymbol: money(0, currency).replace(/[\d,.\s]/g, '') || currency,
@@ -184,7 +186,7 @@ export function GroupsExportModal({ groups, onClose, flat = false }) {
       footer={
         <>
           <Button onClick={onClose}>{t('common.cancel')}</Button>
-          <Button variant="primary" icon={Download} onClick={run} disabled={!chosen.length || (!flat && !list.length)}>
+          <Button variant="primary" icon={Download} onClick={run} disabled={!canExport || !chosen.length || (!flat && !list.length)}>
             {t('groupsExport.run')}
           </Button>
         </>
