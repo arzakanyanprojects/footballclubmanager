@@ -19,7 +19,8 @@ import { openStoredFile } from '../components/Absence';
 // Payment methods the club accepts, in the order shown; the first is the default.
 export const PAYMENT_METHODS = ['card', 'easypay', 'transfer'];
 // Students' «Կարգավիճակ» with a discount, and how much (the war victims' 100% pay nothing, so no receipt).
-export const CATEGORY_DISCOUNT = { siblings: 50, half: 50, orphan: 50, staff: 50 };
+// «Ըստ հրամանի» (by the director's order): the student's own fee, so the % is counted from the amounts.
+export const CATEGORY_DISCOUNT = { siblings: 50, half: 50, orphan: 50, staff: 50, order: true };
 
 // The student's group: its full monthly fee and whether it is a championship team.
 function useGroupOf() {

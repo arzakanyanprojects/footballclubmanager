@@ -5,7 +5,7 @@ const Docxtemplater = require('docxtemplater');
 
 const BLANK = '__________';
 const MONTHS = ['հունվար', 'փետրվար', 'մարտ', 'ապրիլ', 'մայիս', 'հունիս', 'հուլիս', 'օգոստոս', 'սեպտեմբեր', 'հոկտեմբեր', 'նոյեմբեր', 'դեկտեմբեր'];
-const CATEGORIES = { siblings: '2 և ավել երեխա', half: '50%', war: '44 օրյա/4 օրյա պատերազմի զոհ', staff: 'Աշխատակցի երեխա', orphan: 'Միակողմանի ծնողազուրկ' };
+const CATEGORIES = { siblings: '2 և ավել երեխա', half: '50%', war: '44 օրյա/4 օրյա պատերազմի զոհ', staff: 'Աշխատակցի երեխա', orphan: 'Միակողմանի ծնողազուրկ', order: 'Ըստ հրամանի' };
 // Monthly fees of the two paid packages in Annex 1 («Վճարային կարգավիճակ»).
 const FEE_REGULAR = 30000;
 const FEE_TEAM = 35000;

@@ -20,6 +20,7 @@
   --good: #11804a;
   --good-soft: #e3f4ea;
   --warn: #a35f00;
+  --discount: #ea7317;
   --warn-soft: #fdf1dc;
   --bad: #c42b2b;
   --bad-soft: #fce8e8;
@@ -56,6 +57,8 @@
     --good: #4cc982;
     --good-soft: #15301f;
     --warn: #e9a73b;
+  --discount: #f28a2e;
+    --discount: #f28a2e;
     --warn-soft: #33270f;
     --bad: #f07070;
     --bad-soft: #3a1a1a;
@@ -531,9 +534,6 @@ table.table { width: 100%; border-collapse: collapse; }
 .receipt .line.total { font-weight: 700; font-size: 14px; }
 .hdm-no { color: var(--accent); font-size: 11.5px; margin-top: 2px; }
 .cloud-box { border-top: 1px solid var(--border); padding-top: 14px; display: flex; flex-direction: column; gap: 10px; }
-.update-notice { display: flex; align-items: flex-start; gap: 8px; width: 100%; text-align: left; background: var(--accent); color: #fff; border: 0; border-radius: 8px; padding: 8px 10px; margin-bottom: 10px; cursor: pointer; font: inherit; font-size: 13px; font-weight: 600; }
-.update-notice svg { margin-top: 2px; flex-shrink: 0; }
-.update-notice .small { display: block; font-weight: 400; opacity: .85; font-size: 11.5px; }
 .signout { background: none; border: 0; color: inherit; cursor: pointer; padding: 4px; border-radius: 6px; display: inline-flex; }
 .signout:hover { background: rgba(255,255,255,.08); color: var(--sidebar-text, #fff); }
 .login-box { width: 100%; max-width: 380px; padding: 26px; display: flex; flex-direction: column; gap: 14px; }
@@ -854,6 +854,14 @@ button.app-link.link:hover { text-decoration: underline; }
 .opt-grid .span-all { column-span: all; }
 .opt-grid + .settings-section, .opt-grid + .card { margin-top: 22px; }
 .opt-card { display: flex; flex-direction: column; transition: opacity 0.15s; }
+
+/* Settings → Ավտոմատացումներ: the rule editor's When / If / Then sections and their rows */
+.auto-section { display: flex; flex-direction: column; gap: 10px; padding: 14px; border: 1px solid var(--border); border-radius: var(--radius); }
+.auto-section h4 { margin: 0; }
+.auto-row { display: flex; align-items: flex-start; gap: 8px; }
+.auto-row > .select:first-child { flex: 1; min-width: 0; }
+.auto-row > .select[multiple] { flex: 1; min-width: 160px; height: auto; }
+.auto-action { display: flex; flex-direction: column; gap: 10px; padding: 12px; box-shadow: none; }
 .opt-head { display: flex; align-items: center; gap: 10px; padding: 14px 16px 10px; }
 .opt-head h4 { font-size: 14.5px; }
 .opt-icon { width: 32px; height: 32px; border-radius: 9px; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); flex-shrink: 0; }
@@ -879,6 +887,21 @@ fieldset:disabled .switch { cursor: default; opacity: 0.6; }
 
 /* «Զեղչով վճարում»: the counted % */
 .discount-pct { font-weight: 700; color: var(--accent); margin-left: 2px; }
+
+/* Student profile: the discount «Կարգավիճակ» icon next to the status, the status shown on hover */
+.discount-mark {
+  position: relative; display: inline-flex; align-items: center; justify-content: center;
+  cursor: help; outline: none;
+}
+.discount-mark svg { transition: transform .12s; }
+.discount-mark:hover svg, .discount-mark:focus-visible svg { transform: scale(1.12) rotate(-8deg); }
+.discount-mark::after {
+  content: attr(data-tip); position: absolute; left: 50%; top: calc(100% + 6px); transform: translateX(-50%);
+  padding: 5px 9px; border-radius: 6px; white-space: nowrap; font-size: 12px; font-weight: 600;
+  background: var(--text); color: var(--bg); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+  opacity: 0; pointer-events: none; transition: opacity 0.12s; z-index: 20;
+}
+.discount-mark:hover::after, .discount-mark:focus-visible::after { opacity: 1; }
 
 /* ՀԴՄ settings: the two receipt lines side by side */
 .hdm-lines { display: grid; grid-template-columns: auto minmax(0, 1fr) 110px; gap: 8px 10px; align-items: center; }
@@ -916,11 +939,18 @@ fieldset:disabled .switch { cursor: default; opacity: 0.6; }
 .rights-excel.invisible { visibility: hidden; }
 
 /* Mandatory update: replaces the whole app until the new version is installed */
-.update-screen { position: fixed; inset: 0; z-index: 9999; display: grid; place-items: center; background: var(--bg); padding: 24px; }
-.update-box { max-width: 460px; width: 100%; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 14px;
-  background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 32px 28px; box-shadow: var(--shadow-sm); }
-.update-box h2 { margin: 0; font-size: 20px; }
-.update-box p { margin: 0; }
+/* The update card in the bottom-right corner: the download, then the countdown to the automatic restart */
+.update-banner { position: fixed; left: 18px; bottom: 18px; z-index: 9000; width: 340px; max-width: calc(100vw - 36px);
+  display: flex; align-items: flex-start; gap: 12px; padding: 14px 16px; border-radius: 12px;
+  background: var(--surface); border: 1px solid var(--border); box-shadow: 0 10px 30px rgba(0, 0, 0, .28); }
+.update-banner.ready { border-color: var(--accent); }
+.update-banner .update-icon { flex-shrink: 0; margin-top: 1px; }
+.update-min { background: none; border: 0; color: var(--text-3); cursor: pointer; padding: 2px; border-radius: 6px; display: inline-flex; }
+.update-min:hover { background: var(--surface-2); color: var(--text); }
+.update-pill { position: fixed; left: 18px; bottom: 18px; z-index: 9000; display: inline-flex; align-items: center; gap: 6px;
+  height: 32px; padding: 0 12px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface); color: var(--text);
+  font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; box-shadow: 0 6px 18px rgba(0, 0, 0, .25); font-variant-numeric: tabular-nums; }
+.update-pill.ready { background: var(--accent); border-color: var(--accent); color: #fff; }
 .update-icon { color: var(--accent); }
 .update-progress { width: 100%; display: flex; flex-direction: column; gap: 8px; }
 .update-progress .progress { height: 8px; border-radius: 99px; background: var(--surface-2); overflow: hidden; }

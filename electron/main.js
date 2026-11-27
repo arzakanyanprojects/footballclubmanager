@@ -1,4 +1,4 @@
-﻿const { app, BrowserWindow, ipcMain, dialog, shell, nativeTheme, Tray, Menu, nativeImage, safeStorage, clipboard } = require('electron');
+﻿const { app, BrowserWindow, ipcMain, dialog, shell, nativeTheme, Tray, Menu, nativeImage, safeStorage, clipboard, Notification } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
@@ -10,6 +10,10 @@ const PizZip = require('pizzip');
 const { buildReport, buildForm, buildSchedule, buildStudentsTransfer, buildGroups, buildTable, buildSalesAnalysis } = require('./xlsx');
 const hdm = require('./hdm');
 const updater = require('./updater');
+const { buildReportAttachment } = require('./reportAttachment');
+
+// Windows shows the app's notifications (e.g. the update countdown) only with its app id (package.json → build.appId).
+if (process.platform === 'win32') app.setAppUserModelId('com.fcmanager.app');
 const importer = require('./importer');
 const escpos = require('./escpos');
 // This app window, for edit locks (one person on two computers is two editors).
@@ -123,11 +127,25 @@ async function startBackend() {
     notifier = notify.startWorker({
       getConfig: notifyCfg,
       getService: () => service,
+      getAttachment: (m) => buildReportAttachment(service, JSON.parse(m.attachment)),
       saveState: (patch) => {
         config.notify = notify.merge(notifyCfg(), { state: patch });
         saveConfig();
       },
     });
+    // Once: the automations that were switches in Ծանուցումներ become rules (Settings → Ավտոմատացումներ).
+    if (!config.notify?.automationsMigrated) {
+      try {
+        const cfg = notifyCfg();
+        service.automations.migrateNotify(cfg);
+        config.notify = notify.merge(cfg, {
+          receipts: false, paymentAlerts: false, daily: { enabled: false }, monthly: { enabled: false }, reminders: { auto: false }, automationsMigrated: true,
+        });
+        saveConfig();
+      } catch (err) {
+        console.error('[automations] moving the notify automations failed:', err.message);
+      }
+    }
     service.ensureMonthlyCharges();
     autoBackup();
     backupTimer = setInterval(autoBackup, 60 * 60 * 1000);
@@ -271,9 +289,12 @@ function createWindow() {
       sandbox: false,
     },
   });
-  // Started by Windows at sign-in: stay in the tray.
+  // The app always opens maximized. Started by Windows at sign-in: stay in the tray.
   win.once('ready-to-show', () => {
-    if (!process.argv.includes('--hidden')) win.show();
+    if (!process.argv.includes('--hidden')) {
+      win.maximize();
+      win.show();
+    }
   });
 
   // × signs the user out and hides the window to the tray; the app keeps running (other PCs stay
@@ -1121,6 +1142,8 @@ function registerIpc() {
 function showWindow() {
   if (!win || win.isDestroyed()) return;
   if (win.isMinimized()) win.restore();
+  // Opened again from the tray (it was hidden): maximized, as when the app starts.
+  if (!win.isVisible()) win.maximize();
   win.show();
   win.focus();
 }
@@ -1182,7 +1205,27 @@ if (!app.requestSingleInstanceLock()) {
     createWindow();
     createTray();
     applyAutoStart();
-    updater.setup((s) => toPage('update-status', s));
+    updater.setup((s) => toPage('update-status', s), {
+      // The countdown before the automatic restart started: also a Windows notification, for when the
+      // window is minimized or in the tray. Clicking it brings the window back.
+      onReady: (s) => {
+        if (!Notification.isSupported()) return;
+        const hy = config.language === 'hy';
+        const n = new Notification({
+          title: hy ? `FC Manager-ը կթարմացվի (${s.version})` : `FC Manager will update (${s.version})`,
+          body: hy
+            ? 'Ծրագիրը կվերագործարկվի 3 րոպեից։ Պահպանեք ձեր աշխատանքը։'
+            : 'The app restarts in 3 minutes to install the new version. Save your work.',
+          icon: path.join(__dirname, 'icons', 'icon.png'),
+        });
+        n.on('click', showWindow);
+        n.show();
+      },
+      install: () => {
+        quitting = true;
+        updater.install();
+      },
+    });
   });
 
   app.on('window-all-closed', () => {

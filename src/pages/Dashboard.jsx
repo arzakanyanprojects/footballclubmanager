@@ -3,7 +3,7 @@ import { Users, Wallet, AlertTriangle, CalendarCheck, Plus, ChevronRight, FileCl
 import { useT, monthName } from '../i18n';
 import { useCan } from '../components/Auth';
 import { MessageButton, useMessenger } from '../components/Messenger';
-import { useRpc, rpc, compactMoney, fmtDate, fmtDateTime, money, todayIso } from '../lib';
+import { useRpc, rpc, compactMoney, fmtDate, fmtDateTime, money, todayIso, addDays, weekday } from '../lib';
 import { Avatar, Button, Empty, Loading, Modal, Money, Segmented, useClub } from '../components/ui';
 import { chargeLabel, MethodTag, PAYMENT_METHODS } from './Payments';
 import { ReportsModal } from '../components/Reports';
@@ -381,12 +381,24 @@ function DebtorsMessageButton() {
 
 // «Այսօրվա վաճառքներ» opened: today's payments in the order they were taken, numbered, with the exact time.
 // When users sign in, first only the ones this user took («Իմ վճարումները»), or everyone's.
+// Any of the last 7 days can be picked instead of today, or all 7 together.
 function TodaySalesModal({ nav, onClose }) {
   const t = useT();
   const { currency } = useClub();
   const [mine, setMine] = useState(true);
+  const today = todayIso();
+  const [day, setDay] = useState(today); // a date, or 'week'
   const canAll = useCan('reports.salesAll'); // everyone's sales, not only one's own
-  const { data } = useRpc('dashboard.today.list', { mine });
+  const { data } = useRpc('dashboard.today.list', { mine, date: day });
+  const lastDays = Array.from({ length: 7 }, (_, i) => addDays(today, -i)); // today first
+  const dayLabel = (d) =>
+    d === today ? t('dash.dayToday') : d === addDays(today, -1) ? t('dash.dayYesterday') : `${t(`weekdayShort.${weekday(d)}`)} ${fmtDate(d).slice(0, 5)}`;
+  const title =
+    day === 'week'
+      ? `${t('dash.sales')} — ${fmtDate(lastDays[6])} – ${fmtDate(today)}`
+      : day === today
+        ? `${t('dash.today')} — ${fmtDate(today)}`
+        : `${t('dash.sales')} — ${fmtDate(day)}`;
   const rows = data?.rows || [];
   const total = rows.reduce((sum, r) => sum + (r.amount || 0), 0);
   // Today's total by payment method (all three, even when nothing was taken that way), then the grand total.
@@ -401,7 +413,7 @@ function TodaySalesModal({ nav, onClose }) {
   };
   return (
     <Modal
-      title={`${t('dash.today')} — ${fmtDate(todayIso())}`}
+      title={title}
       onClose={onClose}
       width={1040}
       footer={
@@ -411,8 +423,13 @@ function TodaySalesModal({ nav, onClose }) {
         </>
       }
     >
-      {data?.signedIn && canAll && (
-        <div className="row" style={{ marginBottom: 12 }}>
+      <div className="row wrap" style={{ marginBottom: 12, gap: 10 }}>
+        <Segmented
+          value={day}
+          onChange={setDay}
+          options={[...lastDays.map((d) => ({ value: d, label: dayLabel(d) })), { value: 'week', label: t('dash.week') }]}
+        />
+        {data?.signedIn && canAll && (
           <Segmented
             value={mine}
             onChange={setMine}
@@ -421,12 +438,15 @@ function TodaySalesModal({ nav, onClose }) {
               { value: false, label: t('dash.todayAll') },
             ]}
           />
-        </div>
-      )}
+        )}
+      </div>
       {!data ? (
         <Loading />
       ) : rows.length === 0 ? (
-        <Empty icon={Banknote} title={t(data.mine ? 'dash.todayNoneMine' : 'dash.todayNone')} />
+        <Empty
+          icon={Banknote}
+          title={day === today ? t(data.mine ? 'dash.todayNoneMine' : 'dash.todayNone') : t(data.mine ? 'dash.periodNoneMine' : 'dash.periodNone')}
+        />
       ) : (
         <div className="table-wrap" style={{ maxHeight: '60vh', overflow: 'auto' }}>
           <table className="table today-table">

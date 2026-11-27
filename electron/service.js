@@ -12,6 +12,7 @@ class AppError extends Error {
   }
 }
 const { createLocks, mondayOf } = require('./locks');
+const { createAutomations } = require('./automations');
 
 // Email texts parents get (editable in Settings → Notifications). {placeholders} are filled in.
 const DEFAULT_TEMPLATES = {
@@ -106,6 +107,14 @@ function createService(db, { onWrite, getNotify } = {}) {
   // together when it is saved (one message for a payment of three months, one for an attendance sheet).
   const LABELS = require('./activityLabels');
   let actionNotes = []; // lines of the save in progress
+  // What happened in the save in progress, for the automations (electron/automations.js), which run right after
+  // it is committed. Imports / transfers (quiet) and the automations' own changes don't start rules.
+  let pendingEvents = [];
+  const emit = (ctx, event) => {
+    if (!ctx.quiet && !ctx.automation) pendingEvents.push(event);
+  };
+  const STUDENT_EVENT_FIELDS = { group_id: 'student.groupChanged', status: 'student.statusChanged', category: 'student.categoryChanged' };
+  const eventRow = (s) => ({ group_id: s.group_id ?? null, status: s.status, category: s.category || '', monthly_fee: s.monthly_fee ?? 0 });
   let actionUser = null;
   // Ticked in the user's own settings (Settings → Users → «Գործողությունները՝ Telegram-ով»).
   const watched = (ctx) => !ctx.quiet && !!ctx.account?.notify_actions;
@@ -518,9 +527,9 @@ function createService(db, { onWrite, getNotify } = {}) {
   };
   const enqueue = (m, ctx = {}) =>
     run(
-      `INSERT INTO outbox (channel, recipient, subject, body, kind, student_id, period, created_by)
-       VALUES (:channel, :recipient, :subject, :body, :kind, :studentId, :period, :user)`,
-      { studentId: null, period: null, subject: null, ...m, user: ctx.user || null }
+      `INSERT INTO outbox (channel, recipient, subject, body, kind, student_id, period, created_by, attachment)
+       VALUES (:channel, :recipient, :subject, :body, :kind, :studentId, :period, :user, :attachment)`,
+      { studentId: null, period: null, subject: null, attachment: null, ...m, user: ctx.user || null }
     );
   const studentVars = (sid) => {
     const s = one('SELECT * FROM students WHERE id = :id', { id: sid });
@@ -538,21 +547,12 @@ function createService(db, { onWrite, getNotify } = {}) {
   };
 
   // After a payment: receipt email to the parent, alert to the staff's Telegram chats.
+  // After a payment: the «payment received» automations (the receipt to the parent and the staff's Telegram
+  // alert are rules now — Settings → Ավտոմատացումներ).
   function notifyPaid(studentId, charges, method, ctx) {
-    const cfg = notifyCfg();
     if (!charges.length) return;
-    const { s, vars } = studentVars(studentId);
     const total = charges.reduce((sum, c) => sum + c.amount, 0);
-    const items = charges.map((c) => `• ${chargeText(c)} — ${amd(c.amount)}`).join('\n');
-    const all = { ...vars, items, total: amd(total), method: HY_METHODS[method] || method };
-    if (cfg.receipts && emailOn() && s?.parent_email) {
-      const tpl = { ...DEFAULT_TEMPLATES, ...(cfg.templates || {}) };
-      enqueue({ channel: 'email', recipient: s.parent_email, subject: fill(tpl.receiptSubject, all), body: fill(tpl.receiptBody, all), kind: 'receipt', studentId }, ctx);
-    }
-    if (cfg.paymentAlerts) {
-      const text = `💳 Վճարում — ${vars.student}\n${items}\nԸնդամենը՝ ${amd(total)} (${all.method})${ctx.user ? `\nԳրանցող՝ ${ctx.user}` : ''}`;
-      for (const chat of telegramChats()) enqueue({ channel: 'telegram', recipient: chat, body: text, kind: 'payment', studentId }, ctx);
-    }
+    emit(ctx, { type: 'payment.received', studentId, by: ctx.user || null, payment: { chargeIds: charges.map((c) => c.id), total, method } });
   }
 
   // Overdue reminder emails. studentIds: null = everyone with an overdue fee.
@@ -680,6 +680,23 @@ function createService(db, { onWrite, getNotify } = {}) {
     if (!no || blank(st.contract_next) || !String(no).startsWith(prefix)) return;
     const tail = String(no).slice(prefix.length);
     if (/^\d+$/.test(tail) && Number(tail) >= int(st.contract_next, 1)) setSetting('contract_next', Number(tail) + 1);
+  }
+
+  // This month's and future unpaid monthly charges at a new fee (not the first month when it has its own fee).
+  function repriceMonthly(studentId, fee, joinDate, before) {
+    const ownFirst = before.first_fee != null ? String(before.join_date || '').slice(0, 7) : null;
+    for (const c of all(`SELECT id, period FROM charges WHERE student_id = :id AND kind = 'monthly' AND status = 'unpaid' AND period >= :period AND excused_by IS NULL`, { id: studentId, period: currentPeriod() }))
+      if (c.period !== ownFirst) run('UPDATE charges SET amount = :fee WHERE id = :id', { id: c.id, fee: studentFee(fee, c.period, joinDate) });
+  }
+
+  // A student's fee or Կարգավիճակ changed by an automation: the same effect and history as changing it in the form.
+  function setStudentField(studentId, field, value, ctx) {
+    const before = one('SELECT * FROM students WHERE id = :id', { id: studentId });
+    if (!before) throw new AppError('NOT_FOUND');
+    run(`UPDATE students SET ${field === 'monthly_fee' ? 'monthly_fee' : 'category'} = :v, updated_at = datetime('now', 'localtime') WHERE id = :id`, { id: studentId, v: value });
+    if (field === 'monthly_fee' && before.monthly_fee !== value) repriceMonthly(studentId, value, before.join_date, before);
+    const changes = diffStudent(before, one('SELECT * FROM students WHERE id = :id', { id: studentId }));
+    if (changes.length) log(ctx, 'student.updated', `${before.first_name} ${before.last_name}`, studentId, { changes });
   }
 
   // A note under the student, with who added it (unless the same text is already there, e.g. a repeated import).
@@ -888,8 +905,13 @@ function createService(db, { onWrite, getNotify } = {}) {
 
     // «Այսօրվա վաճառքներ» opened: today's payments, each with the moment it was taken (from the activity log,
     // else when its ՀԴՄ receipt was printed). mine: only the ones the signed-in user took.
-    'dashboard.today.list': ({ mine = true } = {}, ctx) => {
+    // date: one of the last 7 days (default today), or 'week' for all 7 of them.
+    'dashboard.today.list': ({ mine = true, date } = {}, ctx) => {
       const onlyMine = !!mine && !!ctx.user;
+      const t = today();
+      const weekFrom = addDays(t, -6);
+      const week = date === 'week';
+      const day = !week && /^\d{4}-\d{2}-\d{2}$/.test(String(date || '')) && date >= weekFrom && date <= t ? date : t;
       const rows = all(
         `SELECT c.id, c.kind, c.period, c.description, c.amount, c.paid_at, c.method, c.paid_by, c.hdm_receipt,
                 s.id AS student_id, s.first_name, s.last_name, c.paid_by AS paid_by_name,
@@ -897,11 +919,11 @@ function createService(db, { onWrite, getNotify } = {}) {
                         WHERE l.action IN ('charge.paid', 'charge.created_paid') AND l.student_id = c.student_id
                           AND json_extract(l.meta, '$.chargeId') = c.id), c.hdm_at) AS taken_at
          FROM charges c JOIN students s ON s.id = c.student_id
-         WHERE c.status = 'paid' AND substr(c.paid_at, 1, 10) = :t AND (:mine = 0 OR c.paid_by = :user) AND in_scope(s.group_id)
-         ORDER BY IFNULL(taken_at, c.paid_at), c.id`,
-        { t: today(), mine: onlyMine ? 1 : 0, user: ctx.user || null }
+         WHERE c.status = 'paid' AND substr(c.paid_at, 1, 10) BETWEEN :from AND :to AND (:mine = 0 OR c.paid_by = :user) AND in_scope(s.group_id)
+         ORDER BY substr(c.paid_at, 1, 10), IFNULL(taken_at, c.paid_at), c.id`,
+        { from: week ? weekFrom : day, to: week ? t : day, mine: onlyMine ? 1 : 0, user: ctx.user || null }
       );
-      return { rows, mine: onlyMine, signedIn: !!ctx.user };
+      return { rows, mine: onlyMine, signedIn: !!ctx.user, date: week ? 'week' : day };
     },
 
     // ---------------------------------------------------------------- groups
@@ -1062,7 +1084,7 @@ function createService(db, { onWrite, getNotify } = {}) {
         patronymic: str(p.patronymic),
         contract_no: str(p.contract_no),
         service: normService(p.service),
-        category: ['siblings', 'half', 'war', 'staff', 'orphan'].includes(p.category) ? p.category : null,
+        category: ['siblings', 'half', 'war', 'staff', 'orphan', 'order'].includes(p.category) ? p.category : null,
         last_name: str(p.last_name),
         birth_date: str(p.birth_date),
         gender: str(p.gender),
@@ -1123,15 +1145,13 @@ function createService(db, { onWrite, getNotify } = {}) {
           row
         );
         // A changed fee applies to this month's and future unpaid monthly charges.
-        if (prev.monthly_fee !== row.monthly_fee) {
-          const shares = feeShares();
-          const ownFirst = before.first_fee != null ? String(before.join_date || '').slice(0, 7) : null;
-          for (const c of all(`SELECT id, period FROM charges WHERE student_id = :id AND kind = 'monthly' AND status = 'unpaid' AND period >= :period AND excused_by IS NULL`, { id: p.id, period: currentPeriod() }))
-            if (c.period !== ownFirst)
-            run('UPDATE charges SET amount = :fee WHERE id = :id', { id: c.id, fee: studentFee(row.monthly_fee, c.period, row.join_date) });
-        }
-        const changes = diffStudent(before, one('SELECT * FROM students WHERE id = :id', { id: p.id }));
+        if (prev.monthly_fee !== row.monthly_fee) repriceMonthly(p.id, row.monthly_fee, row.join_date, before);
+        const afterRow = one('SELECT * FROM students WHERE id = :id', { id: p.id });
+        const changes = diffStudent(before, afterRow);
         if (changes.length) log(ctx, 'student.updated', `${row.first_name} ${row.last_name}`, p.id, { changes });
+        const [b, a] = [eventRow(before), eventRow(afterRow)];
+        for (const [field, type] of Object.entries(STUDENT_EVENT_FIELDS))
+          if (b[field] !== a[field]) emit(ctx, { type, studentId: p.id, before: b, after: a, feeByHand: b.monthly_fee !== a.monthly_fee });
         addNote(p.id, p.notes, ctx);
         ensureMonthlyCharges(p.id);
         return { id: p.id };
@@ -1150,6 +1170,7 @@ function createService(db, { onWrite, getNotify } = {}) {
         row
       );
       log(ctx, 'student.created', `${row.first_name} ${row.last_name}`, Number(r.lastInsertRowid));
+      emit(ctx, { type: 'student.created', studentId: Number(r.lastInsertRowid), after: eventRow(one('SELECT * FROM students WHERE id = :id', { id: Number(r.lastInsertRowid) })) });
       addNote(Number(r.lastInsertRowid), p.notes, ctx);
       ensureMonthlyCharges(Number(r.lastInsertRowid));
       return { id: Number(r.lastInsertRowid), contract_no: row.contract_no };
@@ -1173,6 +1194,10 @@ function createService(db, { onWrite, getNotify } = {}) {
         { id, month: d.slice(0, 7) }
       ).changes;
       log(ctx, 'student.terminated', `${studentName(id)} — ${d.split('-').reverse().join('/')}`, id, { date: d, reason: str(reason), removed });
+      if (s.status !== 'inactive') {
+        const now = eventRow(one('SELECT * FROM students WHERE id = :id', { id }));
+        emit(ctx, { type: 'student.statusChanged', studentId: id, before: { ...now, status: s.status }, after: now, feeByHand: false });
+      }
       return { removed };
     },
 
@@ -1255,7 +1280,14 @@ function createService(db, { onWrite, getNotify } = {}) {
       const [x, y] = a < b ? [a, b] : [b, a];
       run('INSERT OR IGNORE INTO student_links (a_id, b_id, relation, created_by) VALUES (:x, :y, :relation, :user)', { x, y, relation: str(relation), user: ctx.user || null });
       // «2 և ավել երեխա»: the added brother / sister gets the siblings category (unless they already have one).
-      if (setCategory) run(`UPDATE students SET category = 'siblings' WHERE id = :b AND (category IS NULL OR category = '')`, { b });
+      if (setCategory) {
+        const before = one('SELECT * FROM students WHERE id = :b', { b });
+        if (!before.category) {
+          setStudentField(b, 'category', 'siblings', ctx);
+          const after = eventRow(one('SELECT * FROM students WHERE id = :b', { b }));
+          emit(ctx, { type: 'student.categoryChanged', studentId: b, before: eventRow(before), after, feeByHand: false });
+        }
+      }
       log(ctx, 'student.linked', `${studentName(a)} ↔ ${studentName(b)}`, a, { otherId: b, other: studentName(b), relation: str(relation) });
       log(ctx, 'student.linked', `${studentName(b)} ↔ ${studentName(a)}`, b, { otherId: a, other: studentName(a), relation: str(relation) });
       return true;
@@ -2476,7 +2508,7 @@ function createService(db, { onWrite, getNotify } = {}) {
             const line = r.hdm_code ? { code: r.hdm_code, name: r.hdm_name || '', unit: r.hdm_unit || 'ամիս' } : H.lineFor(H.DEFAULTS, { champ: !!r.championship, service: r.service });
             let full = r.hdm_full;
             if (full == null)
-              full = r.kind === 'monthly' && ['siblings', 'half', 'orphan', 'staff'].includes(r.category) && Number(r.group_fee) > 0
+              full = r.kind === 'monthly' && ['siblings', 'half', 'orphan', 'staff', 'order'].includes(r.category) && Number(r.group_fee) > 0
                 ? Math.max(studentFee(r.group_fee, r.period, r.join_date), r.amount)
                 : r.amount;
             return { day: r.day, receipt: r.hdm_receipt, code: line.code, name: line.name, unit: line.unit, amount: r.amount, full: Math.max(full, r.amount) };
@@ -2592,8 +2624,21 @@ function createService(db, { onWrite, getNotify } = {}) {
     return [...dates].sort();
   }
 
-  const READ_ONLY = /\.(get|list|summary|sheet|month|preview|document|status|export|history)$/;
+  const READ_ONLY = /\.(get|list|summary|sheet|month|preview|document|status|export|history|runs)$/;
   Object.assign(methods, auth.methods);
+  // «Ավտոմատացումներ» (electron/automations.js).
+  const automations = createAutomations(
+    { one, all, run, exec: (q) => db.exec(q) },
+    {
+      AppError, log, addNote, studentVars, fill, amd, chargeText, monthHy, emailOn, telegramChats, enqueue, summaryText, remindOverdue,
+      templates: (cfg) => ({ ...DEFAULT_TEMPLATES, ...(cfg?.templates || {}) }),
+      methodName: (m) => HY_METHODS[m] || m,
+      setFee: (id, fee, ctx) => setStudentField(id, 'monthly_fee', fee, ctx),
+      setCategory: (id, value, ctx) => setStudentField(id, 'category', value || null, ctx),
+      createCharge: (p, ctx) => methods['charges.create'](p, ctx),
+    }
+  );
+  Object.assign(methods, automations.methods);
   auth.verify(Object.keys(methods)); // every method has its permission rule
 
   // ---------------------------------------------------------------- groups a user is limited to
@@ -2766,12 +2811,14 @@ function createService(db, { onWrite, getNotify } = {}) {
       db.exec('BEGIN IMMEDIATE');
       let result;
       actionNotes = [];
+      pendingEvents = [];
       try {
         result = fn(params || {}, ctx);
         db.exec('COMMIT');
       } catch (err) {
         db.exec('ROLLBACK');
         actionNotes = [];
+        pendingEvents = [];
         throw err;
       }
       try {
@@ -2779,10 +2826,20 @@ function createService(db, { onWrite, getNotify } = {}) {
       } catch (err) {
         console.error('[notify] action message failed:', err.message);
       }
+      // The automations, each rule in its own transaction: a failing rule is logged, the save above stands.
+      const events = pendingEvents;
+      pendingEvents = [];
+      scopeNow = null; // rules act for the whole club, not the caller's groups
+      let ran = [];
+      try {
+        if (events.length) ran = automations.handle(events, ctx);
+      } catch (err) {
+        console.error('[automations] failed after a save:', err);
+      }
       if (!NO_FEE_EFFECT.test(method)) feesChecked = null;
       // Signing in/out changes no club data, so other PCs don't need to refresh.
       if (!method.startsWith('auth.')) onWrite?.();
-      return { ok: true, result };
+      return ran.length ? { ok: true, result, automations: ran } : { ok: true, result };
     } catch (err) {
       if (err instanceof AppError) return { ok: false, error: err.message, ...(err.detail ? { detail: err.detail } : {}) };
       console.error(`[service] ${method} failed:`, err);
@@ -2806,6 +2863,8 @@ function createService(db, { onWrite, getNotify } = {}) {
     summary: (kind, when) => queueSummary(kind, when, { user: 'FC Manager' }),
     autoReminders: () => (emailOn() ? remindOverdue(null, { user: 'FC Manager' }, { skipReminded: true }) : null),
     preview: (kind, when) => summaryText(kind, when),
+    // A report's rows for an email attachment (electron/reportAttachment.js); the whole club, no sign-in.
+    reportRows: (p) => methods['reports.sheet'](p, {}),
   };
 
   // Applications made before the half-month rule freed every month they touched: recalculate them once.
@@ -2841,7 +2900,19 @@ function createService(db, { onWrite, getNotify } = {}) {
   }
   recalcOldAbsences();
 
-  return { call, ensureMonthlyCharges, settings, outbox };
+  return {
+    call, ensureMonthlyCharges, settings, outbox,
+    // For the per-minute timer on the main computer (electron/notify.js): scheduled rules.
+    automations: {
+      tick: (now) => {
+        const ran = automations.tick(now);
+        if (ran.length) onWrite?.();
+        return ran;
+      },
+      // Once, on the main computer: today's fixed automations (Ծանուցումներ switches) become rules.
+      migrateNotify: (cfg) => automations.migrateNotify(cfg),
+    },
+  };
 }
 
 module.exports = { createService, DEFAULT_TEMPLATES };

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Download, RefreshCw, CheckCircle2, AlertTriangle, ShieldAlert } from 'lucide-react';
+import { Download, RefreshCw, CheckCircle2, AlertTriangle, ShieldAlert, Minus } from 'lucide-react';
 import { useT } from '../i18n';
 import { Button, useConfirm } from './ui';
 
@@ -22,28 +22,69 @@ function useInstall() {
   };
 }
 
-// A new version was found: the update is mandatory, so this screen replaces the whole app (sign-in included)
-// until it is installed — first the download's progress, then the only button, «Update now».
-export function UpdateScreen({ status: s }) {
+// Mins:secs left until the automatic restart (status.installAt), ticking every second.
+function useCountdown(installAt) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    if (!installAt) return undefined;
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [installAt]);
+  const left = installAt ? Math.max(0, Math.ceil((installAt - now) / 1000)) : 0;
+  return { left, text: `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}` };
+}
+
+// A new version (updates are mandatory, see electron/updater.js) — a card over the corner of the app, so the
+// work goes on: first the background download, then «restarts in 3:00» counting down, with «Update now».
+// At 0 the app restarts and installs by itself.
+export function UpdateBanner() {
   const t = useT();
+  const s = useUpdateStatus();
+  const { left, text } = useCountdown(s.state === 'ready' ? s.installAt : null);
+  const [small, setSmall] = useState(false); // minimized to a pill (opens again when the download is done)
   const ready = s.state === 'ready';
+  useEffect(() => {
+    if (ready) setSmall(false);
+  }, [ready]);
+  if (!s.required && !ready) return null;
   const failed = s.state === 'error';
+  if (small)
+    return (
+      <button className={`update-pill ${ready ? 'ready' : ''}`} onClick={() => setSmall(false)} title={t('update.requiredTitle', { v: s.version || '' })}>
+        <ShieldAlert size={15} />
+        {ready ? (left > 0 ? text : t('update.installing')) : failed ? t('update.retry') : `${s.percent || 0}%`}
+      </button>
+    );
   return (
-    <div className="update-screen">
-      <div className="update-box">
-        <ShieldAlert size={40} className="update-icon" />
-        <h2>{t('update.requiredTitle', { v: s.version || '' })}</h2>
-        <p className="muted">{t('update.requiredText', { current: s.current || '' })}</p>
+    <div className={`update-banner ${ready ? 'ready' : ''}`} role="alert">
+      <ShieldAlert size={22} className="update-icon" />
+      <div className="grow stack" style={{ gap: 6 }}>
+        <div className="row" style={{ justifyContent: 'space-between' }}>
+          <span className="strong">{t('update.requiredTitle', { v: s.version || '' })}</span>
+          <button className="update-min" onClick={() => setSmall(true)} title={t('update.minimize')} aria-label={t('update.minimize')}>
+            <Minus size={15} />
+          </button>
+        </div>
         {ready ? (
-          <Button variant="primary" icon={Download} onClick={() => window.fc.update.install()}>
-            {t('update.now')}
-          </Button>
+          <>
+            <div className="small">
+              {left > 0 ? t('update.countdown', { time: text }) : t('update.installing')}
+            </div>
+            <div className="small muted">{t('update.countdownHelp')}</div>
+            <div className="row">
+              <Button variant="primary" size="sm" icon={Download} onClick={() => window.fc.update.install()}>
+                {t('update.now')}
+              </Button>
+            </div>
+          </>
         ) : failed ? (
           <>
-            <p style={{ color: 'var(--bad)' }}>{t('update.error', { error: s.error || '' })}</p>
-            <Button icon={RefreshCw} onClick={() => window.fc.update.check()}>
-              {t('update.retry')}
-            </Button>
+            <div className="small" style={{ color: 'var(--bad)' }}>{t('update.error', { error: s.error || '' })}</div>
+            <div className="row">
+              <Button size="sm" icon={RefreshCw} onClick={() => window.fc.update.check()}>
+                {t('update.retry')}
+              </Button>
+            </div>
           </>
         ) : (
           <div className="update-progress">
@@ -53,26 +94,8 @@ export function UpdateScreen({ status: s }) {
             </div>
           </div>
         )}
-        <p className="small muted">{t('update.requiredHelp')}</p>
       </div>
     </div>
-  );
-}
-
-// Sidebar: shown only when a new version is downloaded and waiting.
-export function UpdateNotice() {
-  const t = useT();
-  const s = useUpdateStatus();
-  const install = useInstall();
-  if (s.state !== 'ready') return null;
-  return (
-    <button className="update-notice" onClick={() => install(s.version)}>
-      <Download size={15} />
-      <span>
-        {t('update.ready', { v: s.version })}
-        <span className="small">{t('update.clickToInstall')}</span>
-      </span>
-    </button>
   );
 }
 

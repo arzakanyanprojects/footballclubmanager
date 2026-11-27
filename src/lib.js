@@ -20,6 +20,8 @@ export async function rpc(method, params) {
   }
   // Refresh this window immediately; other PCs pick the change up by polling the host.
   if (!READ_ONLY.test(method) && !method.startsWith('auth.')) window.dispatchEvent(new Event('fc-local-change'));
+  // Automations that ran on this save: shown as toasts (components/Automations.jsx).
+  if (r.automations?.length) window.dispatchEvent(new CustomEvent('fc-automations', { detail: r.automations }));
   return r.result;
 }
 

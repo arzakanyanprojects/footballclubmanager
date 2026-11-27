@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { FileDigit, Trash2, Building2, Monitor, Network, History, Save, RefreshCw, Copy, LogOut, Server, Receipt, UserCog, ImagePlus, BellRing, Database, Printer, Plus } from 'lucide-react';
+import { FileDigit, Trash2, Building2, Monitor, Network, History, Save, RefreshCw, Copy, LogOut, Server, Receipt, UserCog, ImagePlus, BellRing, Database, Printer, Plus, Workflow } from 'lucide-react';
+import { AutomationsSettings } from '../components/Automations';
 import { useT, monthName } from '../i18n';
 import { feeShares, parseHolidays } from '../holidays';
 import { useRpc, rpc, fmtDateTime, currentPeriod, fitImage } from '../lib';
@@ -30,6 +31,7 @@ export default function Settings({ route, nav, appState, setAppState }) {
     auth.can('settings.notify') && { id: 'notify', label: t('notify.tab'), icon: BellRing },
     (!auth.required || auth.user?.is_admin) && { id: 'users', label: t('users.tab'), icon: UserCog },
     auth.can('settings.log') && { id: 'activity', label: t('settings.activity'), icon: History },
+    auth.can('settings.automations') && { id: 'automations', label: t('auto.tab'), icon: Workflow },
   ].filter(Boolean);
   const [picked, setTab] = useState(route.tab || tabs[0].id);
   const tab = tabs.some((x) => x.id === picked) ? picked : tabs[0].id;
@@ -43,7 +45,7 @@ export default function Settings({ route, nav, appState, setAppState }) {
         onChange={setTab}
         tabs={tabs}
       />
-      <div style={{ maxWidth: tab === 'notify' || tab === 'activity' ? 1180 : 820 }}>
+      <div style={{ maxWidth: tab === 'notify' || tab === 'activity' || tab === 'automations' ? 1180 : 820 }}>
         {tab === 'club' && <ClubSettings />}
         {tab === 'hdm' && <HdmTab appState={appState} setAppState={setAppState} />}
         {tab === 'pc' && <PcSettings appState={appState} setAppState={setAppState} />}
@@ -52,6 +54,7 @@ export default function Settings({ route, nav, appState, setAppState }) {
         {tab === 'users' && <UsersSettings />}
         {tab === 'notify' && <NotifySettings />}
         {tab === 'activity' && <ActivityLog nav={nav} />}
+        {tab === 'automations' && <AutomationsSettings />}
       </div>
     </>
   );

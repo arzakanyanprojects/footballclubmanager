@@ -223,6 +223,10 @@ function createAuth({ all, one, run, AppError, log }) {
 
     'notify.remind': 'payments.remind',
     'notify.outbox': 'settings.notify',
+    'automations.list': 'settings.automations',
+    'automations.save': 'settings.automations',
+    'automations.delete': 'settings.automations',
+    'automations.runs': 'settings.automations',
     'notify.retry': 'settings.notify',
     // Only records that a WhatsApp / Viber message was opened for a parent.
     'notify.messenger': () => [['payments.remind', 'payments.take', 'students.personal']],

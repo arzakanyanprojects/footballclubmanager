@@ -8,7 +8,7 @@
     { "id": "groups", "perms": ["view", "edit", "delete", "excel"] },
     { "id": "contracts", "perms": ["view", "edit", "delete", "print", "templates", "templatesDelete"] },
     { "id": "reports", "perms": ["dashboard", "salesAll", "view", "sales", "excel"] },
-    { "id": "settings", "perms": ["club", "hdm", "notify", "network", "data", "backups", "restore", "log", "logExcel"] }
+    { "id": "settings", "perms": ["club", "hdm", "notify", "automations", "network", "data", "backups", "restore", "log", "logExcel"] }
   ],
   "view": [
     "students.view", "students.personal",

@@ -12,7 +12,7 @@ import { ContractReadyModal } from './Contracts';
 import { GroupsExportModal } from '../components/GroupsExport';
 import { useStudentForm } from '../components/StudentFormHost';
 
-export const CATEGORIES = ['siblings', 'half', 'war', 'staff', 'orphan'];
+export const CATEGORIES = ['siblings', 'half', 'war', 'staff', 'orphan', 'order'];
 
 export { SERVICES } from '../clubLists';
 import { SERVICES } from '../clubLists';

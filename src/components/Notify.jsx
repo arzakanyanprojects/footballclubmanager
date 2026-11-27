@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Mail, Send, Users, Megaphone, History, Save, RefreshCw, RotateCcw, Search, CheckCircle2, Receipt, BellRing, FileText, Wallet, CalendarClock, CalendarRange, UserCheck, AtSign, MessageCircle } from 'lucide-react';
+import { Mail, Send, Users, Megaphone, History, Save, RefreshCw, RotateCcw, Search, CheckCircle2, BellRing, FileText, CalendarClock, UserCheck, Workflow, AtSign, MessageCircle } from 'lucide-react';
 import { useT } from '../i18n';
 import { rpc, useRpc, fmtDateTime } from '../lib';
 import { Badge, Button, Field, Loading, useAction, useConfirm, useToast } from './ui';
@@ -194,35 +194,18 @@ export function NotifySettings() {
         </OptCard>
       </div>
 
+      <div className="small muted" style={{ margin: '4px 0 2px' }}>
+        <Workflow size={14} style={{ verticalAlign: '-2px', marginRight: 6 }} />
+        {t('notify.movedToAutomations')}
+      </div>
+
       {/* ---------------------------------------------------------- parents */}
       <div className="opt-group-title">
         <Users size={16} /> {t('notify.forParents')}
       </div>
       <div className="opt-grid">
         {messengerCard}
-        <OptCard icon={Receipt} title={t('notify.optReceipts')} text={t('notify.receipts')} on={f.receipts} onToggle={(v) => set('receipts', v)} needs={needEmail} />
-        <OptCard
-          icon={BellRing}
-          title={t('notify.optReminders')}
-          text={t('notify.optRemindersText')}
-          on={f.reminders.auto}
-          onToggle={(v) => set('reminders.auto', v)}
-          needs={needEmail}
-        >
-          <div className="row wrap small" style={{ gap: 8 }}>
-            <span className="muted">{t('notify.optReminderDay')}</span>
-            <input
-              className="input"
-              type="number"
-              min="1"
-              max="28"
-              style={{ width: 70 }}
-              value={f.reminders.day}
-              onChange={(ev) => set('reminders.day', Math.min(28, Math.max(1, Number(ev.target.value) || 1)))}
-            />
-            <span className="muted">{t('notify.autoRemindersDay')}</span>
-          </div>
-          <div className="small muted">{t('notify.remindersHint')}</div>
+        <OptCard icon={BellRing} title={t('notify.optReminders')} text={t('notify.remindersManual')} needs={needEmail}>
           <div className="row">
             <SendRemindersButton />
           </div>
@@ -239,9 +222,7 @@ export function NotifySettings() {
               <div className="grid-2">
                 {[
                   ['reminderSubject', 'notify.tplReminderSubject', false],
-                  ['receiptSubject', 'notify.tplReceiptSubject', false],
                   ['reminderBody', 'notify.tplReminderBody', true],
-                  ['receiptBody', 'notify.tplReceiptBody', true],
                 ].map(([k, label, multi]) => (
                   <Field key={k} label={t(label)}>
                     {multi ? (
@@ -267,18 +248,9 @@ export function NotifySettings() {
         <Megaphone size={16} /> {t('notify.forStaff')}
       </div>
       <div className="opt-grid">
-        <OptCard icon={Wallet} title={t('notify.optPayments')} text={t('notify.paymentAlerts')} on={f.paymentAlerts} onToggle={(v) => set('paymentAlerts', v)} needs={needTg} />
-        <OptCard icon={CalendarClock} title={t('notify.optDaily')} on={f.daily.enabled} onToggle={(v) => set('daily.enabled', v)} needs={needAny}>
-          <div className="row wrap small" style={{ gap: 8 }}>
-            <span className="muted">{t('notify.optDailyAt')}</span>
-            <input className="input" type="time" style={{ width: 120 }} value={f.daily.time} onChange={(ev) => set('daily.time', ev.target.value)} />
-          </div>
-          <div className="row">
+        <OptCard icon={CalendarClock} title={t('notify.optSummaries')} text={t('notify.summariesManual')} needs={needAny}>
+          <div className="row wrap">
             <SendNowButton kind="daily" act={act} save={save} t={t} />
-          </div>
-        </OptCard>
-        <OptCard icon={CalendarRange} title={t('notify.optMonthly')} text={t('notify.optMonthlyText')} on={f.monthly.enabled} onToggle={(v) => set('monthly.enabled', v)} needs={needAny}>
-          <div className="row">
             <SendNowButton kind="monthly" act={act} save={save} t={t} />
           </div>
         </OptCard>

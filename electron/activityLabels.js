@@ -4,6 +4,8 @@ module.exports = {
  "actions": {
  "note.added": "Ավելացվեց նշում",
  "note.deleted": "Ջնջվեց նշում",
+ "automation.saved": "Պահպանվեց ավտոմատացում",
+ "automation.deleted": "Ջնջվեց ավտոմատացում",
  "students.wiped": "Ջնջվեցին բոլոր սաները",
  "auth.login": "Մուտք համակարգ",
  "user.create": "Ավելացվեց օգտատեր",
@@ -104,7 +106,8 @@ module.exports = {
   "half": "50%",
   "war": "44 օրյա/4 օրյա պատերազմի զոհ",
   "staff": "Աշխատակցի երեխա",
-  "orphan": "Միակողմանի ծնողազուրկ"
+  "orphan": "Միակողմանի ծնողազուրկ",
+  "order": "Ըստ հրամանի"
  },
  "statuses": {
   "active": "Ակտիվ",

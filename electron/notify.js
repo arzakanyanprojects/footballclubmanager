@@ -16,8 +16,6 @@ const DEFAULTS = {
 };
 
 const MAX_ATTEMPTS = 5;
-const pad = (n) => String(n).padStart(2, '0');
-const localDay = (d = new Date()) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 
 function merge(base, patch) {
   const out = { ...base };
@@ -46,10 +44,10 @@ function mailer(cfg) {
   return transport;
 }
 
-async function sendEmail(cfg, { to, subject, text }) {
+async function sendEmail(cfg, { to, subject, text, attachments }) {
   if (!cfg.email.enabled || !cfg.email.host) throw new Error('Email is not set up');
   const from = cfg.email.fromName ? `"${cfg.email.fromName.replace(/"/g, '')}" <${cfg.email.user}>` : cfg.email.user;
-  await mailer(cfg).sendMail({ from, to, subject: subject || '', text });
+  await mailer(cfg).sendMail({ from, to, subject: subject || '', text, ...(attachments?.length ? { attachments } : {}) });
 }
 
 async function telegram(cfg, method, body) {
@@ -85,8 +83,9 @@ async function findChats(cfg) {
 /**
  * getConfig(): the merged notify settings; saveState(patch): stores scheduler progress.
  * getService(): the host's service (null while it restarts).
+ * getAttachment(message): the file an email carries (a report an automation sends) → { filename, content }.
  */
-function startWorker({ getConfig, saveState, getService }) {
+function startWorker({ getConfig, saveState, getService, getAttachment }) {
   let busy = false;
 
   async function sendPending() {
@@ -97,7 +96,11 @@ function startWorker({ getConfig, saveState, getService }) {
       const cfg = getConfig();
       for (const m of service.outbox.pending()) {
         try {
-          if (m.channel === 'email') await sendEmail(cfg, { to: m.recipient, subject: m.subject, text: m.body });
+          if (m.channel === 'email') {
+            // A report is made now, so it has the data as of sending.
+            const attachments = m.attachment && getAttachment ? [await getAttachment(m)] : [];
+            await sendEmail(cfg, { to: m.recipient, subject: m.subject, text: m.body, attachments });
+          }
           else await sendTelegram(cfg, { chatId: m.recipient, text: m.body });
           service.outbox.sent(m.id);
         } catch (err) {
@@ -114,29 +117,9 @@ function startWorker({ getConfig, saveState, getService }) {
   function schedule() {
     const service = getService();
     if (!service) return;
-    const cfg = getConfig();
-    const now = new Date();
-    const today = localDay(now);
-    const month = today.slice(0, 7);
-    const st = cfg.state || {};
     try {
-      // Daily summary at the chosen time (or later the same day if the PC was off).
-      const [hh, mm] = String(cfg.daily.time || '20:00').split(':').map(Number);
-      if (cfg.daily.enabled && st.daily !== today && now.getHours() * 60 + now.getMinutes() >= hh * 60 + (mm || 0)) {
-        service.outbox.summary('daily', today);
-        saveState({ daily: today });
-      }
-      // Monthly summary for the previous month, from the 1st.
-      if (cfg.monthly.enabled && st.monthly !== month) {
-        const prev = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-        service.outbox.summary('monthly', `${prev.getFullYear()}-${pad(prev.getMonth() + 1)}`);
-        saveState({ monthly: month });
-      }
-      // Automatic reminders, once a month from the chosen day.
-      if (cfg.reminders.auto && st.reminders !== month && now.getDate() >= Number(cfg.reminders.day || 20)) {
-        service.outbox.autoReminders();
-        saveState({ reminders: month });
-      }
+      // The scheduled automations (summaries, reminders… are rules now — Settings → Ավտոմատացումներ).
+      service.automations.tick(new Date());
     } catch (err) {
       console.error('[notify] schedule failed:', err.message);
     }

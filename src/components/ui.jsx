@@ -115,10 +115,15 @@ export function SearchBox({ value, onChange, placeholder, width }) {
 }
 
 export function Tabs({ tabs, value, onChange }) {
+  // The bar scrolls sideways when the tabs don't fit: keep the chosen one in view.
+  const active = useRef(null);
+  useEffect(() => {
+    active.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }, [value]);
   return (
     <div className="tabs">
       {tabs.map((t) => (
-        <button key={t.id} className={`tab ${value === t.id ? 'active' : ''}`} onClick={() => onChange(t.id)}>
+        <button key={t.id} ref={value === t.id ? active : undefined} className={`tab ${value === t.id ? 'active' : ''}`} onClick={() => onChange(t.id)}>
           {t.icon && <t.icon size={16} />}
           {t.label}
           {t.count != null && <span className="count">{t.count}</span>}

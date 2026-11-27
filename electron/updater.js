@@ -1,22 +1,39 @@
 // Automatic updates from the GitHub Releases of arzakanyanprojects/footballclubmanager
-// (set in package.json → build.publish). Updates are mandatory: once a new version is found
-// (status.required), the app shows only the update screen — it downloads, then the only thing
-// the user can do is «Update now» (it also installs the next time the app quits).
+// (set in package.json → build.publish). Updates are mandatory, but don't interrupt the work: a new
+// version downloads in the background, then the app warns that it restarts in 3 minutes (status.installAt)
+// so the user can finish and save what they are doing — or press «Update now». At 0 it installs by itself.
 const { app } = require('electron');
 
 let autoUpdater = null;
 let status = { state: 'idle', current: null };
 let notify = () => {};
+let onReady = () => {};
+let autoInstall = () => install();
+let installTimer = null;
 
 const CHECK_EVERY = 30 * 60 * 1000; // 30 minutes
+const INSTALL_DELAY = 3 * 60 * 1000; // the warning before the automatic restart
+
+// The new version is downloaded: install it by itself after INSTALL_DELAY.
+function ready(version) {
+  clearTimeout(installTimer);
+  const installAt = Date.now() + INSTALL_DELAY;
+  set({ state: 'ready', version, installAt });
+  installTimer = setTimeout(() => autoInstall(), INSTALL_DELAY);
+  onReady(status);
+}
 
 function set(next) {
   status = { ...status, ...next, current: app.getVersion() };
   notify(status);
 }
 
-function setup(onStatus) {
+// onStatus(status): every change. opts.onReady(status): the download finished and the countdown started.
+// opts.install(): what runs when the countdown ends (the app's own quit-and-install).
+function setup(onStatus, opts = {}) {
   notify = onStatus;
+  if (opts.onReady) onReady = opts.onReady;
+  if (opts.install) autoInstall = opts.install;
   status.current = app.getVersion();
   if (!app.isPackaged) {
     status.state = 'dev';
@@ -29,7 +46,7 @@ function setup(onStatus) {
           if (percent < 100) set({ percent });
           else {
             clearInterval(tick);
-            set({ state: 'ready' });
+            ready(process.env.FC_FAKE_UPDATE);
           }
         }, 1000);
       }, 3000);
@@ -45,7 +62,7 @@ function setup(onStatus) {
   autoUpdater.on('update-not-available', () => set({ state: 'none', checkedAt: new Date().toISOString() }));
   autoUpdater.on('update-available', (i) => set({ state: 'downloading', version: i.version, percent: 0, required: true, error: null }));
   autoUpdater.on('download-progress', (p) => set({ state: 'downloading', percent: Math.round(p.percent || 0) }));
-  autoUpdater.on('update-downloaded', (i) => set({ state: 'ready', version: i.version }));
+  autoUpdater.on('update-downloaded', (i) => ready(i.version));
   autoUpdater.on('error', (err) => {
     const msg = String(err?.message || err);
     // No release published yet on GitHub: nothing to update to.

@@ -490,6 +490,34 @@ const MIGRATIONS = [
     const add = db.prepare('INSERT INTO roles (name, perms) VALUES (?, ?)');
     for (const [name, perms] of roles) add.run(name, JSON.stringify(perms));
   },
+  // v38: automations («Ավտոմատացումներ», electron/automations.js): the owner's When → If → Then rules and what each
+  // run did. A run keeps the rule's name, so its history stays readable after the rule is renamed or deleted.
+  // An outbox email can carry a file (a report), described in `attachment` and built when it is sent.
+  `
+  CREATE TABLE automations (
+    id             INTEGER PRIMARY KEY,
+    name           TEXT NOT NULL,
+    enabled        INTEGER NOT NULL DEFAULT 1,
+    trigger        TEXT NOT NULL,
+    conditions     TEXT NOT NULL DEFAULT '[]',
+    actions        TEXT NOT NULL DEFAULT '[]',
+    schedule_state TEXT,
+    created_by     TEXT,
+    created_at     TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    updated_at     TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+  );
+  CREATE TABLE automation_runs (
+    id            INTEGER PRIMARY KEY,
+    automation_id INTEGER,
+    rule_name     TEXT NOT NULL,
+    at            TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    student_id    INTEGER REFERENCES students(id) ON DELETE SET NULL,
+    status        TEXT NOT NULL,
+    detail        TEXT
+  );
+  CREATE INDEX automation_runs_rule ON automation_runs (automation_id, id);
+  ALTER TABLE outbox ADD COLUMN attachment TEXT;
+  `,
 ];
 
 function seed(db) {

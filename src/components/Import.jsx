@@ -4,7 +4,7 @@ import { useT } from '../i18n';
 import { rpc, useRpc } from '../lib';
 import { Button, Field, Modal, Segmented, useAction } from './ui';
 
-const CATEGORY_KEYS = ['siblings', 'half', 'war', 'staff', 'orphan'];
+const CATEGORY_KEYS = ['siblings', 'half', 'war', 'staff', 'orphan', 'order'];
 
 // FC Manager fields a file column can be matched to. `alias`: header words that match automatically.
 const FIELDS = [
@@ -161,6 +161,7 @@ function categoryOf(v, t) {
   const exact = CATEGORY_KEYS.find((k) => norm(t(`category.${k}`)) === s || k === s);
   if (exact) return exact;
   if (/ծնողազուրկ/u.test(s)) return 'orphan';
+  if (/հրաման/u.test(s)) return 'order';
   if (/երեխա/u.test(s) && /(^|\s)(2|3|4|երկրորդ|երրորդ|ավել)/u.test(s) && !/աշխատակց/u.test(s)) return 'siblings';
   if (/աշխատակց/u.test(s)) return 'staff';
   if (/պատերազմ|զոհ/u.test(s)) return 'war';

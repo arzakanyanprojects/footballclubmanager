@@ -273,7 +273,7 @@ function GroupSheet({ groupId, nav }) {
         <div className="spacer" />
         {lock.banner && <div style={{ flexBasis: '100%', order: 10 }}>{lock.banner}</div>}
         {auth.canAny('attendance.print', 'attendance.excel') && (
-          <Button icon={Printer} onClick={() => setExporting(true)} disabled={!days.length || !students.length}>
+          <Button icon={Printer} onClick={() => setExporting(true)} disabled={!students.length}>
             {t('sheet.export')}
           </Button>
         )}
@@ -410,7 +410,7 @@ function GroupSheet({ groupId, nav }) {
       )}
 
       {exporting && group && (
-        <ExportModal group={group} month={month} days={days} students={students} filled={data.filled} onClose={() => setExporting(false)} />
+        <ExportModal group={group} month={month} students={students} onClose={() => setExporting(false)} />
       )}
 
       {menu && (
@@ -501,26 +501,19 @@ function DayMenu({ menu, month, groupId, can, onAllPresent, onClose }) {
   );
 }
 
-// The coaches' paper form: chosen training days as empty columns to fill in Ներկա / Բացակա by hand.
-function ExportModal({ group, month, days, students, filled, onClose }) {
+// The coaches' paper form: empty columns without dates to fill in the date and Ներկա / Բացակա by hand, and
+// each student's debt. How many columns is chosen when exporting: 2 by default, 3 for a championship group.
+const blankColumnCount = (group) => (group?.championship ? 3 : 2);
+const COLUMN_CHOICES = [1, 2, 3, 4, 5, 6, 7, 8];
+
+function ExportModal({ group, month, students, onClose }) {
   const t = useT();
   const canExcel = useCan('attendance.excel');
   const canPrint = useCan('attendance.print');
   const act = useAction();
   const club = useClub();
-  const today = todayIso();
-  // Usually the next two trainings are printed.
-  const [picked, setPicked] = useState(() => {
-    const upcoming = days.filter((d) => d.date >= today);
-    return new Set((upcoming.length ? upcoming.slice(0, 2) : days.slice(-2)).map((d) => d.date));
-  });
-  const dates = days.map((d) => d.date).filter((d) => picked.has(d));
-  const toggle = (date) =>
-    setPicked((p) => {
-      const n = new Set(p);
-      n.has(date) ? n.delete(date) : n.add(date);
-      return n;
-    });
+  const [n, setN] = useState(() => blankColumnCount(group));
+  const cols = Array.from({ length: n }, (_, i) => `c${i + 1}`);
 
   const person = (name, phone) => (name ? `${name}${phone ? ` (${phone})` : ''}` : '—');
   const title = t('sheet.formTitle', { group: group.name });
@@ -535,14 +528,14 @@ function ExportModal({ group, month, days, students, filled, onClose }) {
     act(async () => {
       const r = await window.fc.saveXlsx({ perm: 'attendance.excel', 
         kind: 'form',
-        defaultName: `${group.name} ${dates.map((d) => fmtDate(d)).join(' ')}.xlsx`.replace(/[\\/:*?"<>|]/g, '_'),
+        defaultName: `${group.name} ${monthName(t, month)}.xlsx`.replace(/[\\/:*?"<>|]/g, '_'),
         sheetName: group.name,
         title,
         lines,
         columns: [
           { key: 'no', header: '#', width: 5, type: 'number' },
           { key: 'name', header: t('students.name'), width: 36, type: 'text' },
-          ...dates.map((d) => ({ key: d, header: fmtDate(d), width: 15, type: 'blank' })),
+          ...cols.map((c) => ({ key: c, header: '', width: 18, type: 'blank' })),
           { key: 'debt', header: t('sheet.debt'), width: 14, type: 'money' },
         ],
         rows,
@@ -552,7 +545,7 @@ function ExportModal({ group, month, days, students, filled, onClose }) {
       return r;
     }, t('reports.saved'));
 
-  const print = () => act(() => window.fc.print({ perm: 'attendance.print', html: formHtml({ title, lines, dates, rows, t, currency: club.currency, logo: club.club_logo }) }));
+  const print = () => act(() => window.fc.print({ perm: 'attendance.print', html: formHtml({ title, lines, cols, rows, t, currency: club.currency, logo: club.club_logo }) }));
 
   return (
     <Modal
@@ -563,12 +556,12 @@ function ExportModal({ group, month, days, students, filled, onClose }) {
         <>
           <Button onClick={onClose}>{t('common.cancel')}</Button>
           {canExcel && (
-            <Button icon={FileSpreadsheet} onClick={excel} disabled={!dates.length}>
+            <Button icon={FileSpreadsheet} onClick={excel}>
               Excel
             </Button>
           )}
           {canPrint && (
-            <Button variant="primary" icon={Printer} onClick={print} disabled={!dates.length}>
+            <Button variant="primary" icon={Printer} onClick={print}>
               {t('sheet.print')}
             </Button>
           )}
@@ -576,19 +569,15 @@ function ExportModal({ group, month, days, students, filled, onClose }) {
       }
     >
       <div className="stack">
-        <div className="small muted">{t('sheet.pickHint')}</div>
-        <Field label={`${t('sheet.pickDays')} · ${t('sheet.selected', { n: dates.length })}`}>
-          <div className="day-pick">
-            {days.map((d) => (
-              <label key={d.id} className={`check day-pick-item ${picked.has(d.date) ? 'on' : ''}`}>
-                <input type="checkbox" checked={picked.has(d.date)} onChange={() => toggle(d.date)} />
-                <span className="strong">{fmtDate(d.date)}</span>
-                <span className="small muted">{t(`weekdayShort.${weekday(d.date)}`)}</span>
-                {filled.includes(d.date) && <Badge tone="good">{t('sheet.filledDay')}</Badge>}
-              </label>
-            ))}
+        {!!group.championship && (
+          <div>
+            <Badge tone="info">{t('sheet.blankColsComp')}</Badge>
           </div>
+        )}
+        <Field label={t('sheet.blankColsCount')}>
+          <Segmented value={n} onChange={setN} options={COLUMN_CHOICES.map((c) => ({ value: c, label: String(c) }))} />
         </Field>
+        <div className="small muted">{t('sheet.blankCols', { n })}</div>
       </div>
     </Modal>
   );
@@ -596,10 +585,10 @@ function ExportModal({ group, month, days, students, filled, onClose }) {
 
 // Printable page of the same form (A4; landscape when there are many days). The whole group fits on one
 // page: the rows (and their text) get as tall as the page allows — 27 pt at most, smaller for a big group.
-function formHtml({ title, lines, dates, rows, t, currency, logo }) {
+function formHtml({ title, lines, cols, rows, t, currency, logo }) {
   const esc = (v) => String(v ?? '').replace(/[&<>]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[ch]);
-  const landscape = dates.length > 5;
-  const pageH = ((landscape ? 210 : 297) - 24) * (72 / 25.4); // pt, inside the top and bottom margins
+  const landscape = cols.length > 5;
+  const pageH = ((landscape ? 210 : 297) - 24) * (72 / 25.4) - 18; // pt, inside the top and bottom margins, less the print date line
   const headH = (logo ? 66 : 30) + lines.length * 15 + 14 + 26; // title (and logo) + lines + space + the table's header row
   // Each row also has its border line (≈1 pt).
   const rowH = Math.max(5, Math.min(27, Math.floor(((pageH - headH - 12) / Math.max(rows.length, 1) - 1.2) * 10) / 10));
@@ -618,10 +607,11 @@ function formHtml({ title, lines, dates, rows, t, currency, logo }) {
     th { background: #0e8a43; color: #fff; font-size: 10.5pt; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     th.name { text-align: left; }
     td.name { white-space: nowrap; }
-    td.date { width: ${landscape ? 70 : 95}pt; }
+    td.date, th.date { width: ${landscape ? 70 : 95}pt; }
     td.debt, th.debt { width: 80pt; text-align: right; white-space: nowrap; }
     td.debt { color: #c42b2b; font-weight: bold; }
     thead { display: table-header-group; }
+    .printed { position: fixed; right: 0; bottom: 0; font-size: 9pt; color: #555; }
     tr { page-break-inside: avoid; }
   </style></head><body>
     <div class="head">
@@ -635,25 +625,26 @@ function formHtml({ title, lines, dates, rows, t, currency, logo }) {
       <thead><tr>
         <th class="no">#</th>
         <th class="name">${esc(t('students.name'))}</th>
-        ${dates.map((d) => `<th>${esc(fmtDate(d))}</th>`).join('')}
+        ${cols.map(() => '<th class="date"></th>').join('')}
         <th class="debt">${esc(t('sheet.debt'))}</th>
       </tr></thead>
       <tbody>
         ${rows
           .map(
             (r, i) =>
-              `<tr><td class="no">${i + 1}</td><td class="name">${esc(r.name)}</td>${dates.map(() => '<td class="date"></td>').join('')}<td class="debt">${
+              `<tr><td class="no">${i + 1}</td><td class="name">${esc(r.name)}</td>${cols.map(() => '<td class="date"></td>').join('')}<td class="debt">${
                 r.debt ? esc(money(r.debt, currency)) : ''
               }</td></tr>`
           )
           .join('')}
       </tbody>
     </table>
+    <div class="printed">${esc(t('sheet.printedOn', { date: fmtDate(todayIso()) }))}</div>
     <script>
       // One page whatever the group: laid out at the page's width, then shrunk if still taller (or wider) than the
       // page. The app calls it right before making the PDF (when the logo and fonts are in).
       window.fitPage = function () {
-        var availH = (${landscape ? 210 : 297} - 24 - 3) * 96 / 25.4;
+        var availH = (${landscape ? 210 : 297} - 24 - 3) * 96 / 25.4 - 24; // above the print date line
         var availW = (${landscape ? 297 : 210} - 24 - 1) * 96 / 25.4;
         var table = document.querySelector('table');
         var z = 1;

@@ -7,13 +7,27 @@ import { useAuth, useCan } from '../components/Auth';
 import { MessageButton } from '../components/Messenger';
 import { useRpc, rpc, age, fmtDate, fmtDateTime, money, readFileBase64, fileSize, todayIso } from '../lib';
 import { Avatar, Badge, Button, Empty, Field, Loading, Modal, Money, Tabs, useAction, useClub, useConfirm } from '../components/ui';
-import { FormSection } from './Students';
+import { FormSection, CATEGORIES } from './Students';
 import { useStudentForm } from '../components/StudentFormHost';
 import { AbsenceModal, printStoredFile, openStoredFile } from '../components/Absence';
 import { ChargesTable, DebtModal, MonthlyPaymentModal, chargeStatus } from './Payments';
 import { NewContractModal, ContractModal, CONTRACT_TONE } from './Contracts';
 import { RelatedTab, HistoryTab } from '../components/StudentExtras';
 import { useEditLock } from '../components/Locks';
+
+// The discount mark: a filled orange starburst with a white «%».
+function DiscountBurst({ size = 24 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true">
+      <polygon fill="var(--discount)" points="12.00,0.00 14.01,1.90 16.59,0.91 17.72,3.44 20.49,3.51 20.56,6.28 23.09,7.41 22.10,9.99 24.00,12.00 22.10,14.01 23.09,16.59 20.56,17.72 20.49,20.49 17.72,20.56 16.59,23.09 14.01,22.10 12.00,24.00 9.99,22.10 7.41,23.09 6.28,20.56 3.51,20.49 3.44,17.72 0.91,16.59 1.90,14.01 0.00,12.00 1.90,9.99 0.91,7.41 3.44,6.28 3.51,3.51 6.28,3.44 7.41,0.91 9.99,1.90" />
+      <g stroke="#fff" strokeWidth="2.1" strokeLinecap="round" fill="none">
+        <line x1="8.3" y1="15.7" x2="15.7" y2="8.3" />
+        <circle cx="8.7" cy="8.7" r="1.5" />
+        <circle cx="15.3" cy="15.3" r="1.5" />
+      </g>
+    </svg>
+  );
+}
 
 export default function StudentProfile({ id, nav }) {
   const studentForm = useStudentForm();
@@ -88,6 +102,12 @@ export default function StudentProfile({ id, nav }) {
                 {s.patronymic ? ` ${s.patronymic}` : ''}
               </h2>
               <Badge tone={s.status === 'active' ? 'accent' : ''}>{t(`status.${s.status}`)}</Badge>
+              {/* A discount «Կարգավիճակ» (2nd child, staff, war victim…): an icon, the status on hover. */}
+              {CATEGORIES.includes(s.category) && (
+                <span className="discount-mark" data-tip={`${t('students.category')}: ${t(`category.${s.category}`)}`} aria-label={t(`category.${s.category}`)} tabIndex={0}>
+                  <DiscountBurst size={24} />
+                </span>
+              )}
             </div>
             <div className="profile-meta">
               <span>
