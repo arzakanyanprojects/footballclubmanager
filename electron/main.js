@@ -490,6 +490,7 @@ function registerIpc() {
     'xlsx:save': (r) => allowedOut(r?.perm, 'excel'),
     'file:save': (o) => allowedOut(o?.perm, 'excel'),
     print: (o) => allowedOut(o?.perm, 'print'),
+    'print:silent': (o) => allowedOut(o?.perm, 'print'),
     'pdf:export': (o) => allowedOut(o?.perm, 'print'),
     'file:print': (o) => allowedOut(o?.perm, 'print'),
     'file:printDialog': (o) => allowedOut(o?.perm, 'print'),
@@ -991,6 +992,39 @@ function registerIpc() {
   // Printing: the page is made into a PDF and opened in the computer's PDF viewer (Edge, Acrobat…), which
   // shows it and prints it with a real preview, printer choice and copies. (Electron's own print window says
   // the app doesn't support a preview.) Without a PDF viewer, the print window as before.
+  // «Տպել բոլորը» (Հաճախումներ): the pages straight to the default printer, without the PDF viewer — one print
+  // job per page, each sized to one A4 page first (window.fitPage), as the single print does.
+  handle('print:silent', async (_e, { pages }) => {
+    const list = (Array.isArray(pages) ? pages : []).filter((h) => typeof h === 'string');
+    let printed = 0;
+    try {
+      for (const html of list) {
+        const w = await renderHtmlWindow(html);
+        try {
+          await w.webContents
+            .executeJavaScript(`document.fonts.ready.then(() => (typeof window.fitPage === 'function' ? window.fitPage() : 0))`)
+            .catch(() => 0);
+          if (process.env.FC_EXPORT_DIR) {
+            // Testing: the pages go to that folder as PDFs instead of the printer.
+            const pdf = await w.webContents.printToPDF({ printBackground: true, preferCSSPageSize: true });
+            fs.writeFileSync(path.join(process.env.FC_EXPORT_DIR, `print-all-${Date.now()}-${printed + 1}.pdf`), pdf);
+          } else {
+            const landscape = /size:\s*A4 landscape/.test(html);
+            await new Promise((resolve, reject) =>
+              w.webContents.print({ silent: true, printBackground: true, pageSize: 'A4', landscape }, (ok, why) => (ok ? resolve() : reject(new Error(why || 'failed'))))
+            );
+          }
+          printed++;
+        } finally {
+          w.destroy();
+        }
+      }
+      return { ok: true, result: { printed } };
+    } catch (err) {
+      return { ok: false, error: 'PRINT_FAILED', detail: `${err.message} (${printed}/${list.length})` };
+    }
+  });
+
   handle('print', async (_e, { html }) => {
     const w = await renderHtmlWindow(html);
     // A page that sizes itself to fit (e.g. the attendance form: the whole group on one page) does it now.

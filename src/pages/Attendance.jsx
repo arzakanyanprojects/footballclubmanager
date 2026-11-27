@@ -3,7 +3,7 @@ import { ArrowLeft, ChevronLeft, ChevronRight, CheckCheck, Plus, Trash2, Users, 
 import { useT, monthName } from '../i18n';
 import { useAuth, useCan } from '../components/Auth';
 import { useRpc, rpc, todayIso, currentPeriod, addMonths, daysInMonth, weekday, fmtDate, fmtDateTime, money } from '../lib';
-import { Badge, Button, Empty, Field, Loading, Modal, Money, SearchBox, Segmented, useAction, useClub, useConfirm } from '../components/ui';
+import { Badge, Button, Empty, Field, Loading, Modal, Money, SearchBox, Segmented, useAction, useClub, useConfirm, useToast } from '../components/ui';
 import { EditingMark, useEditLock, useLocks } from '../components/Locks';
 
 // Marks that count as attended; anything else recorded counts as absent.
@@ -61,6 +61,7 @@ function GroupCards({ nav }) {
           <h1>{t('nav.attendance')}</h1>
           <div className="sub">{t('sheet.subtitle', { month: monthName(t, currentPeriod()) })}</div>
         </div>
+        <PrintAllButton groups={shown} />
       </div>
       {loading && !data ? (
         <Loading />
@@ -506,6 +507,59 @@ function DayMenu({ menu, month, groupId, can, onAllPresent, onClose }) {
 const blankColumnCount = (group) => (group?.championship ? 3 : 2);
 const COLUMN_CHOICES = [1, 2, 3, 4, 5, 6, 7, 8];
 
+// One group's form: its title, the coach / assistant / month lines and a row per student with their debt.
+function formParts(group, month, students, t) {
+  const person = (name, phone) => (name ? `${name}${phone ? ` (${phone})` : ''}` : '—');
+  return {
+    title: t('sheet.formTitle', { group: group.name }),
+    lines: [
+      t('sheet.labelValue', { label: t('groups.coach'), value: person(group.coach, group.coach_phone) }),
+      t('sheet.labelValue', { label: t('groups.assistant'), value: person(group.assistant, group.assistant_phone) }),
+      t('sheet.labelValue', { label: t('sheet.monthLabel'), value: monthName(t, month) }),
+    ],
+    rows: students.map((s, i) => ({ no: i + 1, name: [s.first_name, s.last_name, s.patronymic].filter(Boolean).join(' '), debt: s.overdue || 0 })),
+  };
+}
+
+// «Տպել բոլորը»: every group shown (all of them, unless filtered) straight to the default printer, no PDF
+// viewer — championship groups with 4 empty columns, the others with 3. Groups without students are skipped.
+function PrintAllButton({ groups }) {
+  const t = useT();
+  const act = useAction();
+  const confirm = useConfirm();
+  const toast = useToast();
+  const club = useClub();
+  const canPrint = useCan('attendance.print');
+  const [busy, setBusy] = useState(false);
+  if (!canPrint || !groups.length) return null;
+  const run = async () => {
+    if (!(await confirm({ title: t('sheet.printAllTitle'), text: t('sheet.printAllText', { n: groups.length }), confirmLabel: t('sheet.print') }))) return;
+    setBusy(true);
+    const month = currentPeriod();
+    const printed = await act(async () => {
+      const pages = [];
+      for (const g of groups) {
+        const d = await rpc('training.month', { groupId: g.id, month });
+        if (!d?.students?.length) continue;
+        const { title, lines, rows } = formParts(g, month, d.students, t);
+        const cols = Array.from({ length: g.championship ? 4 : 3 }, (_, i) => `c${i + 1}`);
+        pages.push(formHtml({ title, lines, cols, rows, t, currency: club.currency, logo: club.club_logo }));
+      }
+      if (!pages.length) throw Object.assign(new Error(), { code: 'NO_STUDENTS' });
+      const r = await window.fc.printSilent({ perm: 'attendance.print', pages });
+      if (!r.ok) throw Object.assign(new Error(r.error), { code: r.error, detail: r.detail });
+      return r.result.printed;
+    });
+    setBusy(false);
+    if (printed) toast.success(t('sheet.printAllDone', { n: printed }));
+  };
+  return (
+    <Button icon={Printer} onClick={run} disabled={busy}>
+      {busy ? t('sheet.printAllBusy') : t('sheet.printAll')}
+    </Button>
+  );
+}
+
 function ExportModal({ group, month, students, onClose }) {
   const t = useT();
   const canExcel = useCan('attendance.excel');
@@ -515,14 +569,7 @@ function ExportModal({ group, month, students, onClose }) {
   const [n, setN] = useState(() => blankColumnCount(group));
   const cols = Array.from({ length: n }, (_, i) => `c${i + 1}`);
 
-  const person = (name, phone) => (name ? `${name}${phone ? ` (${phone})` : ''}` : '—');
-  const title = t('sheet.formTitle', { group: group.name });
-  const lines = [
-    t('sheet.labelValue', { label: t('groups.coach'), value: person(group.coach, group.coach_phone) }),
-    t('sheet.labelValue', { label: t('groups.assistant'), value: person(group.assistant, group.assistant_phone) }),
-    t('sheet.labelValue', { label: t('sheet.monthLabel'), value: monthName(t, month) }),
-  ];
-  const rows = students.map((s, i) => ({ no: i + 1, name: [s.first_name, s.last_name, s.patronymic].filter(Boolean).join(' '), debt: s.overdue || 0 }));
+  const { title, lines, rows } = formParts(group, month, students, t);
 
   const excel = () =>
     act(async () => {
