@@ -374,9 +374,19 @@ function readTransfer(file) {
   return data;
 }
 
+// Loaded from a temporary file, not a data: URL — Chromium refuses data: URLs over 2 MB, and a big page
+// («Տպել բոլորը»: dozens of groups, each page with the club logo) is larger than that.
 async function renderHtmlWindow(html) {
   const w = new BrowserWindow({ show: false, webPreferences: { sandbox: true } });
-  await w.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
+  const dir = path.join(app.getPath('temp'), 'FC Manager');
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, `page-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.html`);
+  fs.writeFileSync(file, html, 'utf8');
+  try {
+    await w.loadFile(file);
+  } finally {
+    fs.rm(file, { force: true }, () => {});
+  }
   return w;
 }
 
