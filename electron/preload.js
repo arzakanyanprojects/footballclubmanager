@@ -41,7 +41,6 @@ contextBridge.exposeInMainWorld('fc', {
   saveBinary: (opts) => ipcRenderer.invoke('file:saveBinary', opts),
   exportPdf: (opts) => ipcRenderer.invoke('pdf:export', opts),
   print: (opts) => ipcRenderer.invoke('print', opts),
-  printSilent: (opts) => ipcRenderer.invoke('print:silent', opts),
   openPath: (p) => ipcRenderer.invoke('shell:openPath', p),
   onDataChanged: on('data-changed'),
   onConnection: on('connection-status'),

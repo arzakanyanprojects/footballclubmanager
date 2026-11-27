@@ -3,7 +3,7 @@ import { ArrowLeft, ChevronLeft, ChevronRight, CheckCheck, Plus, Trash2, Users, 
 import { useT, monthName } from '../i18n';
 import { useAuth, useCan } from '../components/Auth';
 import { useRpc, rpc, todayIso, currentPeriod, addMonths, daysInMonth, weekday, fmtDate, fmtDateTime, money } from '../lib';
-import { Badge, Button, Empty, Field, Loading, Modal, Money, SearchBox, Segmented, useAction, useClub, useConfirm, useToast } from '../components/ui';
+import { Badge, Button, Empty, Field, Loading, Modal, Money, SearchBox, Segmented, useAction, useClub, useConfirm } from '../components/ui';
 import { EditingMark, useEditLock, useLocks } from '../components/Locks';
 
 // Marks that count as attended; anything else recorded counts as absent.
@@ -61,7 +61,6 @@ function GroupCards({ nav }) {
           <h1>{t('nav.attendance')}</h1>
           <div className="sub">{t('sheet.subtitle', { month: monthName(t, currentPeriod()) })}</div>
         </div>
-        <PrintAllButton groups={shown} />
       </div>
       {loading && !data ? (
         <Loading />
@@ -102,6 +101,7 @@ function GroupCards({ nav }) {
               ))}
             </select>
           )}
+          <PrintAllButton groups={shown} />
           {filtered && (
             <Button variant="ghost" icon={FilterX} onClick={() => setFlt((cardFilters = { q: '', status: 'all', coach: '', year: '' }))}>
               {t('sheet.clearFilters')}
@@ -521,42 +521,87 @@ function formParts(group, month, students, t) {
   };
 }
 
-// «Տպել բոլորը»: every group shown (all of them, unless filtered) straight to the default printer, no PDF
-// viewer — championship groups with 4 empty columns, the others with 3. Groups without students are skipped.
+// «Տպել բոլորը»: pick groups (all shown ones are ticked), then one PDF with a page per group opens ready to
+// print — championship groups with 4 empty columns, the others with 3. Groups without students are left out.
 function PrintAllButton({ groups }) {
   const t = useT();
-  const act = useAction();
-  const confirm = useConfirm();
-  const toast = useToast();
-  const club = useClub();
-  const canPrint = useCan('attendance.print');
-  const [busy, setBusy] = useState(false);
+  const canPrint = useCan('attendance.printAll'); // its own tick (Settings → Users)
+  const [open, setOpen] = useState(false);
   if (!canPrint || !groups.length) return null;
-  const run = async () => {
-    if (!(await confirm({ title: t('sheet.printAllTitle'), text: t('sheet.printAllText', { n: groups.length }), confirmLabel: t('sheet.print') }))) return;
+  return (
+    <>
+      <Button icon={Printer} onClick={() => setOpen(true)}>
+        {t('sheet.printAll')}
+      </Button>
+      {open && <PrintAllModal groups={groups} onClose={() => setOpen(false)} />}
+    </>
+  );
+}
+
+function PrintAllModal({ groups, onClose }) {
+  const t = useT();
+  const act = useAction();
+  const club = useClub();
+  const [picked, setPicked] = useState(() => new Set(groups.map((g) => g.id)));
+  const [busy, setBusy] = useState(false);
+  const toggle = (id) =>
+    setPicked((p) => {
+      const n = new Set(p);
+      n.has(id) ? n.delete(id) : n.add(id);
+      return n;
+    });
+  const print = async () => {
     setBusy(true);
     const month = currentPeriod();
-    const printed = await act(async () => {
+    const ok = await act(async () => {
       const pages = [];
-      for (const g of groups) {
+      for (const g of groups.filter((x) => picked.has(x.id))) {
         const d = await rpc('training.month', { groupId: g.id, month });
         if (!d?.students?.length) continue;
-        const { title, lines, rows } = formParts(g, month, d.students, t);
         const cols = Array.from({ length: g.championship ? 4 : 3 }, (_, i) => `c${i + 1}`);
-        pages.push(formHtml({ title, lines, cols, rows, t, currency: club.currency, logo: club.club_logo }));
+        pages.push({ ...formParts(g, month, d.students, t), cols });
       }
       if (!pages.length) throw Object.assign(new Error(), { code: 'NO_STUDENTS' });
-      const r = await window.fc.printSilent({ perm: 'attendance.print', pages });
-      if (!r.ok) throw Object.assign(new Error(r.error), { code: r.error, detail: r.detail });
-      return r.result.printed;
+      return window.fc.print({ perm: 'attendance.printAll', html: formHtml({ pages, t, currency: club.currency, logo: club.club_logo }) });
     });
     setBusy(false);
-    if (printed) toast.success(t('sheet.printAllDone', { n: printed }));
+    if (ok) onClose();
   };
   return (
-    <Button icon={Printer} onClick={run} disabled={busy}>
-      {busy ? t('sheet.printAllBusy') : t('sheet.printAll')}
-    </Button>
+    <Modal
+      title={t('sheet.printAllTitle')}
+      onClose={onClose}
+      width={560}
+      footer={
+        <>
+          <Button onClick={onClose}>{t('common.cancel')}</Button>
+          <Button variant="primary" icon={Printer} onClick={print} disabled={busy || !picked.size}>
+            {busy ? t('sheet.printAllBusy') : `${t('sheet.print')} · ${picked.size}`}
+          </Button>
+        </>
+      }
+    >
+      <div className="stack">
+        <div className="small muted">{t('sheet.printAllText')}</div>
+        <div className="row">
+          <Button size="sm" onClick={() => setPicked(new Set(groups.map((g) => g.id)))}>
+            {t('sheet.selectAll')}
+          </Button>
+          <Button size="sm" onClick={() => setPicked(new Set())}>
+            {t('sheet.selectNone')}
+          </Button>
+        </div>
+        <div className="day-pick" style={{ maxHeight: '50vh', overflow: 'auto' }}>
+          {groups.map((g) => (
+            <label key={g.id} className={`check day-pick-item ${picked.has(g.id) ? 'on' : ''}`}>
+              <input type="checkbox" checked={picked.has(g.id)} onChange={() => toggle(g.id)} />
+              <span className="strong">{g.name}</span>
+              {!!g.championship && <Badge tone="info">{t('sheet.blankColsComp')}</Badge>}
+            </label>
+          ))}
+        </div>
+      </div>
+    </Modal>
   );
 }
 
@@ -592,7 +637,7 @@ function ExportModal({ group, month, students, onClose }) {
       return r;
     }, t('reports.saved'));
 
-  const print = () => act(() => window.fc.print({ perm: 'attendance.print', html: formHtml({ title, lines, cols, rows, t, currency: club.currency, logo: club.club_logo }) }));
+  const print = () => act(() => window.fc.print({ perm: 'attendance.print', html: formHtml({ pages: [{ title, lines, cols, rows }], t, currency: club.currency, logo: club.club_logo }) }));
 
   return (
     <Modal
@@ -630,81 +675,93 @@ function ExportModal({ group, month, students, onClose }) {
   );
 }
 
-// Printable page of the same form (A4; landscape when there are many days). The whole group fits on one
-// page: the rows (and their text) get as tall as the page allows — 27 pt at most, smaller for a big group.
-function formHtml({ title, lines, cols, rows, t, currency, logo }) {
+// Printable form, one A4 page per group (pages: [{ title, lines, cols, rows }]; landscape when a group has many
+// columns). Each page fits its whole group: the rows (and their text) get as tall as the page allows — 27 pt at
+// most, smaller for a big group — and the page shrinks itself further if needed. The print date is at the
+// bottom right of every page.
+function formHtml({ pages, t, currency, logo }) {
   const esc = (v) => String(v ?? '').replace(/[&<>]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[ch]);
-  const landscape = cols.length > 5;
-  const pageH = ((landscape ? 210 : 297) - 24) * (72 / 25.4) - 18; // pt, inside the top and bottom margins, less the print date line
-  const headH = (logo ? 66 : 30) + lines.length * 15 + 14 + 26; // title (and logo) + lines + space + the table's header row
-  // Each row also has its border line (≈1 pt).
-  const rowH = Math.max(5, Math.min(27, Math.floor(((pageH - headH - 12) / Math.max(rows.length, 1) - 1.2) * 10) / 10));
-  const font = rowH >= 22 ? 11 : rowH >= 17 ? 10 : rowH >= 14 ? 8.5 : rowH >= 11 ? 7.5 : rowH >= 8 ? 6.5 : 5.5;
-  return `<!doctype html><html><head><meta charset="utf-8"><title>${esc(title)}</title><style>
+  const landscape = pages.some((p) => p.cols.length > 5);
+  const [pw, ph] = landscape ? [297, 210] : [210, 297];
+  const pageH = (ph - 24) * (72 / 25.4) - 18; // pt, inside the top and bottom margins, less the print date line
+  const printed = esc(t('sheet.printedOn', { date: fmtDate(todayIso()) }));
+  const pageCss = (p, i) => {
+    const headH = (logo ? 66 : 30) + p.lines.length * 15 + 14 + 26; // title (and logo) + lines + space + header row
+    // Each row also has its border line (≈1 pt).
+    const rowH = Math.max(5, Math.min(27, Math.floor(((pageH - headH - 12) / Math.max(p.rows.length, 1) - 1.2) * 10) / 10));
+    const font = rowH >= 22 ? 11 : rowH >= 17 ? 10 : rowH >= 14 ? 8.5 : rowH >= 11 ? 7.5 : rowH >= 8 ? 6.5 : 5.5;
+    return `.p${i} td { height: ${rowH}pt; font-size: ${font}pt; }`;
+  };
+  const page = (p, i) => `
+    <section class="page p${i}"><div class="inner">
+      <div class="head">
+        ${logo && /^data:image\//.test(logo) ? `<img src="${logo}">` : ''}
+        <div>
+          <h1>${esc(p.title)}</h1>
+          ${p.lines.map((l) => `<div class="line">${esc(l)}</div>`).join('')}
+        </div>
+      </div>
+      <table>
+        <thead><tr>
+          <th class="no">#</th>
+          <th class="name">${esc(t('students.name'))}</th>
+          ${p.cols.map(() => '<th class="date"></th>').join('')}
+          <th class="debt">${esc(t('sheet.debt'))}</th>
+        </tr></thead>
+        <tbody>
+          ${p.rows
+            .map(
+              (r, n) =>
+                `<tr><td class="no">${n + 1}</td><td class="name">${esc(r.name)}</td>${p.cols.map(() => '<td class="date"></td>').join('')}<td class="debt">${
+                  r.debt ? esc(money(r.debt, currency)) : ''
+                }</td></tr>`
+            )
+            .join('')}
+        </tbody>
+      </table>
+    </div><div class="printed">${printed}</div></section>`;
+  return `<!doctype html><html><head><meta charset="utf-8"><title>${esc(pages.length === 1 ? pages[0].title : t('nav.attendance'))}</title><style>
     @page { size: A4 ${landscape ? 'landscape' : 'portrait'}; margin: 12mm 12mm; }
-    body { font-family: 'GHEA Grapalat', Sylfaen, Arial, sans-serif; color: #111; font-size: 11pt; margin: 0; width: ${landscape ? 273 : 186}mm; }
+    body { font-family: 'GHEA Grapalat', Sylfaen, Arial, sans-serif; color: #111; font-size: 11pt; margin: 0; }
+    .page { position: relative; width: ${pw - 24}mm; height: ${ph - 24 - 1}mm; overflow: hidden; break-after: page; }
+    .page:last-child { break-after: auto; }
     h1 { font-size: 17pt; margin: 0 0 6pt; }
     .head { display: flex; align-items: flex-start; gap: 14pt; }
     .head img { width: 58pt; height: 58pt; object-fit: contain; }
     .line { margin: 2pt 0; }
     table { width: 100%; border-collapse: collapse; margin-top: 12pt; }
-    th, td { border: 1px solid #666; padding: 0 6pt; height: ${rowH}pt; font-size: ${font}pt; line-height: 1; }
-    th { height: 24pt; }
+    th, td { border: 1px solid #666; padding: 0 6pt; line-height: 1; }
+    th { height: 24pt; background: #0e8a43; color: #fff; font-size: 10.5pt; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     td.no, th.no { width: 22pt; text-align: center; padding: 0 2pt; color: #444; }
-    th { background: #0e8a43; color: #fff; font-size: 10.5pt; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    th.no { color: #fff; }
     th.name { text-align: left; }
     td.name { white-space: nowrap; }
     td.date, th.date { width: ${landscape ? 70 : 95}pt; }
     td.debt, th.debt { width: 80pt; text-align: right; white-space: nowrap; }
     td.debt { color: #c42b2b; font-weight: bold; }
-    thead { display: table-header-group; }
-    .printed { position: fixed; right: 0; bottom: 0; font-size: 9pt; color: #555; }
     tr { page-break-inside: avoid; }
+    .printed { position: absolute; right: 0; bottom: 0; font-size: 9pt; color: #555; }
+    ${pages.map(pageCss).join('\n    ')}
   </style></head><body>
-    <div class="head">
-      ${logo && /^data:image\//.test(logo) ? `<img src="${logo}">` : ''}
-      <div>
-        <h1>${esc(title)}</h1>
-        ${lines.map((l) => `<div class="line">${esc(l)}</div>`).join('')}
-      </div>
-    </div>
-    <table>
-      <thead><tr>
-        <th class="no">#</th>
-        <th class="name">${esc(t('students.name'))}</th>
-        ${cols.map(() => '<th class="date"></th>').join('')}
-        <th class="debt">${esc(t('sheet.debt'))}</th>
-      </tr></thead>
-      <tbody>
-        ${rows
-          .map(
-            (r, i) =>
-              `<tr><td class="no">${i + 1}</td><td class="name">${esc(r.name)}</td>${cols.map(() => '<td class="date"></td>').join('')}<td class="debt">${
-                r.debt ? esc(money(r.debt, currency)) : ''
-              }</td></tr>`
-          )
-          .join('')}
-      </tbody>
-    </table>
-    <div class="printed">${esc(t('sheet.printedOn', { date: fmtDate(todayIso()) }))}</div>
+    ${pages.map(page).join('')}
     <script>
-      // One page whatever the group: laid out at the page's width, then shrunk if still taller (or wider) than the
-      // page. The app calls it right before making the PDF (when the logo and fonts are in).
+      // Each page on its own A4 sheet whatever the group: shrunk if still taller (or wider) than the page, above
+      // its print date. The app calls it right before making the PDF (when the logo and fonts are in).
       window.fitPage = function () {
-        var availH = (${landscape ? 210 : 297} - 24 - 3) * 96 / 25.4 - 24; // above the print date line
-        var availW = (${landscape ? 297 : 210} - 24 - 1) * 96 / 25.4;
-        var table = document.querySelector('table');
-        var z = 1;
-        document.body.style.zoom = '1';
-        // Measured again after each step (a table doesn't always shrink in proportion).
-        for (var i = 0; i < 8; i++) {
-          var r = table.getBoundingClientRect();
-          var k = Math.min(availH / (r.bottom + 2), availW / Math.max(r.right, document.body.scrollWidth * z));
-          if (k >= 1) break;
-          z = Math.floor(z * k * 0.99 * 1000) / 1000;
-          document.body.style.zoom = String(z);
-        }
-        return z;
+        document.querySelectorAll('section.page').forEach(function (sec) {
+          var inner = sec.querySelector('.inner');
+          var z = 1;
+          inner.style.zoom = '1';
+          // Measured again after each step (a table doesn't always shrink in proportion).
+          for (var i = 0; i < 8; i++) {
+            var r = inner.getBoundingClientRect();
+            var k = Math.min((sec.clientHeight - 22) / r.height, sec.clientWidth / Math.max(r.width, inner.scrollWidth * z));
+            if (k >= 1) break;
+            z = Math.floor(z * k * 0.99 * 1000) / 1000;
+            inner.style.zoom = String(z);
+          }
+        });
+        return true;
       };
       window.addEventListener('load', window.fitPage);
     </script>

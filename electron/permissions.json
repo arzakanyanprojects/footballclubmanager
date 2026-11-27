@@ -3,7 +3,7 @@
   "sections": [
     { "id": "students", "perms": ["view", "personal", "add", "edit", "terminate", "absence", "link", "notes", "notesDelete", "files", "filesDelete", "delete", "import", "print", "excel"] },
     { "id": "payments", "perms": ["view", "take", "charge", "edit", "fee", "waive", "cancel", "delete", "past", "hdm", "hdmReturn", "receipt", "remind", "products", "excel"] },
-    { "id": "attendance", "perms": ["view", "mark", "days", "deleteDays", "print", "excel"] },
+    { "id": "attendance", "perms": ["view", "mark", "days", "deleteDays", "print", "printAll", "excel"] },
     { "id": "schedule", "perms": ["view", "day", "base", "copy", "print", "excel"] },
     { "id": "groups", "perms": ["view", "edit", "delete", "excel"] },
     { "id": "contracts", "perms": ["view", "edit", "delete", "print", "templates", "templatesDelete"] },
