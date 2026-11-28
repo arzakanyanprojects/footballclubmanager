@@ -97,7 +97,8 @@ export const chargeStatus = (c) =>
 const STATUS_TONE = { paid: 'good', unpaid: 'warn', overdue: 'bad', waived: '', excused: 'info' };
 
 export function chargeLabel(t, c) {
-  if (c.kind === 'monthly') return `${t('charge.monthly')} · ${monthName(t, c.period)}`;
+  // An «Անհատական» package keeps its service as the description (e.g. «Ֆուտբոլ անհ. 4 · Նոյեմբեր»).
+  if (c.kind === 'monthly') return `${c.description || t('charge.monthly')} · ${monthName(t, c.period)}`;
   const name = c.description || c.product_name || t(`charge.${c.kind}`);
   return c.quantity > 1 ? `${name} × ${c.quantity}` : name;
 }
@@ -564,7 +565,7 @@ export function PayModal({ charges, student, onClose, onDone }) {
   const groupOf = useGroupOf();
   const groupOfCharge = (c) => groupOf(c.group_id ?? student?.group_id);
   const fullOf = (c) =>
-    c.kind === 'monthly'
+    c.kind === 'monthly' && !(c.individual ?? student?.individual)
       ? fullMonthPrice(groupOfCharge(c), c.student_fee ?? student?.monthly_fee ?? c.amount, c.period, club, c.join_date ?? student?.join_date)
       : c.amount;
   const lineOf = (c) => ({ label: chargeLabel(t, c), amount: Number(amounts[c.id]), ...(discount.on ? { fullPrice: fullOf(c) } : {}) });

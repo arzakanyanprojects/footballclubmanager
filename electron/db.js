@@ -518,6 +518,27 @@ const MIGRATIONS = [
   CREATE INDEX automation_runs_rule ON automation_runs (automation_id, id);
   ALTER TABLE outbox ADD COLUMN attachment TEXT;
   `,
+  // v39: «Անհատական» — individual-lesson students (their own menu). They are students marked `individual`
+  // (no group; hidden from the students list, groups and attendance), with a birth year and their own coach. Each month
+  // they get a package (a monthly charge at the price of their service, e.g. «Ֆուտբոլ անհ. 4» = 4 lessons), and every
+  // lesson given is a date counted toward one month's package (`period`; a lesson on 29.09 can count for October).
+  `
+  ALTER TABLE students ADD COLUMN individual INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE students ADD COLUMN birth_year INTEGER;
+  ALTER TABLE students ADD COLUMN coach TEXT;
+  CREATE TABLE individual_lessons (
+    id         INTEGER PRIMARY KEY,
+    student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+    period     TEXT NOT NULL,
+    date       TEXT NOT NULL,
+    created_by TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    UNIQUE (student_id, date)
+  );
+  CREATE INDEX ix_individual_lessons_period ON individual_lessons(period, student_id);
+  INSERT OR IGNORE INTO settings (key, value) VALUES ('individual_prices',
+    '{"Ֆուտբոլ անհ. 4":24000,"Ֆուտբոլ անհ. 8":40000,"Ֆուտբոլ անհ. 12":55000,"Ֆուտբոլ անհ. 16":75000,"Դարպասապահ 4":28000,"Դարպասապահ 8":48000,"Դարպասապահ 12":67000,"Դարպասապահ 16":88000}');
+  `,
 ];
 
 function seed(db) {

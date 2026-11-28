@@ -9,6 +9,7 @@ import {
   Settings as SettingsIcon,
   Shield,
   UserRound,
+  UserCheck,
   WifiOff,
   LogOut,
 } from 'lucide-react';
@@ -23,6 +24,7 @@ import Groups from './pages/Groups';
 import Payments from './pages/Payments';
 import Attendance from './pages/Attendance';
 import Contracts from './pages/Contracts';
+import Individual from './pages/Individual';
 import Settings from './pages/Settings';
 import Schedule from './pages/Schedule';
 import { HdmProvider } from './components/Hdm';
@@ -43,6 +45,7 @@ const NAV = [
   { id: 'attendance', icon: CalendarCheck, perms: ['attendance.view'] },
   { id: 'schedule', icon: CalendarClock, perms: ['schedule.view'] },
   { id: 'contracts', icon: FileSignature, perms: ['contracts.view'] },
+  { id: 'individual', icon: UserCheck, perms: ['individual.view'] },
   { id: 'settings', icon: SettingsIcon },
 ];
 
@@ -183,6 +186,8 @@ function Page({ route, nav, appState, setAppState }) {
       return <Schedule {...props} />;
     case 'contracts':
       return <Contracts {...props} />;
+    case 'individual':
+      return <Individual {...props} />;
     case 'settings':
       return <Settings {...props} />;
     default:
@@ -207,7 +212,11 @@ function Layout({ route, nav, navItems, appState, online, children }) {
         </div>
         <nav className="nav">
           {navItems.map((n) => (
-            <button key={n.id} className={`nav-item ${route.page === n.id ? 'active' : ''}`} onClick={() => nav(n.id)}>
+            <button
+              key={n.id}
+              className={`nav-item ${n.id === 'settings' ? 'nav-bottom' : ''} ${route.page === n.id ? 'active' : ''}`}
+              onClick={() => nav(n.id)}
+            >
               <n.icon size={18} />
               {t(`nav.${n.id}`)}
             </button>

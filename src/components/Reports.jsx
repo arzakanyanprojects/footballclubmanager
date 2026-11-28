@@ -3,7 +3,9 @@
 import { useState } from 'react';
 import {
   Wallet, AlertTriangle, PieChart, BadgePercent, CalendarCheck, UserPlus, Receipt, Shapes, FileWarning, FolderTree, Users, FileSpreadsheet, ArrowLeft,
+  BarChart3, UserCheck,
 } from 'lucide-react';
+import { statsSheets, individualSheets } from './ReportBooks.mjs';
 import { useT, monthName } from '../i18n';
 import { useRpc, rpc, todayIso, currentPeriod, addMonths, daysInMonth, fmtDate, money } from '../lib';
 import { Button, Field, Modal, Segmented, useAction, useClub } from './ui';
@@ -13,7 +15,10 @@ import { GroupsExportModal } from './GroupsExport';
 import { useAuth } from './Auth';
 
 // params: 'period' (a month) · 'range' (from – to) · null. open: one of the existing export windows.
+// book: a workbook of several sheets, from its own call (src/components/ReportBooks.js).
 const REPORTS = [
+  { id: 'stats', icon: BarChart3, params: 'range', book: { rpc: 'stats.sheet', sheets: statsSheets } },
+  { id: 'individualReport', icon: UserCheck, params: 'range', perm: 'individual.view', book: { rpc: 'individual.sheet', sheets: individualSheets } },
   { id: 'payments', icon: Wallet, open: 'payments' },
   { id: 'debts', icon: AlertTriangle },
   { id: 'feesByGroup', icon: PieChart, params: 'period' },
@@ -41,7 +46,11 @@ function ReportOptions({ report, onBack, onDone }) {
   const [groupId, setGroupId] = useState('');
   const { data: groups } = useRpc('groups.list');
   const params = { kind: report.id, period, from, to, groupId: groupId ? Number(groupId) : null };
-  const { data: rows, loading } = useRpc('reports.sheet', params);
+  const { data: sheetRows, loading: sheetLoading } = useRpc('reports.sheet', params, { skip: !!report.book });
+  const { data: book, loading: bookLoading } = useRpc(report.book?.rpc || 'stats.sheet', { from, to }, { skip: !report.book || from > to });
+  // A workbook report counts its months (and, for «Անհատական», the students in them).
+  const rows = report.book ? book?.months || null : sheetRows;
+  const loading = report.book ? bookLoading : sheetLoading;
   const pickPreset = (p) => {
     setPreset(p);
     const cur = currentPeriod();
@@ -54,6 +63,22 @@ function ReportOptions({ report, onBack, onDone }) {
   const when = report.params === 'period' ? monthName(t, period) : report.params === 'range' ? `${fmtDate(from)} – ${fmtDate(to)}` : fmtDate(todayIso());
 
   const exportFile = async () => {
+    if (report.book) {
+      const range = `${fmtDate(from)} – ${fmtDate(to)}`;
+      const res = await act(async () => {
+        const r = await window.fc.saveXlsx({
+          perm: 'reports.excel',
+          kind: 'workbook',
+          defaultName: `${title} ${from} - ${to}.xlsx`.replace(/[\\/:*?"<>|]/g, '_'),
+          sheets: report.book.sheets(book, t, { title: `${club.club_name || 'FC Manager'} — ${title}`, subtitle: range }),
+          currencySymbol: money(0, club.currency).replace(/[\d,.\s]/g, '') || club.currency,
+        });
+        if (!r.ok) throw Object.assign(new Error(r.detail || r.error), { code: r.error, detail: r.detail });
+        return r;
+      }, t('reports.saved'));
+      if (res) onDone();
+      return;
+    }
     // As ՀԾ exports it, for accounting.
     if (report.id === 'salesAnalysis') {
       const yy = (d) => d.split('-').reverse().map((x, i) => (i === 2 ? x.slice(2) : x)).join('/');
@@ -130,6 +155,7 @@ function ReportOptions({ report, onBack, onDone }) {
             </div>
           </Field>
         )}
+        {!report.book && (
         <Field label={t('students.group')}>
           <select className="select" value={groupId} onChange={(e) => setGroupId(e.target.value)} style={{ width: 260 }}>
             <option value="">{t('students.allGroups')}</option>
@@ -140,9 +166,12 @@ function ReportOptions({ report, onBack, onDone }) {
             ))}
           </select>
         </Field>
+        )}
         <div className="card card-pad row" style={{ background: 'var(--surface-2)' }}>
           <FileSpreadsheet size={20} style={{ color: 'var(--accent-text)' }} />
-          <div className="grow small">{loading && !rows ? '…' : t('reportsx.rowsReady', { n: rows?.length || 0 })}</div>
+          <div className="grow small">
+            {loading && !rows ? '…' : report.book ? t('reportsx.monthsReady', { n: rows?.length || 0 }) : t('reportsx.rowsReady', { n: rows?.length || 0 })}
+          </div>
           <Button variant="primary" icon={FileSpreadsheet} onClick={exportFile} disabled={!canExport || !rows?.length || (report.params === 'range' && from > to)}>
             {t('reports.exportButton')}
           </Button>
@@ -167,7 +196,7 @@ export function ReportsModal({ onClose }) {
         <ReportOptions report={picked} onBack={() => setPicked(null)} onDone={onClose} />
       ) : (
         <div className="reports-grid">
-          {REPORTS.filter((r) => r.id !== 'salesAnalysis' || auth.can('reports.sales')).map((r) => (
+          {REPORTS.filter((r) => (r.id !== 'salesAnalysis' || auth.can('reports.sales')) && (!r.perm || auth.can(r.perm))).map((r) => (
             <button key={r.id} className="reports-item" onClick={() => (r.open ? setOpen(r.open) : setPicked(r))}>
               <r.icon size={20} />
               <span>

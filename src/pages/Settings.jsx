@@ -13,6 +13,7 @@ import DataManagement from '../components/DataManagement';
 import ActivityLog from '../components/ActivityLog';
 import { useEditLock } from '../components/Locks';
 import { Badge, BrandLogo, Button, Field, Loading, Segmented, Tabs, useAction, useConfirm, useToast } from '../components/ui';
+import { INDIVIDUAL_SERVICES } from './Individual';
 
 export default function Settings({ route, nav, appState, setAppState }) {
   const t = useT();
@@ -152,6 +153,7 @@ function ClubSettings() {
       </div>
     </div>
     <ContractNumbering />
+    <IndividualPrices />
     </>
   );
 }
@@ -221,6 +223,65 @@ function ContractNumbering() {
             </>
           )}
         </div>
+      </div>
+    </div>
+  );
+}
+
+// «Անհատական պարապմունքների գներ»: the monthly package price of each individual service (menu «Անհատական»).
+function IndividualPrices() {
+  const t = useT();
+  const act = useAction();
+  const canEdit = useAuth().can('settings.club');
+  const { data, reload } = useRpc('individual.list', { month: currentPeriod() }, { skip: !useAuth().can('individual.view') });
+  const [f, setF] = useState(null);
+  useEffect(() => {
+    if (data && !f) setF(Object.fromEntries(INDIVIDUAL_SERVICES.map((s) => [s, String(data.prices?.[s] ?? '')])));
+  }, [data]);
+  if (!f) return null;
+  const dirty = INDIVIDUAL_SERVICES.some((s) => String(data.prices?.[s] ?? '') !== f[s]);
+  const valid = INDIVIDUAL_SERVICES.every((s) => /^\d+$/.test(f[s]));
+  return (
+    <div className="card settings-section">
+      <div className="card-head">
+        <Receipt size={17} />
+        <h3>{t('individual.prices')}</h3>
+      </div>
+      <div className="card-pad">
+        <div className="small muted">{t('individual.pricesText')}</div>
+        <div className="grid-2">
+          {INDIVIDUAL_SERVICES.map((s) => (
+            <Field key={s} label={s}>
+              <input
+                className="input num"
+                type="number"
+                min="0"
+                step="500"
+                value={f[s]}
+                disabled={!canEdit}
+                onChange={(e) => setF({ ...f, [s]: e.target.value.replace(/\D/g, '') })}
+              />
+            </Field>
+          ))}
+        </div>
+        {canEdit && (
+          <div className="row" style={{ justifyContent: 'flex-end' }}>
+            <Button
+              variant="primary"
+              icon={Save}
+              disabled={!dirty || !valid}
+              onClick={async () => {
+                const prices = Object.fromEntries(INDIVIDUAL_SERVICES.map((s) => [s, Number(f[s])]));
+                if (await act(() => rpc('settings.update', { individual_prices: JSON.stringify(prices) }), t('common.saved'))) {
+                  setF(null);
+                  reload();
+                }
+              }}
+            >
+              {t('common.save')}
+            </Button>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -297,7 +297,15 @@ function createAuth({ all, one, run, AppError, log }) {
     'contracts.save': 'contracts.edit',
     'contracts.delete': 'contracts.delete',
 
+    'individual.list': 'individual.view',
+    'individual.get': 'individual.view',
+    'individual.save': (p) => [p.id ? 'individual.edit' : 'individual.add'],
+    'individual.lesson': 'individual.lessons',
+    'individual.delete': 'individual.delete',
+
     'reports.list': 'reports.view',
+    'stats.sheet': 'reports.view',
+    'individual.sheet': () => ['reports.view', 'individual.view'],
     'reports.sheet': (p) => [p.kind === 'salesAnalysis' ? 'reports.sales' : 'reports.view'],
     'activity.list': 'settings.log',
   };
@@ -362,6 +370,11 @@ function createAuth({ all, one, run, AppError, log }) {
       return r;
     }
     if (method === 'students.list') return result.map((s) => hideMoney(hidePersonal(s)));
+    // «Անհատական»: the packages' amounts only for those who see payments.
+    if (method === 'individual.sheet' && !can('payments.view'))
+      return { months: result.months.map((m) => ({ ...m, rows: m.rows.map((r) => ({ ...r, monthly_fee: null, overdue: 0, package: r.package ? { ...r.package, amount: null, status: null } : null })) })) };
+    if (method === 'individual.list' && !can('payments.view'))
+      return { ...result, rows: result.rows.map((r) => ({ ...r, monthly_fee: null, overdue: 0, package: r.package ? { ...r.package, amount: null, status: null } : null })) };
     if (method === 'students.history') {
       return result.filter(
         (e) =>

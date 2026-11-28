@@ -7,6 +7,7 @@
     { "id": "schedule", "perms": ["view", "day", "base", "copy", "print", "excel"] },
     { "id": "groups", "perms": ["view", "edit", "delete", "excel"] },
     { "id": "contracts", "perms": ["view", "edit", "delete", "print", "templates", "templatesDelete"] },
+    { "id": "individual", "perms": ["view", "add", "edit", "lessons", "delete"] },
     { "id": "reports", "perms": ["dashboard", "salesAll", "view", "sales", "excel"] },
     { "id": "settings", "perms": ["club", "hdm", "notify", "automations", "network", "data", "backups", "restore", "log", "logExcel"] }
   ],
@@ -17,6 +18,7 @@
     "schedule.view",
     "groups.view",
     "contracts.view",
+    "individual.view",
     "reports.dashboard", "reports.view",
     "settings.log"
   ],

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Users, Wallet, AlertTriangle, CalendarCheck, Plus, ChevronRight, FileClock, FileSpreadsheet, MessageCircle, Banknote } from 'lucide-react';
+import { Users, Wallet, AlertTriangle, Plus, ChevronRight, FileClock, FileSpreadsheet, MessageCircle, Banknote, UserCheck } from 'lucide-react';
 import { useT, monthName } from '../i18n';
 import { useCan } from '../components/Auth';
 import { MessageButton, useMessenger } from '../components/Messenger';
@@ -10,6 +10,7 @@ import { ReportsModal } from '../components/Reports';
 
 export default function Dashboard({ nav }) {
   const t = useT();
+  const canIndividual = useCan('individual.view');
   const { currency } = useClub();
   const { data } = useRpc('dashboard.summary');
   const [exporting, setExporting] = useState(false);
@@ -100,21 +101,22 @@ export default function Dashboard({ nav }) {
           <div className="stat-value">{money(data.overdue.total, currency)}</div>
           <div className="stat-sub">{t('dash.overdueStudents', { n: data.overdue.students })}</div>
         </div>
-        <div className="card stat">
+        {/* «Անհատականներ»: active individual students; this month's lessons and paid packages. Opens the Անհատական page. */}
+        <div
+          className={`card stat ${canIndividual ? 'click' : ''}`}
+          style={canIndividual ? { cursor: 'pointer' } : undefined}
+          onClick={() => canIndividual && nav('individual')}
+        >
           <div className="stat-top">
-            {t('dash.attendanceToday')}
+            {t('dash.individual')}
             <div className="stat-icon warn">
-              <CalendarCheck size={18} />
+              <UserCheck size={18} />
             </div>
           </div>
-          <div className="stat-value">
-            {data.attendanceToday.present || 0}
-            <span className="muted" style={{ fontSize: 16, fontWeight: 500 }}>
-              {' '}
-              / {data.attendanceToday.marked}
-            </span>
+          <div className="stat-value">{Number(data.individual?.active || 0).toLocaleString('en-US')}</div>
+          <div className="stat-sub">
+            {t('dash.individualSub', { lessons: data.individual?.lessons || 0, paid: data.individual?.paid || 0, packages: data.individual?.packages || 0 })}
           </div>
-          <div className="stat-sub">{t('dash.presentOfMarked')}</div>
         </div>
       </div>
 

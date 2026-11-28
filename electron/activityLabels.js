@@ -49,6 +49,8 @@ module.exports = {
   "students.imported": "Ներմուծվեցին սաներ",
   "student.updated": "Խմբագրվեց սանը",
   "student.deleted": "Ջնջվեց սանը",
+  "individual.lessonAdded": "Նշվեց անհատական պարապմունք",
+  "individual.lessonRemoved": "Հանվեց անհատական պարապմունքը",
   "student.terminated": "Դադարեցվեց սանը",
   "product.created": "Ավելացվեց ապրանք",
   "product.updated": "Խմբագրվեց ապրանքը",
@@ -72,6 +74,8 @@ module.exports = {
  "fields": {
   "first_name": "Անուն",
   "last_name": "Ազգանուն",
+  "birth_year": "Ծննդյան տարեթիվ",
+  "coach": "Մարզիչ",
   "patronymic": "Հայրանուն",
   "birth_date": "Ծննդյան ամսաթիվ",
   "document_no": "Ծննդյան վկայական / անձնագիր №",

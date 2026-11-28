@@ -166,7 +166,7 @@ function createService(db, { onWrite, getNotify } = {}) {
   const HISTORY_FIELDS = ['first_name', 'last_name', 'patronymic', 'birth_date', 'document_no', 'contract_no', 'category', 'service', 'medical_doc',
     'group_id', 'monthly_fee', 'join_date', 'status', 'inactive_reason', 'leave_date',
     'parent_first_name', 'parent_last_name', 'parent_phone', 'parent_messenger', 'parent_email', 'parent_ssn', 'parent_doc_no', 'parent_doc_issuer',
-    'parent_doc_date', 'parent_address', 'phone', 'email', 'address', 'photo'];
+    'parent_doc_date', 'parent_address', 'phone', 'email', 'address', 'photo', 'birth_year', 'coach'];
   const diffStudent = (before, after) => {
     const groupName = (id) => (id ? one('SELECT name FROM groups WHERE id = :id', { id })?.name || `#${id}` : '');
     const out = [];
@@ -232,7 +232,7 @@ function createService(db, { onWrite, getNotify } = {}) {
     for (const c of all(
       `SELECT c.id, c.amount, c.period, s.monthly_fee, s.join_date FROM charges c JOIN students s ON s.id = c.student_id
        WHERE c.kind = 'monthly' AND c.status = 'unpaid' AND c.excused_by IS NULL AND c.period = substr(s.join_date, 1, 7)
-         AND s.first_fee IS NULL AND CAST(substr(s.join_date, 9, 2) AS INTEGER) >= 16 ${studentId ? 'AND s.id = :sid AND c.student_id = :sid' : ''}`,
+         AND s.first_fee IS NULL AND s.individual = 0 AND CAST(substr(s.join_date, 9, 2) AS INTEGER) >= 16 ${studentId ? 'AND s.id = :sid AND c.student_id = :sid' : ''}`,
       studentId ? { sid: studentId } : {}
     )) {
       // Only a month still at the usual price (a special price, e.g. set by an import, stays).
@@ -265,7 +265,7 @@ function createService(db, { onWrite, getNotify } = {}) {
        FROM students st
        JOIN months m ON m.p >= substr(st.join_date, 1, 7)
                     AND m.p >= IFNULL(st.billing_from, '0000-00')
-       WHERE st.status = 'active'
+       WHERE st.status = 'active' AND st.individual = 0
          AND (CASE WHEN st.first_fee IS NOT NULL AND m.p = substr(st.join_date, 1, 7) THEN st.first_fee ELSE st.monthly_fee END) > 0
          ${studentId ? 'AND st.id = :sid' : ''}
          ${(() => {
@@ -274,14 +274,30 @@ function createService(db, { onWrite, getNotify } = {}) {
          })()}`,
       { start: s.billing_start || currentPeriod(), current: currentPeriod(), dueDay: pad(dueDay), ...(studentId ? { sid: studentId } : {}) }
     );
+    // «Անհատական»: a package every month at the full price of the student's service (no holiday or late-join
+    // discount); the service is kept on the charge, so the month shows what was bought (e.g. «Ֆուտբոլ անհ. 4»).
+    const ri = run(
+      `WITH RECURSIVE months(p) AS (
+         SELECT :start
+         UNION ALL
+         SELECT strftime('%Y-%m', date(p || '-01', '+1 month')) FROM months WHERE p < :current
+       )
+       INSERT OR IGNORE INTO charges (student_id, kind, period, description, amount, due_date, created_by)
+       SELECT st.id, 'monthly', m.p, st.service, st.monthly_fee, m.p || '-' || :dueDay, 'system'
+       FROM students st
+       JOIN months m ON m.p >= substr(st.join_date, 1, 7) AND m.p >= IFNULL(st.billing_from, '0000-00')
+       WHERE st.status = 'active' AND st.individual = 1 AND st.monthly_fee > 0 ${studentId ? 'AND st.id = :sid' : ''}`,
+      { start: s.billing_start || currentPeriod(), current: currentPeriod(), dueDay: pad(dueDay), ...(studentId ? { sid: studentId } : {}) }
+    );
     priceJoinMonths(studentId);
-    return r.changes;
+    return r.changes + ri.changes;
   }
 
   // ---------------------------------------------------------------- settings
   const SETTING_KEYS = ['club_name', 'club_address', 'club_phone', 'director_name', 'currency', 'due_day', 'billing_start', 'club_logo', 'holidays',
     'contract_prefix', 'contract_next', // the next new student's contract number: prefix + number
-    'msg_reminder', 'msg_receipt', 'msg_free']; // msg_*: WhatsApp / Viber message texts
+    'msg_reminder', 'msg_receipt', 'msg_free', // msg_*: WhatsApp / Viber message texts
+    'individual_prices']; // «Անհատական» package prices: { service: price }
 
   // A «Դիմում» period on a payment: both dates, the end not before the start; otherwise none.
   function absenceRange(from, to) {
@@ -517,7 +533,7 @@ function createService(db, { onWrite, getNotify } = {}) {
     return `${Math.round(n || 0).toLocaleString('en-US')} ${cur === 'AMD' ? '֏' : cur}`;
   };
   const chargeText = (c) =>
-    c.kind === 'monthly' ? `Ամսավճար · ${monthHy(c.period)}` : c.description || (c.kind === 'product' ? 'Ապրանք' : 'Այլ վճար');
+    c.kind === 'monthly' ? `${c.description || 'Ամսավճար'} · ${monthHy(c.period)}` : c.description || (c.kind === 'product' ? 'Ապրանք' : 'Այլ վճար');
   const fill = (tpl, vars) => String(tpl || '').replace(/\{(\w+)\}/g, (m, k) => (vars[k] != null ? String(vars[k]) : m));
   const notifyCfg = () => (getNotify ? getNotify() : null) || {};
   const emailOn = () => !!notifyCfg().email?.enabled;
@@ -608,8 +624,8 @@ function createService(db, { onWrite, getNotify } = {}) {
       `SELECT IFNULL(SUM(amount), 0) AS total, COUNT(DISTINCT student_id) AS students FROM charges WHERE status = 'unpaid' AND due_date < :t`,
       { t: today() }
     );
-    const joined = one(`SELECT COUNT(*) AS n FROM students WHERE join_date LIKE :like`, { like }).n;
-    const active = one(`SELECT COUNT(*) AS n FROM students WHERE status = 'active'`).n;
+    const joined = one(`SELECT COUNT(*) AS n FROM students WHERE join_date LIKE :like AND individual = 0`, { like }).n;
+    const active = one(`SELECT COUNT(*) AS n FROM students WHERE status = 'active' AND individual = 0`).n;
     const title = kind === 'daily' ? `📊 ${st.club_name || 'FC Manager'} — ${formatDate(when)}` : `📅 ${st.club_name || 'FC Manager'} — ${monthHy(when)}`;
     const lines = [title, '', `Ստացված վճարումներ՝ ${n}, ընդամենը ${amd(total)}`];
     for (const m of ['card', 'easypay', 'transfer']) {
@@ -660,6 +676,72 @@ function createService(db, { onWrite, getNotify } = {}) {
     const s = str(v);
     return s ? SERVICE_MAP[s.replace(/\s+/g, ' ')] || s.replace(/\s+/g, ' ') : s;
   };
+  // «Անհատական»: the services an individual student can buy; the number at the end is the lessons in a month's package.
+  // Prices: Settings → Club («individual_prices»), these until changed there.
+  const INDIVIDUAL_PRICES = {
+    'Ֆուտբոլ անհ. 4': 24000, 'Ֆուտբոլ անհ. 8': 40000, 'Ֆուտբոլ անհ. 12': 55000, 'Ֆուտբոլ անհ. 16': 75000,
+    'Դարպասապահ 4': 28000, 'Դարպասապահ 8': 48000, 'Դարպասապահ 12': 67000, 'Դարպասապահ 16': 88000,
+  };
+  const individualPrices = () => {
+    let saved = {};
+    try {
+      saved = JSON.parse(settings().individual_prices || '{}') || {};
+    } catch {
+      saved = {};
+    }
+    const out = {};
+    for (const [k, v] of Object.entries(INDIVIDUAL_PRICES)) out[k] = saved[k] != null && Number(saved[k]) >= 0 ? int(saved[k]) : v;
+    return out;
+  };
+  // This month's and later unpaid packages at the current price of the student's service.
+  function repriceIndividuals(studentId = null) {
+    const prices = individualPrices();
+    for (const s of all(`SELECT id, service FROM students WHERE individual = 1 ${studentId ? 'AND id = :sid' : ''}`, { sid: studentId })) {
+      const price = prices[s.service];
+      if (price == null) continue;
+      run('UPDATE students SET monthly_fee = :price WHERE id = :id AND monthly_fee != :price', { id: s.id, price });
+      run(
+        `UPDATE charges SET amount = :price, description = :service
+         WHERE student_id = :id AND kind = 'monthly' AND status = 'unpaid' AND excused_by IS NULL AND period >= :period`,
+        { id: s.id, price, service: s.service, period: currentPeriod() }
+      );
+    }
+  }
+
+  // The lessons in a package: the number at the end of its service («Ֆուտբոլ անհ. 8» → 8).
+  const lessonsIn = (service) => Number(/(\d+)\s*$/.exec(service || '')?.[1]) || 0;
+  // The months from `from` to `to` (dates or months), at most 36; none when the range is wrong.
+  const monthsBetween = (from, to) => {
+    const a = String(from || '').slice(0, 7);
+    const b = String(to || '').slice(0, 7);
+    if (!/^\d{4}-\d{2}$/.test(a) || !/^\d{4}-\d{2}$/.test(b) || a > b) return [];
+    const out = [];
+    for (let m = a; m <= b && out.length < 36; m = addMonths(m, 1)) out.push(m);
+    return out;
+  };
+  // «Անհատական»: one month's sheet (individual.list, the Անհատական report) — every individual student who is active or has
+  // a package / lessons that month, with the month's package (its charge) and the lessons counted toward it.
+  const individualRows = (period) =>
+    all(
+      `SELECT s.id, s.first_name, s.last_name, s.parent_first_name, s.birth_year, s.parent_phone, s.coach, s.service,
+              s.monthly_fee, s.status, s.join_date, s.version,
+              (SELECT json_object('id', c.id, 'student_id', c.student_id, 'kind', c.kind, 'period', c.period, 'description', c.description,
+                                  'amount', c.amount, 'status', c.status, 'due_date', c.due_date, 'paid_at', c.paid_at, 'method', c.method,
+                                  'hdm_receipt', c.hdm_receipt, 'excused_by', c.excused_by)
+               FROM charges c WHERE c.student_id = s.id AND c.kind = 'monthly' AND c.period = :period) AS package,
+              (SELECT json_group_array(json_object('id', l.id, 'date', l.date))
+               FROM (SELECT id, date FROM individual_lessons WHERE student_id = s.id AND period = :period ORDER BY date) l) AS lessons,
+              IFNULL((SELECT SUM(amount) FROM charges c WHERE c.student_id = s.id AND c.status = 'unpaid' AND c.due_date < :t), 0) AS overdue
+       FROM students s
+       WHERE s.individual = 1
+         AND (s.status = 'active' AND substr(s.join_date, 1, 7) <= :period
+              OR EXISTS (SELECT 1 FROM charges c WHERE c.student_id = s.id AND c.kind = 'monthly' AND c.period = :period)
+              OR EXISTS (SELECT 1 FROM individual_lessons l WHERE l.student_id = s.id AND l.period = :period))
+       ORDER BY s.id`,
+      { period, t: today() }
+    )
+      .map((r) => ({ ...r, package: r.package ? JSON.parse(r.package) : null, lessons: JSON.parse(r.lessons || '[]') }));
+
   // Contract numbers in order: prefix («26-08-») + the next number, skipping numbers already used.
   // reserve: this one is taken now (the counter moves past it).
   const setSetting = (key, value) =>
@@ -717,7 +799,10 @@ function createService(db, { onWrite, getNotify } = {}) {
     const month = (d) => String(d || '').slice(0, 7);
     switch (method) {
       case 'students.save':
+      case 'individual.save':
         return p.id ? st(p.id) : [];
+      case 'individual.delete':
+        return st(p.id);
       case 'students.terminate':
       case 'students.delete':
         return st(p.id);
@@ -795,17 +880,23 @@ function createService(db, { onWrite, getNotify } = {}) {
       const changed = [...new Set([...Object.keys(sharesBefore), ...Object.keys(sharesAfter)])].filter((m) => sharesBefore[m] !== sharesAfter[m]);
       for (const period of changed) {
         if (sharesAfter[period] === 0) {
-          run(`DELETE FROM charges WHERE kind = 'monthly' AND status = 'unpaid' AND period = :period AND excused_by IS NULL`, { period });
+          run(
+            `DELETE FROM charges WHERE kind = 'monthly' AND status = 'unpaid' AND period = :period AND excused_by IS NULL
+               AND NOT EXISTS (SELECT 1 FROM students s WHERE s.id = charges.student_id AND s.individual = 1)`,
+            { period }
+          );
           continue;
         }
         run(
           `UPDATE charges SET amount = ${feeSql('(SELECT monthly_fee FROM students s WHERE s.id = charges.student_id)', 'charges.period', sharesAfter)}
            WHERE kind = 'monthly' AND status = 'unpaid' AND period = :period AND excused_by IS NULL
              AND (SELECT monthly_fee FROM students s WHERE s.id = charges.student_id) > 0
+             AND NOT EXISTS (SELECT 1 FROM students s WHERE s.id = charges.student_id AND s.individual = 1)
              AND NOT EXISTS (SELECT 1 FROM students s WHERE s.id = charges.student_id AND s.first_fee IS NOT NULL AND substr(s.join_date, 1, 7) = charges.period)`,
           { period }
         );
       }
+      if (p.individual_prices !== undefined) repriceIndividuals();
       if (changed.length) ensureMonthlyCharges();
       log(ctx, 'settings.updated');
       return settings();
@@ -825,14 +916,14 @@ function createService(db, { onWrite, getNotify } = {}) {
       const byPeriod = Object.fromEntries(collectedRows.map((r) => [r.period, r.total]));
 
       return {
-        activeStudents: one(`SELECT COUNT(*) AS n FROM students WHERE status = 'active' AND in_scope(group_id)`).n,
+        activeStudents: one(`SELECT COUNT(*) AS n FROM students WHERE status = 'active' AND individual = 0 AND in_scope(group_id)`).n,
         // The active students of the training groups («Ուսումնամարզական») and of the championship teams («Առաջնություն»).
         activeByKind: one(
           `SELECT SUM(IFNULL(g.championship, 0) = 0 AND s.group_id IS NOT NULL) AS training, SUM(g.championship = 1) AS championship,
                   SUM(s.group_id IS NULL) AS noGroup
-           FROM students s LEFT JOIN groups g ON g.id = s.group_id WHERE s.status = 'active' AND in_scope(s.group_id)`
+           FROM students s LEFT JOIN groups g ON g.id = s.group_id WHERE s.status = 'active' AND s.individual = 0 AND in_scope(s.group_id)`
         ),
-        newThisMonth: one(`SELECT COUNT(*) AS n FROM students WHERE substr(join_date, 1, 7) = :period AND in_scope(group_id)`, { period }).n,
+        newThisMonth: one(`SELECT COUNT(*) AS n FROM students WHERE substr(join_date, 1, 7) = :period AND individual = 0 AND in_scope(group_id)`, { period }).n,
         collectedThisMonth: byPeriod[period] || 0,
         collectedLastMonth: byPeriod[addMonths(period, -1)] || 0,
         // Today's sales: the payments taken today, and how much of it went through the ՀԴՄ.
@@ -856,6 +947,17 @@ function createService(db, { onWrite, getNotify } = {}) {
            FROM charges WHERE kind = 'monthly' AND period = :period AND status != 'waived' AND ${IN_SCOPE_C}`,
           { period }
         ),
+        // «Անհատականներ» card: active individual students, and this month's lessons and packages (whole-club users only).
+        individual: one(
+          `SELECT (SELECT COUNT(*) FROM students WHERE individual = 1 AND status = 'active') AS active,
+                  (SELECT COUNT(*) FROM individual_lessons WHERE period = :period) AS lessons,
+                  (SELECT COUNT(*) FROM charges c JOIN students s ON s.id = c.student_id
+                    WHERE s.individual = 1 AND c.kind = 'monthly' AND c.period = :period AND c.status != 'waived') AS packages,
+                  (SELECT COUNT(*) FROM charges c JOIN students s ON s.id = c.student_id
+                    WHERE s.individual = 1 AND c.kind = 'monthly' AND c.period = :period AND c.status = 'paid') AS paid
+           WHERE scope_all() = 1`,
+          { period }
+        ) || { active: 0, lessons: 0, packages: 0, paid: 0 },
         attendanceToday: one(
           `SELECT COUNT(*) AS marked,
                   SUM(CASE WHEN status IN ('present', 'late') THEN 1 ELSE 0 END) AS present
@@ -992,7 +1094,7 @@ function createService(db, { onWrite, getNotify } = {}) {
     'students.contractNo.get': () => ({ next: nextContractNo(false), prefix: settings().contract_prefix || '', from: settings().contract_next || '' }),
 
     'students.summary': () => one(
-      `SELECT SUM(status = 'active') AS active, SUM(status != 'active') AS inactive, COUNT(*) AS total FROM students WHERE in_scope(group_id)`
+      `SELECT SUM(status = 'active') AS active, SUM(status != 'active') AS inactive, COUNT(*) AS total FROM students WHERE in_scope(group_id) AND individual = 0`
     ),
 
     'students.list': (p = {}) =>
@@ -1012,7 +1114,7 @@ function createService(db, { onWrite, getNotify } = {}) {
                  FROM charges c WHERE c.student_id = s.id AND c.kind = 'monthly'
                    AND c.period BETWEEN :monthsFrom AND :monthsTo) AS months
          FROM students s LEFT JOIN groups g ON g.id = s.group_id
-         WHERE (:status IS NULL OR s.status = :status) AND in_scope(s.group_id)
+         WHERE (:status IS NULL OR s.status = :status) AND in_scope(s.group_id) AND s.individual = 0
            AND (:groupId IS NULL OR s.group_id = :groupId)
            AND (:search IS NULL OR ulower(s.first_name || ' ' || s.last_name || ' ' || IFNULL(s.patronymic, '') || ' ' || s.first_name || ' ' ||
                 IFNULL(s.phone, '') || ' ' || IFNULL(s.parent_name, '') || ' ' || IFNULL(s.parent_phone, '') || ' ' ||
@@ -1749,6 +1851,238 @@ function createService(db, { onWrite, getNotify } = {}) {
       return true;
     },
 
+    // ---------------------------------------------------------------- «Անհատական» (individual lessons)
+    // One month's sheet: every individual student who is active or has a package / lessons that month, with the
+    // month's package (its charge) and the lessons counted toward it.
+    'individual.list': ({ month } = {}) => {
+      const period = /^\d{4}-\d{2}$/.test(month || '') ? month : currentPeriod();
+      return { period, prices: individualPrices(), rows: individualRows(period) };
+    },
+
+    'individual.get': ({ id }) => {
+      const s = one(
+        `SELECT id, first_name, last_name, parent_first_name, birth_year, parent_phone, coach, service, monthly_fee, status, join_date, version
+         FROM students WHERE id = :id AND individual = 1`,
+        { id }
+      );
+      if (!s) throw new AppError('NOT_FOUND');
+      return s;
+    },
+
+    'individual.save': (p, ctx) => {
+      if (blank(p.first_name) || blank(p.last_name)) throw new AppError('NAME_REQUIRED');
+      const service = normService(p.service);
+      const prices = individualPrices();
+      if (prices[service] == null) throw new AppError('SERVICE_REQUIRED');
+      const year = blank(p.birth_year) ? null : int(p.birth_year);
+      const row = {
+        id: p.id,
+        first_name: str(p.first_name),
+        last_name: str(p.last_name),
+        parent_first_name: str(p.parent_first_name),
+        parent_name: str(p.parent_first_name),
+        birth_year: year && year > 1900 && year < 2200 ? year : null,
+        parent_phone: str(p.parent_phone),
+        coach: str(p.coach),
+        service,
+        monthly_fee: prices[service],
+        join_date: str(p.join_date) || today(),
+        status: p.status === 'inactive' ? 'inactive' : 'active',
+      };
+      if (p.id) {
+        const before = one('SELECT * FROM students WHERE id = :id AND individual = 1', { id: p.id });
+        if (!before) throw new AppError('NOT_FOUND');
+        checkVersion('students', p.id, p.version, p.id);
+        row.leave_date = before.status === 'active' && row.status === 'inactive' ? today() : row.status === 'inactive' ? before.leave_date : null;
+        // Coming back after a break: packages again from this month, not for the gap.
+        row.billing_from = before.status === 'inactive' && row.status === 'active' ? currentPeriod() : before.billing_from;
+        run(
+          `UPDATE students SET first_name = :first_name, last_name = :last_name, parent_first_name = :parent_first_name, parent_name = :parent_name,
+             birth_year = :birth_year, parent_phone = :parent_phone, coach = :coach, service = :service, monthly_fee = :monthly_fee,
+             join_date = :join_date, status = :status, leave_date = :leave_date, billing_from = :billing_from, updated_at = datetime('now', 'localtime')
+           WHERE id = :id`,
+          row
+        );
+        // Stopped: the packages of the months after this one that are still unpaid are no longer owed.
+        if (row.status === 'inactive' && before.status === 'active')
+          run(`DELETE FROM charges WHERE student_id = :id AND kind = 'monthly' AND status = 'unpaid' AND period > :month`, { id: p.id, month: currentPeriod() });
+        if (before.service !== service || before.monthly_fee !== row.monthly_fee) repriceIndividuals(p.id);
+        const changes = diffStudent(before, one('SELECT * FROM students WHERE id = :id', { id: p.id }));
+        if (changes.length) log(ctx, 'student.updated', `${row.first_name} ${row.last_name}`, p.id, { changes });
+        ensureMonthlyCharges(p.id);
+        return { id: p.id };
+      }
+      const r = run(
+        `INSERT INTO students (individual, first_name, last_name, parent_first_name, parent_name, birth_year, parent_phone, coach, service,
+           monthly_fee, join_date, status)
+         VALUES (1, :first_name, :last_name, :parent_first_name, :parent_name, :birth_year, :parent_phone, :coach, :service,
+           :monthly_fee, :join_date, :status)`,
+        row
+      );
+      const id = Number(r.lastInsertRowid);
+      log(ctx, 'student.created', `${row.first_name} ${row.last_name} (${service})`, id);
+      ensureMonthlyCharges(id);
+      return { id };
+    },
+
+    // A lesson given on `date` (on = false: taken back). It counts toward the package of `period` (the month shown).
+    'individual.lesson': ({ studentId, date, period, on = true }, ctx) => {
+      const s = one('SELECT id, first_name, last_name FROM students WHERE id = :id AND individual = 1', { id: studentId });
+      if (!s) throw new AppError('NOT_FOUND');
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date || '')) throw new AppError('DATE_REQUIRED');
+      const month = /^\d{4}-\d{2}$/.test(period || '') ? period : date.slice(0, 7);
+      if (on) {
+        run(
+          `INSERT INTO individual_lessons (student_id, period, date, created_by) VALUES (:sid, :month, :date, :user)
+           ON CONFLICT(student_id, date) DO UPDATE SET period = excluded.period`,
+          { sid: s.id, month, date, user: ctx.user || null }
+        );
+      } else run('DELETE FROM individual_lessons WHERE student_id = :sid AND date = :date', { sid: s.id, date });
+      log(ctx, on ? 'individual.lessonAdded' : 'individual.lessonRemoved', `${s.first_name} ${s.last_name} — ${formatDate(date)}`, s.id, { date, period: month });
+      return true;
+    },
+
+    // «Անհատականների հաշվետվություն»: the month sheets of every month from `from` to `to` (dates or months); the
+    // Reports window adds the summaries by coach / student and the unused lessons from them.
+    'individual.sheet': ({ from, to } = {}) => {
+      const months = monthsBetween(from, to);
+      return { months: months.map((period) => ({ period, rows: individualRows(period) })) };
+    },
+
+    // «Վիճակագրություն»: the whole club month by month from `from` to `to` — students, money, attendance and
+    // individual lessons — and, for the whole range, by group, birth year, category, service and coach.
+    'stats.sheet': ({ from, to } = {}) => {
+      const months = monthsBetween(from, to);
+      if (!months.length) return { months: [], groups: [], years: [], categories: [], services: [], coaches: [] };
+      const f = `${months[0]}-01`;
+      const tt = `${months[months.length - 1]}-31`;
+      const end = (m) => `${m}-31`;
+      const perMonth = months.map((m) => {
+        const me = end(m);
+        const studentsOf = (ind) =>
+          one(
+            `SELECT SUM(join_date <= :me AND (status = 'active' OR IFNULL(leave_date, '') > :me)) AS active,
+                    SUM(substr(join_date, 1, 7) = :m) AS joined,
+                    SUM(status = 'inactive' AND substr(IFNULL(leave_date, ''), 1, 7) = :m) AS left_count
+             FROM students WHERE individual = :ind`,
+            { me, m, ind }
+          );
+        const st = studentsOf(0);
+        const money = one(
+          `SELECT IFNULL(SUM(CASE WHEN kind = 'monthly' AND period = :m AND status != 'waived' THEN amount END), 0) AS billed,
+                  IFNULL(SUM(CASE WHEN kind = 'monthly' AND period = :m AND status = 'paid' THEN amount END), 0) AS fees_paid,
+                  IFNULL(SUM(CASE WHEN kind = 'monthly' AND period = :m AND status = 'unpaid' THEN amount END), 0) AS fees_unpaid,
+                  IFNULL(SUM(CASE WHEN kind = 'monthly' AND period = :m AND status = 'waived' THEN 1 END), 0) AS waived,
+                  IFNULL(SUM(CASE WHEN status = 'paid' AND substr(paid_at, 1, 7) = :m THEN amount END), 0) AS collected,
+                  IFNULL(SUM(CASE WHEN status = 'paid' AND substr(paid_at, 1, 7) = :m AND method = 'card' THEN amount END), 0) AS card,
+                  IFNULL(SUM(CASE WHEN status = 'paid' AND substr(paid_at, 1, 7) = :m AND method = 'easypay' THEN amount END), 0) AS easypay,
+                  IFNULL(SUM(CASE WHEN status = 'paid' AND substr(paid_at, 1, 7) = :m AND method = 'transfer' THEN amount END), 0) AS transfer,
+                  IFNULL(SUM(CASE WHEN status = 'paid' AND substr(paid_at, 1, 7) = :m AND kind = 'product' THEN amount END), 0) AS products,
+                  IFNULL(SUM(CASE WHEN status = 'paid' AND substr(paid_at, 1, 7) = :m THEN 1 END), 0) AS payments,
+                  IFNULL(SUM(CASE WHEN status = 'paid' AND substr(paid_at, 1, 7) = :m AND hdm_receipt IS NOT NULL THEN 1 END), 0) AS hdm_count,
+                  IFNULL(SUM(CASE WHEN status = 'paid' AND substr(paid_at, 1, 7) = :m AND hdm_receipt IS NOT NULL THEN amount END), 0) AS hdm_amount
+           FROM charges`,
+          { m }
+        );
+        const att = one(
+          `SELECT IFNULL(SUM(status IN ('present', 'late')), 0) AS present, IFNULL(SUM(status = 'absent'), 0) AS absent,
+                  IFNULL(SUM(status = 'excused'), 0) AS excused, COUNT(*) AS marked
+           FROM attendance WHERE substr(date, 1, 7) = :m`,
+          { m }
+        );
+        const ind = studentsOf(1);
+        const pk = all(
+          `SELECT c.description, c.amount, c.status FROM charges c JOIN students s ON s.id = c.student_id
+           WHERE s.individual = 1 AND c.kind = 'monthly' AND c.period = :m AND c.status != 'waived'`,
+          { m }
+        );
+        const lessons = one('SELECT COUNT(*) AS n FROM individual_lessons WHERE period = :m', { m }).n;
+        const bought = pk.reduce((n, c) => n + lessonsIn(c.description), 0);
+        return {
+          period: m,
+          active: st.active || 0, joined: st.joined || 0, left: st.left_count || 0,
+          ...money,
+          present: att.present, absent: att.absent, excused: att.excused, marked: att.marked,
+          ind_active: ind.active || 0, ind_joined: ind.joined || 0,
+          ind_packages: pk.length, ind_billed: pk.reduce((n, c) => n + c.amount, 0),
+          ind_paid: pk.filter((c) => c.status === 'paid').reduce((n, c) => n + c.amount, 0),
+          ind_bought: bought, ind_lessons: lessons, ind_unused: Math.max(bought - lessons, 0),
+        };
+      });
+      const range = { f, tt, pf: months[0], pt: months[months.length - 1] };
+      const groups = all(
+        `SELECT g.name, g.coach,
+                (SELECT COUNT(*) FROM students s WHERE s.group_id = g.id AND s.status = 'active') AS active,
+                (SELECT COUNT(*) FROM students s WHERE s.group_id = g.id AND s.join_date BETWEEN :f AND :tt) AS joined,
+                (SELECT COUNT(*) FROM students s WHERE s.group_id = g.id AND s.status = 'inactive' AND s.leave_date BETWEEN :f AND :tt) AS left_count,
+                (SELECT IFNULL(SUM(c.amount), 0) FROM charges c JOIN students s ON s.id = c.student_id
+                  WHERE s.group_id = g.id AND c.kind = 'monthly' AND c.period BETWEEN :pf AND :pt AND c.status != 'waived') AS billed,
+                (SELECT IFNULL(SUM(c.amount), 0) FROM charges c JOIN students s ON s.id = c.student_id
+                  WHERE s.group_id = g.id AND c.kind = 'monthly' AND c.period BETWEEN :pf AND :pt AND c.status = 'paid') AS paid,
+                (SELECT IFNULL(SUM(c.amount), 0) FROM charges c JOIN students s ON s.id = c.student_id
+                  WHERE s.group_id = g.id AND c.kind = 'monthly' AND c.period BETWEEN :pf AND :pt AND c.status = 'unpaid') AS unpaid,
+                (SELECT IFNULL(SUM(c.amount), 0) FROM charges c JOIN students s ON s.id = c.student_id
+                  WHERE s.group_id = g.id AND c.status = 'paid' AND substr(c.paid_at, 1, 10) BETWEEN :f AND :tt) AS collected,
+                (SELECT COUNT(*) FROM attendance a JOIN students s ON s.id = a.student_id
+                  WHERE s.group_id = g.id AND a.date BETWEEN :f AND :tt AND a.status IN ('present', 'late')) AS present,
+                (SELECT COUNT(*) FROM attendance a JOIN students s ON s.id = a.student_id
+                  WHERE s.group_id = g.id AND a.date BETWEEN :f AND :tt) AS marked
+         FROM groups g WHERE g.archived = 0 ORDER BY g.name COLLATE NOCASE`,
+        range
+      );
+      const years = all(
+        `SELECT substr(birth_date, 1, 4) AS year, COUNT(*) AS active, SUM(monthly_fee) AS fees
+         FROM students WHERE status = 'active' AND individual = 0 GROUP BY 1 ORDER BY 1`
+      );
+      const categories = all(
+        `SELECT IFNULL(category, '') AS category, COUNT(*) AS active, SUM(monthly_fee) AS fees
+         FROM students WHERE status = 'active' AND individual = 0 GROUP BY 1 ORDER BY 2 DESC`
+      );
+      const services = all(
+        `SELECT IFNULL(s.service, '') AS service, SUM(s.status = 'active') AS active, SUM(s.individual) AS individual,
+                (SELECT IFNULL(SUM(c.amount), 0) FROM charges c JOIN students x ON x.id = c.student_id
+                  WHERE IFNULL(x.service, '') = IFNULL(s.service, '') AND c.status = 'paid' AND substr(c.paid_at, 1, 10) BETWEEN :f AND :tt) AS collected
+         FROM students s GROUP BY 1 HAVING SUM(s.status = 'active') > 0 OR collected > 0 ORDER BY 2 DESC`,
+        range
+      );
+      // A coach: their groups (as main coach), students and attendance; and their individual students and lessons.
+      const coachNames = [...new Set([
+        ...all(`SELECT coach FROM groups WHERE archived = 0 AND IFNULL(coach, '') != ''`).map((r) => r.coach.trim()),
+        ...all(`SELECT coach FROM students WHERE individual = 1 AND IFNULL(coach, '') != ''`).map((r) => r.coach.trim()),
+      ])].sort((a, b) => a.localeCompare(b, 'hy'));
+      const coaches = coachNames.map((name) => {
+        const g = one(
+          `SELECT COUNT(*) AS groups,
+                  IFNULL(SUM((SELECT COUNT(*) FROM students s WHERE s.group_id = g.id AND s.status = 'active')), 0) AS active,
+                  IFNULL(SUM((SELECT COUNT(*) FROM attendance a JOIN students s ON s.id = a.student_id
+                    WHERE s.group_id = g.id AND a.date BETWEEN :f AND :tt AND a.status IN ('present', 'late'))), 0) AS present,
+                  IFNULL(SUM((SELECT COUNT(*) FROM attendance a JOIN students s ON s.id = a.student_id
+                    WHERE s.group_id = g.id AND a.date BETWEEN :f AND :tt)), 0) AS marked
+           FROM groups g WHERE g.archived = 0 AND trim(g.coach) = :name`,
+          { ...range, name }
+        );
+        const i = one(
+          `SELECT SUM(s.status = 'active') AS ind_active,
+                  (SELECT COUNT(*) FROM individual_lessons l JOIN students x ON x.id = l.student_id
+                    WHERE trim(x.coach) = :name AND l.period BETWEEN :pf AND :pt) AS ind_lessons,
+                  (SELECT IFNULL(SUM(c.amount), 0) FROM charges c JOIN students x ON x.id = c.student_id
+                    WHERE x.individual = 1 AND trim(x.coach) = :name AND c.kind = 'monthly' AND c.period BETWEEN :pf AND :pt AND c.status = 'paid') AS ind_paid
+           FROM students s WHERE s.individual = 1 AND trim(s.coach) = :name`,
+          { ...range, name }
+        );
+        return { coach: name, ...g, ind_active: i.ind_active || 0, ind_lessons: i.ind_lessons || 0, ind_paid: i.ind_paid || 0 };
+      });
+      return { months: perMonth, groups, years, categories, services, coaches };
+    },
+
+    'individual.delete': ({ id }, ctx) => {
+      if (!one('SELECT id FROM students WHERE id = :id AND individual = 1', { id })) throw new AppError('NOT_FOUND');
+      const name = studentName(id);
+      run('DELETE FROM students WHERE id = :id', { id });
+      log(ctx, 'student.deleted', name);
+      return true;
+    },
+
     // ---------------------------------------------------------------- products (kit, clothes, equipment)
     'products.list': () => all('SELECT * FROM products ORDER BY archived, name COLLATE NOCASE'),
 
@@ -1775,7 +2109,7 @@ function createService(db, { onWrite, getNotify } = {}) {
     // ---------------------------------------------------------------- charges & payments
     'charges.list': (p = {}) => {
       const rows = all(
-        `SELECT c.*, s.first_name, s.last_name, s.group_id, s.category, s.join_date, s.service, s.monthly_fee AS student_fee, g.name AS group_name, pr.name AS product_name,
+        `SELECT c.*, s.first_name, s.last_name, s.group_id, s.category, s.join_date, s.service, s.individual, s.monthly_fee AS student_fee, g.name AS group_name, pr.name AS product_name,
                 (SELECT a.file_id FROM absences a WHERE a.student_id = c.student_id AND a.date_from = c.absence_from AND a.date_to = c.absence_to AND a.file_id IS NOT NULL ORDER BY a.id DESC LIMIT 1) AS absence_file_id
          FROM charges c
          JOIN students s ON s.id = c.student_id
@@ -2474,7 +2808,7 @@ function createService(db, { onWrite, getNotify } = {}) {
                     SUM(a.status IN ('present', 'late')) AS present, SUM(a.status = 'absent') AS absent, SUM(a.status = 'excused') AS excused
              FROM students s LEFT JOIN groups g ON g.id = s.group_id
              LEFT JOIN attendance a ON a.student_id = s.id AND substr(a.date, 1, 7) = :month
-             WHERE s.status = 'active' AND s.join_date <= :monthEnd ${groupFilter}
+             WHERE s.status = 'active' AND s.individual = 0 AND s.join_date <= :monthEnd ${groupFilter}
              GROUP BY s.id ${byGroup}`,
             { month, monthEnd: `${month}-31`, gid }
           );
@@ -2483,10 +2817,10 @@ function createService(db, { onWrite, getNotify } = {}) {
             `SELECT * FROM (
                SELECT 'joined' AS change, s.join_date AS date, ${student} AS student, g.name AS group_name, s.monthly_fee, s.contract_no, s.parent_phone, NULL AS reason,
                       g.name AS gname, s.last_name AS lname
-               FROM students s LEFT JOIN groups g ON g.id = s.group_id WHERE s.join_date BETWEEN :f AND :tt ${groupFilter}
+               FROM students s LEFT JOIN groups g ON g.id = s.group_id WHERE s.individual = 0 AND s.join_date BETWEEN :f AND :tt ${groupFilter}
                UNION ALL
                SELECT 'left', s.leave_date, ${student}, g.name, s.monthly_fee, s.contract_no, s.parent_phone, s.inactive_reason, g.name, s.last_name
-               FROM students s LEFT JOIN groups g ON g.id = s.group_id WHERE s.status = 'inactive' AND s.leave_date BETWEEN :f AND :tt ${groupFilter}
+               FROM students s LEFT JOIN groups g ON g.id = s.group_id WHERE s.individual = 0 AND s.status = 'inactive' AND s.leave_date BETWEEN :f AND :tt ${groupFilter}
              ) ORDER BY date, gname COLLATE NOCASE, lname COLLATE NOCASE`,
             { f, tt, gid }
           );
@@ -2546,7 +2880,7 @@ function createService(db, { onWrite, getNotify } = {}) {
             `SELECT ${student} AS student, g.name AS group_name, s.parent_name, s.parent_phone,
                     s.medical_doc, s.contract_no, s.document_no, s.birth_date, s.parent_doc_no, s.parent_ssn
              FROM students s LEFT JOIN groups g ON g.id = s.group_id
-             WHERE s.status = 'active' ${groupFilter}
+             WHERE s.status = 'active' AND s.individual = 0 ${groupFilter}
                AND (s.medical_doc = 0 OR IFNULL(s.contract_no, '') = '' OR IFNULL(s.document_no, '') = '' OR IFNULL(s.birth_date, '') = ''
                     OR IFNULL(s.parent_doc_no, '') = '' OR IFNULL(s.parent_ssn, '') = '' OR IFNULL(s.parent_phone, '') = '')
              ${byGroup}`,
@@ -2745,6 +3079,14 @@ function createService(db, { onWrite, getNotify } = {}) {
       case 'students.importFull':
       case 'students.export':
       case 'schedule.savePitches':
+      // «Անհատական» students have no group: not for a user limited to some groups.
+      case 'individual.list':
+      case 'individual.get':
+      case 'individual.save':
+      case 'individual.lesson':
+      case 'individual.delete':
+      case 'individual.sheet':
+      case 'stats.sheet':
         return false;
       default:
         return true;
@@ -2761,7 +3103,7 @@ function createService(db, { onWrite, getNotify } = {}) {
   // Writes after which no student can be missing a monthly fee (so the next read needn't check everyone
   // again): those that never touch fees, and those that bring the one student's fees up to date themselves.
   const NO_FEE_EFFECT =
-    /^((attendance|training|schedule|files|notify|auth|users|activity|contracts|products)\.|students\.(save|link|unlink)$|charges\.(payMonths|markPaid|setReceipt|receiptReturned)$)/;
+    /^((attendance|training|schedule|files|notify|auth|users|activity|contracts|products)\.|(students|individual)\.(save|link|unlink|lesson)$|charges\.(payMonths|markPaid|setReceipt|receiptReturned)$)/;
   let feesChecked = null; // { period, at } of the last full check
   const feesDue = () => !feesChecked || feesChecked.period !== currentPeriod() || Date.now() - feesChecked.at > 10 * 60 * 1000;
 

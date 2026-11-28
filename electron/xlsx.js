@@ -538,10 +538,21 @@ async function buildGroups({ columns, sheets, emptyText = '', currencySymbol = '
 
 // A report as one table: title, subtitle, a frozen header with filters, striped rows, and a totals row
 // that adds up every column marked `sum` (money or numbers). Column types: index, text, date, money, number, percent.
-async function buildTable({ sheetName, title, subtitle, columns, rows, totalLabel = 'Total', currencySymbol = '֏' }) {
+function newWorkbook() {
   const wb = new ExcelJS.Workbook();
   wb.creator = 'FC Manager';
   wb.created = new Date();
+  return wb;
+}
+
+async function buildTable(spec) {
+  const wb = newWorkbook();
+  addTableSheet(wb, spec);
+  return wb.xlsx.writeBuffer();
+}
+
+// One table sheet (title, subtitle, green header, striped rows, totals) in a workbook.
+function addTableSheet(wb, { sheetName, title, subtitle, columns, rows, totalLabel = 'Total', currencySymbol = '֏' }) {
   const ws = wb.addWorksheet(String(sheetName || 'Report').slice(0, 31), {
     views: [{ state: 'frozen', ySplit: 4, topLeftCell: 'A5', activeCell: 'A5', showGridLines: false }],
     pageSetup: {
@@ -619,6 +630,134 @@ async function buildTable({ sheetName, title, subtitle, columns, rows, totalLabe
     row.height = 26;
   }
   if (rows.length) ws.autoFilter = { from: { row: 4, column: 1 }, to: { row: lastData, column: last } };
+  return ws;
+}
+
+// A sheet of figures by month: one row per figure, one column per month and a total column.
+// columns: month headers; rows: [{ label, type: 'number' | 'money' | 'percent', values: [], total }] or { section: 'title' }.
+function addMatrixSheet(wb, { sheetName, title, subtitle, labelHeader = '', columns, rows, totalHeader = 'Total', currencySymbol = '֏' }) {
+  const ws = wb.addWorksheet(String(sheetName || 'Sheet').slice(0, 31), {
+    views: [{ state: 'frozen', xSplit: 1, ySplit: 4, showGridLines: false }],
+    pageSetup: { paperSize: 9, orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
+  });
+  const last = columns.length + 2;
+  ws.getColumn(1).width = 38;
+  for (let i = 2; i <= last; i++) ws.getColumn(i).width = 14;
+  ws.mergeCells(1, 1, 1, last);
+  Object.assign(ws.getCell(1, 1), { value: title, font: { name: FONT, size: 16, bold: true, color: { argb: INK } } });
+  ws.getRow(1).height = 28;
+  ws.mergeCells(2, 1, 2, last);
+  Object.assign(ws.getCell(2, 1), { value: subtitle || '', font: { name: FONT, size: 10.5, color: { argb: MUTED } } });
+  ws.getRow(3).height = 8;
+  const head = ws.getRow(4);
+  [labelHeader, ...columns, totalHeader].forEach((h, i) => {
+    Object.assign(head.getCell(i + 1), {
+      value: h,
+      font: { name: FONT, size: 10.5, bold: true, color: { argb: 'FFFFFFFF' } },
+      fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: GREEN } },
+      alignment: { vertical: 'middle', horizontal: i === 0 ? 'left' : 'right', wrapText: true },
+      border,
+    });
+  });
+  head.height = 30;
+  const fmt = (type) => (type === 'money' ? `#,##0 "${currencySymbol}"` : type === 'percent' ? '0%' : '#,##0');
+  rows.forEach((r, idx) => {
+    const row = ws.getRow(5 + idx);
+    if (r.section) {
+      ws.mergeCells(5 + idx, 1, 5 + idx, last);
+      Object.assign(row.getCell(1), {
+        value: r.section,
+        font: { name: FONT, size: 11.5, bold: true, color: { argb: INK } },
+        fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: GREEN_SOFT } },
+        border,
+      });
+      row.height = 24;
+      return;
+    }
+    const cells = [r.label, ...r.values, r.total];
+    cells.forEach((v, i) => {
+      const cell = row.getCell(i + 1);
+      cell.value = i === 0 ? v : v == null || v === '' || Number.isNaN(Number(v)) ? '' : Number(v);
+      cell.font = { name: FONT, size: 10.5, bold: i === cells.length - 1, color: { argb: INK } };
+      cell.border = border;
+      cell.alignment = { vertical: 'middle', horizontal: i === 0 ? 'left' : 'right' };
+      if (i > 0) cell.numFmt = fmt(r.type);
+    });
+    row.height = 20;
+  });
+  return ws;
+}
+
+// The «Անհատական» month sheet as the club keeps it in Excel: the student columns, then one column per day with the
+// number of the lesson given that day (green), and the package amount green when paid.
+// columns: [{ key, header, width, type }]; days: [{ key: 'YYYY-MM-DD', header: '29.09' | '1' }];
+// rows: [{ ...values, lessons: { date: n }, paid: true | false }].
+function addLessonGridSheet(wb, { sheetName, title, subtitle, columns, days, rows, amountKey = 'amount', currencySymbol = '֏' }) {
+  const ws = wb.addWorksheet(String(sheetName || 'Sheet').slice(0, 31), {
+    views: [{ state: 'frozen', xSplit: 2, ySplit: 4, showGridLines: false }],
+    pageSetup: { paperSize: 9, orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
+  });
+  const LIGHT_GREEN = 'FF92D050';
+  const HEAD_BLUE = 'FF95B3D7';
+  const all = [...columns, ...days.map((d) => ({ ...d, day: true }))];
+  all.forEach((c, i) => (ws.getColumn(i + 1).width = c.day ? 5 : c.width || 14));
+  ws.mergeCells(1, 1, 1, all.length);
+  Object.assign(ws.getCell(1, 1), { value: title, font: { name: FONT, size: 15, bold: true, color: { argb: INK } } });
+  ws.getRow(1).height = 26;
+  ws.mergeCells(2, 1, 2, all.length);
+  Object.assign(ws.getCell(2, 1), { value: subtitle || '', font: { name: FONT, size: 10.5, color: { argb: MUTED } } });
+  ws.getRow(3).height = 8;
+  const head = ws.getRow(4);
+  all.forEach((c, i) => {
+    Object.assign(head.getCell(i + 1), {
+      value: c.header,
+      font: { name: FONT, size: c.day ? 9.5 : 10.5, bold: true, color: { argb: INK } },
+      fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: HEAD_BLUE } },
+      alignment: { vertical: 'middle', horizontal: 'center', wrapText: true },
+      border,
+    });
+  });
+  head.height = 32;
+  rows.forEach((r, idx) => {
+    const row = ws.getRow(5 + idx);
+    all.forEach((c, i) => {
+      const cell = row.getCell(i + 1);
+      cell.border = border;
+      cell.font = { name: FONT, size: 10.5, color: { argb: INK } };
+      if (c.day) {
+        const n = r.lessons?.[c.key];
+        cell.value = n || '';
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+        if (n) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: LIGHT_GREEN } };
+        return;
+      }
+      let v = c.type === 'index' ? idx + 1 : r[c.key];
+      if (c.type === 'money' || c.type === 'number') v = v == null || v === '' ? '' : Number(v);
+      cell.value = v ?? '';
+      cell.alignment = { vertical: 'middle', horizontal: c.type === 'money' || c.type === 'number' || c.type === 'index' ? 'center' : 'left' };
+      if (c.type === 'money') cell.numFmt = `#,##0 "${currencySymbol}"`;
+      if (c.key === amountKey && r.paid) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: LIGHT_GREEN } };
+    });
+    row.height = 20;
+  });
+  return ws;
+}
+
+// A workbook of several sheets. sheets: [{ type: 'table' | 'matrix' | 'lessonGrid', ...that sheet's spec }].
+async function buildWorkbook({ sheets = [], currencySymbol = '֏' }) {
+  const wb = newWorkbook();
+  const used = new Set();
+  for (const sh of sheets) {
+    // Excel sheet names: at most 31 characters, unique, without : \ / ? * [ ].
+    let name = String(sh.sheetName || 'Sheet').replace(/[:\\/?*[\]]/g, ' ').slice(0, 31);
+    for (let n = 2; used.has(name.toLowerCase()); n++) name = `${name.slice(0, 27)} (${n})`;
+    used.add(name.toLowerCase());
+    const spec = { currencySymbol, ...sh, sheetName: name };
+    if (sh.type === 'matrix') addMatrixSheet(wb, spec);
+    else if (sh.type === 'lessonGrid') addLessonGridSheet(wb, spec);
+    else addTableSheet(wb, spec);
+  }
+  if (!sheets.length) wb.addWorksheet('Sheet');
   return wb.xlsx.writeBuffer();
 }
 
@@ -699,4 +838,4 @@ async function buildSalesAnalysis({ title, rows = [], groupCode = '001', groupNa
   return wb.xlsx.writeBuffer();
 }
 
-module.exports = { buildReport, buildForm, buildSchedule, buildStudentsTransfer, buildGroups, buildTable, buildSalesAnalysis };
+module.exports = { buildReport, buildForm, buildSchedule, buildStudentsTransfer, buildGroups, buildTable, buildSalesAnalysis, buildWorkbook };

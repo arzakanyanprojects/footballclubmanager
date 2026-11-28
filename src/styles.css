@@ -149,6 +149,8 @@ a { color: var(--accent-text); }
 .nav-item:hover { background: var(--sidebar-2); color: #fff; }
 .nav-item.active { background: var(--sidebar-2); color: #fff; box-shadow: inset 3px 0 0 #1fb862; }
 .nav-item svg { opacity: 0.85; }
+/* Settings sits at the bottom of the menu, just above the connection/user footer. */
+.nav-item.nav-bottom { margin-top: auto; margin-bottom: 8px; }
 .sidebar-foot { border-top: 1px solid rgba(255, 255, 255, 0.07); padding: 12px 8px 2px; display: flex; flex-direction: column; gap: 8px; font-size: 12.5px; }
 .conn { display: flex; align-items: center; gap: 8px; color: var(--sidebar-text); }
 .conn-dot { width: 8px; height: 8px; border-radius: 50%; background: #3ccf7c; box-shadow: 0 0 0 3px rgba(60, 207, 124, 0.18); }
@@ -991,3 +993,38 @@ fieldset:disabled .switch { cursor: default; opacity: 0.6; }
 /* «Ուսումնամարզական» is one long word: on a narrow card it is cut with «…», the number always shows. */
 .stat-split span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .stat-split b { flex-shrink: 0; font-variant-numeric: tabular-nums; }
+
+/* «Անհատական» sheet (pages/Individual.jsx): like the club's Excel — numbered lessons on their days, the package amount green when paid. */
+.ind-sheet th, .ind-sheet td { padding: 6px 8px; }
+.ind-sheet .sticky-col.ind-idx { min-width: 44px; width: 44px; left: 0; text-align: center; }
+.ind-sheet .sticky-col.ind-name { left: 44px; min-width: 200px; }
+.ind-sheet .ind-wrap { white-space: normal; max-width: 90px; line-height: 1.2; }
+.ind-sheet .month-col { text-align: center; text-transform: none; font-size: 13px; color: var(--text); letter-spacing: 0; }
+.ind-sheet thead tr:first-child th.month-col { height: 30px; box-sizing: border-box; padding-top: 6px; padding-bottom: 6px; }
+.ind-sheet thead tr:nth-child(2) th { top: 30px; }
+.ind-sheet th.ind-day { width: 34px; min-width: 34px; padding: 4px 2px; text-align: center; font-size: 12px; color: var(--text-2); }
+.ind-sheet th.ind-day.weekend { color: var(--text-3); }
+.ind-sheet th.ind-day.today { color: var(--accent, #1fb862); font-weight: 700; }
+.ind-sheet th.ind-day.other { font-weight: 700; color: var(--text); min-width: 44px; }
+.ind-sheet td.ind-day { padding: 2px; text-align: center; border-left: 1px solid var(--border); }
+.ind-sheet td.ind-day.other { background: var(--surface-2); }
+.ind-cell {
+  width: 28px; height: 26px; border-radius: 5px; border: 0; background: transparent; cursor: pointer;
+  font-weight: 700; font-size: 12.5px; color: var(--text);
+}
+.ind-cell:hover:not(:disabled) { background: var(--surface-hover); }
+.ind-cell:disabled { cursor: default; }
+.ind-cell.on { background: #8fd16a; color: #17330a; }
+.ind-cell.on:hover:not(:disabled) { background: #7cc556; }
+.ind-sheet td.ind-amount.paid { background: #8fd16a; color: #17330a; font-weight: 600; }
+.ind-sheet td.ind-amount.overdue { color: var(--bad); font-weight: 600; }
+.ind-sheet td.ind-amount.clickable { cursor: pointer; }
+.ind-sheet td.ind-amount.clickable:hover { background: var(--surface-hover); }
+.ind-sheet tr.ind-inactive td:not(.ind-day) { color: var(--text-3); }
+.ind-sheet tfoot td { border-top: 2px solid var(--border); background: var(--surface-2); }
+/* The sheet is at least as tall as its card; the empty filler row takes the spare height and the totals row is frozen at the bottom. */
+.fill-page > .table-wrap > .ind-sheet { height: 100%; }
+.ind-sheet tbody tr:not(.ind-filler) { height: 1px; }
+.ind-sheet tr.ind-filler td { padding: 0; border: 0; }
+.ind-sheet tfoot td { position: sticky; bottom: 0; z-index: 2; box-shadow: 0 -1px 0 var(--border); }
+.ind-sheet tfoot td.sticky-col { z-index: 4; }

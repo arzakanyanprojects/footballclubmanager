@@ -7,7 +7,7 @@ const { createService, DEFAULT_TEMPLATES } = require('./service');
 const notify = require('./notify');
 const network = require('./network');
 const PizZip = require('pizzip');
-const { buildReport, buildForm, buildSchedule, buildStudentsTransfer, buildGroups, buildTable, buildSalesAnalysis } = require('./xlsx');
+const { buildReport, buildForm, buildSchedule, buildStudentsTransfer, buildGroups, buildTable, buildSalesAnalysis, buildWorkbook } = require('./xlsx');
 const hdm = require('./hdm');
 const updater = require('./updater');
 const { buildReportAttachment } = require('./reportAttachment');
@@ -885,8 +885,10 @@ function registerIpc() {
       const err = await shell.openPath(file); // no Word: its usual program (print from there)
       return err ? { ok: false, error: 'PRINT_FAILED', detail: err } : { ok: true, via: 'open' };
     }
-    // Word's Print window (printer, pages, copies). Printing finishes before the file is closed again;
-    // Word itself closes only if nothing else is open in it. The app doesn't wait for the window.
+    // Word's full Print screen (File → Print): printer, pages, copies and «Print on Both Sides» (the old Print window
+    // has no two-sided choice). The contract stays open in Word (read-only) — closed with Word like any document.
+    // If that screen can't be shown (an old Word), the old Print window, and the file is closed after it as before.
+    // The app doesn't wait for Word.
     const script = [
       "$ErrorActionPreference = 'Stop'",
       '$w = New-Object -ComObject Word.Application',
@@ -896,7 +898,7 @@ function registerIpc() {
       '$w.Activate()',
       // Windows keeps a program started in the background behind FC Manager: a tap of Alt lets Word come forward.
       "try { Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public static class FcFg { [DllImport(\"user32.dll\")] public static extern bool SetForegroundWindow(IntPtr h); [DllImport(\"user32.dll\")] public static extern bool ShowWindow(IntPtr h, int c); [DllImport(\"user32.dll\")] public static extern void keybd_event(byte k, byte s, uint f, UIntPtr e); }'; $h = [IntPtr]$w.ActiveWindow.Hwnd; [FcFg]::keybd_event(0x12, 0, 0, [UIntPtr]::Zero); [void][FcFg]::ShowWindow($h, 3); [void][FcFg]::SetForegroundWindow($h); [FcFg]::keybd_event(0x12, 0, 2, [UIntPtr]::Zero) } catch { }",
-      'try { [void]$w.Dialogs.Item(88).Show() } finally { $d.Close(0); if ($w.Documents.Count -eq 0) { $w.Quit() } }',
+      "try { $w.CommandBars.ExecuteMso('PrintPreviewAndPrint') } catch { try { [void]$w.Dialogs.Item(88).Show() } finally { $d.Close(0); if ($w.Documents.Count -eq 0) { $w.Quit() } } }",
     ].join('; ');
     const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
       env: { ...process.env, FC_DOC: file },
@@ -974,7 +976,7 @@ function registerIpc() {
       : await dialog.showSaveDialog(win, { defaultPath: report.defaultName, filters: [{ name: 'Excel', extensions: ['xlsx'] }] });
     if (r.canceled || !r.filePath) return { ok: false, error: 'CANCELLED' };
     try {
-      const build = { form: buildForm, schedule: buildSchedule, students: buildStudentsTransfer, groups: buildGroups, table: buildTable, salesAnalysis: buildSalesAnalysis }[report.kind] || buildReport;
+      const build = { form: buildForm, schedule: buildSchedule, students: buildStudentsTransfer, groups: buildGroups, table: buildTable, salesAnalysis: buildSalesAnalysis, workbook: buildWorkbook }[report.kind] || buildReport;
       fs.writeFileSync(r.filePath, Buffer.from(await build(report)));
     } catch (err) {
       // Most often the file is open in Excel and locked.
